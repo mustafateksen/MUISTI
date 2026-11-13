@@ -9,7 +9,7 @@ CREATE TABLE IF NOT EXISTS memories (
     ocr_text   text NOT NULL,
     lines      jsonb NOT NULL DEFAULT '[]'::jsonb,
     thumbnail  bytea NOT NULL,
-    embedding  vector(384) NOT NULL
+    nemotron_35_1b_embedding vector(2048) NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS memories_seen_at_idx ON memories (seen_at);
