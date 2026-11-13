@@ -89,7 +89,7 @@ final class GlassesCaptureSource: CaptureSource {
     @ObservationIgnored private var deviceMonitorTask: Task<Void, Never>?
     @ObservationIgnored private var backgroundTask: Task<Void, Never>?
 
-    private static let photoTimeout: Duration = .seconds(10)
+    private static let photoTimeout: Duration = .seconds(15)   // first 12 MP still can take >10 s
 
     init(wearables: any WearablesInterface = Wearables.shared) {
         self.wearables = wearables
@@ -426,6 +426,12 @@ final class GlassesCaptureSource: CaptureSource {
                 Task { @MainActor in self?.photoStateChanged(state) }
             }.store(in: cameraTokens)
             photo.photoDataPublisher.listen { [weak self] data in
+                if let meta = data.metadata {
+                    let text = String(decoding: meta.prefix(600), as: UTF8.self)
+                    Log.glasses.info("photo metadata \(meta.count) B: \(text, privacy: .public)")
+                } else {
+                    Log.glasses.info("photo metadata: none")
+                }
                 Task { @MainActor in self?.pendingPhoto.fulfill(data.imageData) }
             }.store(in: cameraTokens)
             photo.errorPublisher.listen { [weak self] error in
