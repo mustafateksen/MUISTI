@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key><string>tr</string>
+	<key>CFBundleDisplayName</key><string>Muisti</string>
+	<key>CFBundleExecutable</key><string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key><string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+	<key>CFBundleName</key><string>$(PRODUCT_NAME)</string>
+	<key>CFBundlePackageType</key><string>$(PRODUCT_BUNDLE_PACKAGE_TYPE)</string>
+	<key>CFBundleShortVersionString</key><string>$(MARKETING_VERSION)</string>
+	<key>CFBundleVersion</key><string>$(CURRENT_PROJECT_VERSION)</string>
+
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeRole</key><string>Editor</string>
+			<key>CFBundleURLName</key><string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+			<key>CFBundleURLSchemes</key>
+			<array><string>muisti</string></array>
+		</dict>
+	</array>
+
+	<!-- Meta Wearables Device Access Toolkit -->
+	<key>MWDAT</key>
+	<dict>
+		<key>AppLinkURLScheme</key><string>muisti://</string>
+		<key>MetaAppID</key><string>$(META_APP_ID)</string>
+		<key>ClientToken</key><string>$(CLIENT_TOKEN)</string>
+		<key>TeamID</key><string>$(DEVELOPMENT_TEAM)</string>
+	</dict>
+
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>processing</string>
+		<string>bluetooth-central</string>
+		<string>bluetooth-peripheral</string>
+		<string>external-accessory</string>
+		<string>audio</string>
+	</array>
+	<key>UISupportedExternalAccessoryProtocols</key>
+	<array><string>com.meta.ar.wearable</string></array>
+
+	<key>NSBluetoothAlwaysUsageDescription</key><string>Gözlüğe bağlanmak için gerekli.</string>
+	<key>NSBluetoothPeripheralUsageDescription</key><string>Gözlüğe bağlanmak için gerekli.</string>
+	<key>NSLocalNetworkUsageDescription</key><string>Telefonun gözlüğü Wi-Fi üzerinden bulmasını ve yerel sunucuya ulaşmasını sağlar.</string>
+	<key>NSBonjourServices</key>
+	<array><string>_bonjour._tcp</string></array>
+
+	<key>NSCameraUsageDescription</key><string>Gözlük yokken telefon kamerası yakalama kaynağı olarak kullanılır.</string>
+	<key>NSMicrophoneUsageDescription</key><string>Sesli soru sormak için gerekli.</string>
+	<key>NSSpeechRecognitionUsageDescription</key><string>Sesli soruyu yazıya çevirmek için gerekli.</string>
+	<key>NSLocationWhenInUseUsageDescription</key><string>Gördüklerinin nerede olduğunu kaydetmek ve ne zaman kare alınacağına karar vermek için gerekli.</string>
+	<key>NSMotionUsageDescription</key><string>Yürürken, dururken ya da araçtayken kare alma sıklığını ayarlayıp pil tasarrufu yapmak için gerekli.</string>
+	<key>NSPhotoLibraryUsageDescription</key><string>Sahte gözlüğe beslenecek videoyu seçmek için gerekli.</string>
+
+	<!-- Hackathon: yerel ağdaki http sunucusuna izin ver -->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoads</key><true/>
+		<key>NSAllowsLocalNetworking</key><true/>
+	</dict>
+
+	<!-- Documents/sessions Dosyalar uygulamasında görünsün -->
+	<key>UIFileSharingEnabled</key><true/>
+	<key>LSSupportsOpeningDocumentsInPlace</key><true/>
+
+	<key>UIApplicationSceneManifest</key>
+	<dict>
+		<key>UIApplicationSupportsMultipleScenes</key><false/>
+	</dict>
+	<key>UILaunchScreen</key><dict/>
+	<key>UIRequiredDeviceCapabilities</key>
+	<array><string>arm64</string></array>
+	<key>UISupportedInterfaceOrientations</key>
+	<array><string>UIInterfaceOrientationPortrait</string></array>
+</dict>
+</plist>
