@@ -44,7 +44,7 @@
 
 	<key>NSBluetoothAlwaysUsageDescription</key><string>Gözlüğe bağlanmak için gerekli.</string>
 	<key>NSBluetoothPeripheralUsageDescription</key><string>Gözlüğe bağlanmak için gerekli.</string>
-	<key>NSLocalNetworkUsageDescription</key><string>Telefonun gözlüğü Wi-Fi üzerinden bulmasını ve yerel sunucuya ulaşmasını sağlar.</string>
+	<key>NSLocalNetworkUsageDescription</key><string>Telefonun gözlüğü Wi-Fi üzerinden bulmasını sağlar.</string>
 	<key>NSBonjourServices</key>
 	<array><string>_bonjour._tcp</string></array>
 
@@ -55,12 +55,6 @@
 	<key>NSMotionUsageDescription</key><string>Yürürken, dururken ya da araçtayken kare alma sıklığını ayarlayıp pil tasarrufu yapmak için gerekli.</string>
 	<key>NSPhotoLibraryUsageDescription</key><string>Sahte gözlüğe beslenecek videoyu seçmek için gerekli.</string>
 
-	<!-- Hackathon: yerel ağdaki http sunucusuna izin ver -->
-	<key>NSAppTransportSecurity</key>
-	<dict>
-		<key>NSAllowsArbitraryLoads</key><true/>
-		<key>NSAllowsLocalNetworking</key><true/>
-	</dict>
 
 	<!-- Documents/sessions Dosyalar uygulamasında görünsün -->
 	<key>UIFileSharingEnabled</key><true/>

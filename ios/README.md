@@ -1,22 +1,31 @@
-# Muisti iOS: gözlük ve yakalama hattı (Kişi 1)
+# Muisti iOS
 
-Meta Wearables DAT SDK **1.0.1** (SPM, exact). Xcode 26.4+, iOS 17.2+, Swift 6.
-Hattın çıktısı tek şey: **kare akışı** (`CapturedFrame`). Eleme, OCR ve bulanıklaştırma Kişi 2'de; `/ingest` ve `/ask` sunucusu Kişi 3'te.
+Gözlük + telefon, **sunucusuz**. Depolama, OCR, bulanıklaştırma, hafıza ve sorgu telefonda çalışıyor; Nemotron 3.5 Super VL doğrudan telefondan API ile çağrılıyor.
+
+```
+Kare → eleme (keskinlik, tekrar, kayıt dışı bölge) → Apple Vision OCR → yüz + plaka bulanıklaştırma
+     → SQLite (FTS5) + bulanık küçük kare   [Application Support/memory, dosya koruması açık]
+     → arka planda Nemotron: yapılandırılmış kayıt {kind, name, phone, hours, …} + kanıt kuralı
+Ses  → "Sor" düğmesi / "Hey Siri, Muisti'ye sor" → gözlük mikrofonu (HFP) → cihaz üstü konuşma tanıma
+     → Nemotron soru planı → yerel arama → kanıttan cevap → kanıt kuralı → gözlük hoparlörü (A2DP)
+```
+
+**Kanıt kuralı:** cevaptaki her telefon, saat ve fiyat, karede okunan metinde birebir geçmek zorunda; geçmiyorsa cevap "net görmedim"e çevrilir. Kayıt yoksa "Bunu görmedim." İnternet yoksa yerel aramayla cevap verilir.
 
 ## Çalıştırma
 
-1. `ios/Muisti.xcodeproj`'yi aç. Paket ilk açılışta iner.
-2. Signing & Capabilities: kendi takımını seç, gerekirse bundle id'yi değiştir (`fi.junction.powerpuffboys.muisti`).
-   Ücretsiz (kişisel) takım `HotspotConfiguration` / `wifi-info` yetkilerini vermeyebilir. İmzalama hata verirse bu ikisini `Config/Muisti.entitlements` dosyasından sil.
-3. **Simülatör (gözlüksüz):** çalıştır → sol üstteki 🐞 → *Sahte gözlüğü aç* → *Kaydı başlat*.
-   Tek adımda açmak için Scheme > Run > Arguments altına `--mock-autostart` ekle. İsteğe bağlı argümanlar:
-   - `--mode=adaptive|stream|streamPlusPhoto|intervalPhoto`
-   - `--server=http://127.0.0.1:8000`
-   - `--mock-script=fold@8,unfold@14,don@16,doff@26,tap@30,battery5@34,hot@36,background@40`: bölüm 7'deki hata satırlarını zamanlı olarak tetikler.
-4. **Sahte sunucu:** `python3 ios/tools/mock_server.py --port 8000 --out /tmp/muisti-ingest`. Uygulamada Ayarlar > Sunucu alanına `http://<Mac IP>:8000` yaz.
-5. **Gerçek gözlük:** Meta AI'da geliştirici modu açık olmalı (yazılım güncellemesinden sonra kendiliğinden kapanır). Ana ekranda *Bağlan* → Meta AI → geri dönüş → *Kaydı başlat* → kamera izni.
+1. `ios/Muisti.xcodeproj`'yi aç, Signing'de takımını seç.
+2. **Ayarlar > Nemotron:** "Hazır sağlayıcı seç > Verda (Junction)" ve API anahtarı. Anahtar Keychain'de durur, koda yazılmaz.
+3. **Simülatör:** 🐞 → Sahte gözlüğü aç → Kaydı başlat. Ya da argümanlar: `--mock-autostart --mode=stream`.
+4. **Gerçek gözlük:** Meta AI'da geliştirici modu → Bağlan → Kaydı başlat.
+5. **Sor sekmesi:** mikrofona dokun ve sor. Eller serbest kullanım için "Hey Siri, Muisti'ye sor" ya da Eylem Düğmesi → Kestirme → "Muisti'ye sor".
 
-Kayıtlar `Dosyalar > Bu iPhone'da > Muisti > sessions/<tarih>/` altında: `frames/*.jpg`, `meta.jsonl`, `gps.jsonl`. Buradan AirDrop ile Mac'e alınabilir.
+DEBUG argümanları:
+- `--autostart` / `--mock-autostart`
+- `--mode=…`, `--source=phone`
+- `--nemotron-key=…`: test cihazının Keychain'ine yazar
+- `--script=capture@6,highres@10,ask@20,listen@25,stop@30` ve `--ask="soru"`
+- `--mock-script=fold@8,unfold@12,don@14,tap@20,battery5@24,hot@26,background@30`
 
 ## Yakalama modları
 
@@ -41,37 +50,33 @@ Bütün eşikler Ayarlar > Uyarlamalı mod altında değiştirilebilir.
 
 Gözlük tarafında fotoğraf yeteneğini açmak için önce kısa bir akış başlatılır (`Photo.start()` soğuk kamerada `starting`'de takılı kalır). Fotoğraf yeteneği `started` olunca akış durdurulur.
 
-## Diğer hatlarla sözleşme
+## Nemotron
 
-```swift
-// Kişi 2: algı hattını tak
-await controller.setSink(MyPerceptionSink())   // FrameSink.process(_:) -> IngestPayload?
-controller.requestFollowUp()                   // "yazı gördüm, bir daha bak" (uyarlamalı) / mod B'de yüksek çözünürlük
-// Kişi 4: ses ve soru
-try AudioSessionSetup.configureForVoice()
-let answer = try await APIClient(baseURL: url).ask("…", lat: lat, lon: lon)
-```
+| | |
+|---|---|
+| Verda (varsayılan) | `https://containers.datacrunch.io/nemotron-3-5-super-vl-b300/v1`, model `nemotron-3.5-super-vl`. Gömme yok → anahtar kelime (FTS5) + kısmi kelime araması |
+| NVIDIA build | `https://integrate.api.nvidia.com/v1`, `nvidia/nemotron-3.5-super-vl-120b-a12b` + `nvidia/nemotron-3.5-embed-1b` (gömme ile anlam araması) |
+| Ölçüm (Verda) | Görselli çıkarma ~0,85 sn; soru → cevap ~1,8 sn (plan + cevap, 2 çağrı) |
+| Kare başına | 1 çağrı (yalnız tutulan kareler: yazılı ya da dakikada 1 sahne) |
 
-`IngestPayload` alan adları, plandaki `/ingest` sözleşmesiyle birebir aynıdır. Kişi 2 hazır olana kadar `PassthroughSink` kullanılır: tekil kareler her zaman, akış kareleri her N.'si geçer.
+İstemler `AI/MemoryAI.swift` içinde (Nemotron teslim metni için oradan alınabilir).
 
 ## Dosyalar
 
 ```
 Muisti/
-  MuistiApp.swift                 Wearables.configure(), onOpenURL (yalnızca metaWearablesAction)
-  Core/        CapturedFrame, CaptureSource (protokol + durum), AppConfig, ImageData, Log, AudioSessionSetup
-  Glasses/     WearablesController (kayıt/izin/güncelleme), GlassesCaptureSource (oturum/kamera/akış/fotoğraf; A, B, C ve uyarlamalı),
-               MockDeviceController (#if DEBUG), MockRuntime
-  Phone/       PhoneCameraSource (yedek kaynak), LocationProvider
-  Adaptive/    MotionProvider (CoreMotion etkinlik, adım sayar, ivme), AdaptiveScheduler
-  Pipeline/    CaptureController (orkestra), FrameSink + PassthroughSink, SessionRecorder, UploadQueue
-  Net/         APIClient (/ingest, /ask)
-  UI/          HomeView, PreviewView, StatusBanner, SettingsView, DebugMenu (#if DEBUG)
-  Resources/   demo_signs.mp4 (h.265, tabelalar), demo_sign.jpg: sahte gözlük beslemesi; yerelde üretildi
-tools/mock_server.py              /ingest + /ask sahte sunucusu (yalnızca standart kütüphane)
+  MuistiApp.swift   RootView: Kayıt / Sor / Hafıza sekmeleri, Siri isteği → dinle
+  Core/        CapturedFrame, CaptureSource, AppConfig, ImageData, ISO8601, Log
+  Glasses/     WearablesController, GlassesCaptureSource (A, B, C, uyarlamalı), MockDeviceController, MockRuntime
+  Phone/       PhoneCameraSource, LocationProvider (+ sokak adı)
+  Adaptive/    MotionProvider, AdaptiveScheduler
+  Perception/  PerceptionEngine (keskinlik, dHash + metin tekrarı, Vision OCR, yüz/plaka bulanıklaştırma, kayıt dışı bölge)
+  Memory/      MemoryStore (SQLite + FTS5), MemoryPipeline, EnrichmentWorker, QueryEngine
+  AI/          NemotronClient (OpenAI uyumlu), MemoryAI (istemler + kanıt kuralı), KeychainStore
+  Voice/       VoiceAssistant (dinle → sor → oku), AskIntent (Siri / Eylem Düğmesi)
+  Pipeline/    CaptureController, SessionRecorder (isteğe bağlı ham veri seti)
+  UI/          HomeView, AskView, MemoryListView, PreviewView, StatusBanner, SettingsView, DebugMenu
 ```
-
-Brifingdeki `GlassesPhotoSource` ayrı bir dosya olarak yazılmadı; bu mod `GlassesCaptureSource` içinde. Akış ile fotoğraf aynı sensörü ve aynı oturumu paylaştığı için tek sahip daha güvenli.
 
 ## Simülatörde (sahte gözlük) doğrulananlar
 
@@ -79,13 +84,17 @@ Brifingdeki `GlassesPhotoSource` ayrı bir dosya olarak yazılmadı; bu mod `Gla
 |---|---|
 | Uyarlamalı: uyandırma akışı → fotoğraf `started` → akış kapanır → kareler | ✅ 720×1280, aktarım 5–600 ms (sahte) |
 | Simüle yürüyüş (1,4 m/sn): ~11 m'de bir kare, konumlu | ✅ |
-| Akış A, 7 kare/sn, her 5. kare `/ingest`'e | ✅ (~1,3 kare/sn) |
-| Sunucu yokken kuyruk diske birikir, uygulama yeniden açılınca boşalır | ✅ |
+| Akış A, 7 kare/sn, her 5. kare algı hattına | ✅ |
+| İnternet/anahtar yokken kareler telefonda bekler, gelince Nemotron'a işlenir | ✅ |
 | Menteşe kapanır → oturum `stopped` → açılıp takılınca yeni oturum kendiliğinden | ✅ |
 | Gözlük çıkarılınca kare alınmaz, takılınca devam eder | ✅ |
 | Sapa dokunma → "devam için sapına dokun", son kare ekranda; ikinci dokunuş sürdürür | ✅ |
 | Pil %5 / ısınma → uyarı + mod önerisi | ✅ |
 | Arka plana geçiş → oturum bilinçli kapanır, "Devam et" | ✅ (bildirimle tetiklendi) |
+| Tabela videosu → 4 tabela = 4 kayıt (tekrar/yarım okuma elendi), Nemotron ile zenginleşti | ✅ |
+| "Dişçinin numarası?" → "+358 9 4321 7788"; "Pizzacının telefonu?" → BİLMİYORUM | ✅ |
+| Kanıt kuralı: OCR'da olmayan saat/numara cevaptan atılır (10 birim test) | ✅ |
+| Yüz bulanıklaştırma (gerçek gözlük karesi), 12 MP kare işleme ~220 ms | ✅ |
 
 Sahte cihazla ilgili not: menteşe açılsa bile gözlük **takılana kadar** oturum "Device unavailable" ile reddediliyor. Gerçek gözlükte bunu doğrulamak gerekiyor.
 
@@ -99,7 +108,7 @@ Sahte cihazla ilgili not: menteşe açılsa bile gözlük **takılana kadar** ot
 | Akış (mod A) `.high` 7 kare/sn | 720×1280, dik, ~4,4 kare/sn kaydedildi |
 | Akış içi fotoğraf (mod B) | **1080×1440**, ~4 sn |
 | Telefon kamerası | Akış 720×1280; yüksek çözünürlük 2376×4224 |
-| `/ingest` yükü | Sunucuya giden kopya uzun kenar 2048 px: 12 MP kare 2,5 MB → **0,86 MB** base64. Diske ve Kişi 2'ye tam boyut |
+| Nemotron'a giden kare | Bulanık anahtar kare, uzun kenar 1280 px (~150–300 KB) |
 
 Telefonla hata ayıklama (DEBUG): `xcrun devicectl device process launch --device <UDID> --console --environment-variables '{"OS_ACTIVITY_DT_MODE":"enable"}' fi.junction.powerpuffboys.muisti --autostart [--mode=…] [--source=phone] [--script=capture@6,highres@10,stop@30,start@33]`
 

@@ -1,0 +1,31 @@
+import Foundation
+
+/// Records grouped by calendar day, newest day first, for the memory list.
+struct MemoryDaySection: Identifiable {
+    let day: Date
+    let records: [MemoryRecord]
+    var id: Date { day }
+
+    static func group(_ records: [MemoryRecord], calendar: Calendar) -> [MemoryDaySection] {
+        Dictionary(grouping: records) { calendar.startOfDay(for: $0.seenAt) }
+            .map { MemoryDaySection(day: $0.key, records: $0.value.sorted { $0.seenAt > $1.seenAt }) }
+            .sorted { $0.day > $1.day }
+    }
+
+    func title(calendar: Calendar) -> String {
+        if calendar.isDateInToday(day) { return "Bugün" }
+        if calendar.isDateInYesterday(day) { return "Dün" }
+        return day.formatted(.dateTime.weekday(.wide).day().month(.wide))
+    }
+}
+
+extension MemoryRecord {
+    /// Case- and accent-insensitive match on everything a person might remember about a record.
+    func matches(_ query: String) -> Bool {
+        let fields = [title, ocrText, street, phone, kind, name, hours, caption, keywords, otherText]
+        return fields.contains { field in
+            guard let field else { return false }
+            return field.range(of: query, options: [.caseInsensitive, .diacriticInsensitive]) != nil
+        }
+    }
+}

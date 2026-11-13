@@ -103,13 +103,17 @@ actor QueryEngine {
         var label = AnswerLabel(rawValue: draft.label.uppercased()) ?? .unknown
         var answer = draft.answer
 
-        // Any quoted literal, and any long digit run in the answer, must be in the OCR text.
+        // Any quoted literal, and every number in the answer (phone, time, price), must be in
+        // the OCR text. The only numbers allowed from elsewhere are when the frame was seen.
         let literalOK = draft.value.map { EvidenceRule.supports($0, in: ocr) } ?? true
-        let digitRuns = answer.split(whereSeparator: { !$0.isNumber && $0 != " " && $0 != "-" })
-            .map { EvidenceRule.digits(String($0)) }
-            .filter { $0.count >= 5 }
-        let ocrDigits = EvidenceRule.digits(ocr)
-        let digitsOK = digitRuns.allSatisfy { ocrDigits.contains($0) }
+        let seenTimes = Set(evidence.flatMap { hit -> [String] in
+            let d = hit.record.seenAt
+            let cal = Calendar.current
+            let h = cal.component(.hour, from: d), m = cal.component(.minute, from: d)
+            return [String(format: "%d:%02d", h, m), String(format: "%02d:%02d", h, m), String(cal.component(.day, from: d))]
+                .map(EvidenceRule.canonicalNumber)
+        })
+        let digitsOK = EvidenceRule.numbersSupported(in: answer, ocr: ocr, allowed: seenTimes)
         if label == .seen, !(literalOK && digitsOK) {
             label = .unknown
             answer = Self.notClearText(language)

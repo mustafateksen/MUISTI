@@ -1,150 +1,103 @@
 import SwiftUI
 
+/// End-user settings: camera source, AI key, voice, privacy. Everything technical sits behind
+/// "Geliştirici seçenekleri" at the bottom.
 struct SettingsView: View {
     let controller: CaptureController
     @Bindable var config: AppConfig
+    let wearables: WearablesController
     @Environment(\.dismiss) private var dismiss
-    @State private var serverCheck: String?
-    @State private var zoneMessage: String?
+    @AppStorage(DeveloperMode.storageKey) private var developerMode = false
 
     var body: some View {
         NavigationStack {
             Form {
                 Section {
-                    Menu("Hazır sağlayıcı seç") {
-                        ForEach(NemotronClient.Provider.allCases) { provider in
-                            Button(provider.label) { config.use(provider) }
+                    Picker("Kamera", selection: $config.sourceKind) {
+                        ForEach(SourceKind.allCases) { Text($0.label).tag($0) }
+                    }
+                    .disabled(controller.isRunning)
+                    if config.sourceKind == .glasses {
+                        LabeledContent("Gözlük") {
+                            if wearables.isRegistered {
+                                Label("Bağlı", systemImage: "checkmark.circle.fill")
+                                    .foregroundStyle(.green)
+                            } else {
+                                Button(wearables.registrationState == .registering ? "Bağlanıyor…" : "Bağlan", action: register)
+                            }
                         }
                     }
-                    SecureField("API anahtarı", text: $config.apiKey)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                    TextField("Adres (https://…/v1)", text: $config.apiBaseURL)
-                        .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled().font(.footnote)
-                    TextField("Sohbet modeli", text: $config.chatModel)
-                        .textInputAutocapitalization(.never).autocorrectionDisabled().font(.footnote)
-                    TextField("Gömme modeli (boş = yalnız anahtar kelime)", text: $config.embedModel)
-                        .textInputAutocapitalization(.never).autocorrectionDisabled().font(.footnote)
-                    Button("Bağlantıyı dene") { Task { await checkNemotron() } }
-                    if let serverCheck { Text(serverCheck).font(.footnote).foregroundStyle(.secondary) }
                 } header: {
-                    Text("Nemotron 3.5 Super VL")
+                    Text("Kamera")
                 } footer: {
-                    Text("Anahtar Keychain'de saklanır, koda ya da yedeğe girmez. Telefondan yalnızca bulanıklaştırılmış küçük kare ve okunan yazı gönderilir; hafıza telefonda kalır.")
+                    Text(controller.isRunning ? "Kamerayı değiştirmek için önce kaydı durdur." : "Ray-Ban Meta gözlük ya da telefonun arka kamerası.")
                 }
 
-                Section("Ses") {
+                AISettingsSection(controller: controller, config: config)
+
+                Section {
                     Picker("Soru dili", selection: $config.voiceLocale) {
                         Text("Türkçe").tag("tr-TR")
                         Text("English").tag("en-US")
                         Text("Suomi").tag("fi-FI")
                     }
-                    Toggle("Cevabı sesli oku (gözlük hoparlörü)", isOn: $config.speakAnswers)
-                    Text("Eller serbest: “Hey Siri, Muisti'ye sor” ya da Ayarlar > Eylem Düğmesi > Kestirme > Muisti'ye sor.")
-                        .font(.footnote).foregroundStyle(.secondary)
-                }
-
-                Section {
-                    Picker("Mod", selection: $config.mode) {
-                        ForEach(CaptureMode.allCases) { Text($0.label).tag($0) }
-                    }
-                    Picker("Akış çözünürlüğü", selection: $config.streamQuality) {
-                        ForEach(StreamQuality.allCases) { Text($0.label).tag($0) }
-                    }
-                    Picker("Akış kare/sn", selection: $config.streamFPS) {
-                        ForEach(AppConfig.allowedFPS, id: \.self) { Text("\($0)").tag($0) }
-                    }
-                    Picker("Fotoğraf boyutu", selection: $config.stillResolution) {
-                        ForEach(StillResolution.allCases) { Text($0.rawValue).tag($0) }
-                    }
-                    Picker("Fotoğraf kalitesi", selection: $config.stillQuality) {
-                        ForEach(StillQuality.allCases) { Text($0.rawValue).tag($0) }
-                    }
-                    Stepper("Sabit aralık (C): \(Int(config.intervalSeconds)) sn", value: $config.intervalSeconds, in: 2...60, step: 1)
-                    Stepper("Akışta her \(config.passthroughEveryN). kareyi incele", value: $config.passthroughEveryN, in: 1...30)
-                    Toggle("Gözlük gelince yeniden bağlan", isOn: $config.autoReconnect)
-                    Picker("Gözlük fotoğrafını döndür", selection: $config.glassesPhotoRotation) {
-                        Text("0°").tag(0)
-                        Text("90° saat yönü").tag(90)
-                        Text("180°").tag(180)
-                        Text("270° saat yönü").tag(270)
-                    }
+                    Toggle("Cevabı sesli oku", isOn: $config.speakAnswers)
                 } header: {
-                    Text("Yakalama")
+                    Text("Ses")
                 } footer: {
-                    Text("Kayıt sürerken değişen yakalama ayarları bir sonraki başlatmada uygulanır.")
+                    Text("Eller serbest: “Hey Siri, Muisti'ye sor” ya da Ayarlar > Eylem Düğmesi > Kestirme > Muisti'ye sor. Cevap gözlük hoparlöründen okunur.")
                 }
 
-                Section {
-                    Stepper("En kısa aralık: \(fmt(config.tuning.minInterval)) sn", value: $config.tuning.minInterval, in: 1...15, step: 0.5)
-                    Stepper("Dakikada en fazla: \(config.tuning.maxPerMinute)", value: $config.tuning.maxPerMinute, in: 2...40)
-                    Stepper("Yürürken her \(fmt(config.tuning.walkingDistance)) m", value: $config.tuning.walkingDistance, in: 3...50, step: 1)
-                    Stepper("Yürürken en geç \(fmt(config.tuning.walkingMaxInterval)) sn", value: $config.tuning.walkingMaxInterval, in: 3...60, step: 1)
-                    Stepper("Hızlıyken her \(fmt(config.tuning.fastDistance)) m", value: $config.tuning.fastDistance, in: 10...200, step: 5)
-                    Stepper("Dönüş eşiği \(fmt(config.tuning.headingChange))°", value: $config.tuning.headingChange, in: 15...120, step: 5)
-                    Stepper("Durup bakma \(fmt(config.tuning.dwellSeconds)) sn", value: $config.tuning.dwellSeconds, in: 0.5...6, step: 0.5)
-                    Stepper("Dururken yenile \(fmt(config.tuning.stationaryRefresh)) sn", value: $config.tuning.stationaryRefresh, in: 10...300, step: 5)
-                    Stepper("Dururken en fazla \(config.tuning.stationaryMaxStills) kare", value: $config.tuning.stationaryMaxStills, in: 0...20)
-                    Stepper("Hareket verisi yokken \(fmt(config.tuning.unknownActivityInterval)) sn", value: $config.tuning.unknownActivityInterval, in: 2...60, step: 1)
-                    Stepper("Bulanıklık için en çok \(fmt(config.tuning.blurGateMaxWait)) sn bekle", value: $config.tuning.blurGateMaxWait, in: 0...3, step: 0.2)
-                    Toggle("Pil/ısı tasarrufu", isOn: $config.tuning.batterySaver)
-                    Button("Varsayılana dön") { config.resetTuning() }
-                } header: {
-                    Text("Uyarlamalı mod")
-                } footer: {
-                    Text("Düşük pil (telefon < %20 ya da düşük güç modu, gözlük < %20) ve ısı aralıkları uzatır; kritik ısıda çekim durur.")
-                }
+                PrivacySettingsSection(controller: controller, config: config)
 
                 Section {
-                    Stepper("Kayıtları \(config.retentionDays) gün sakla", value: $config.retentionDays, in: 1...30)
-                    Button("Son 10 dakikayı unut", role: .destructive) {
-                        Task { await controller.forget(minutes: 10) }
-                    }
-                    Button("Bulunduğum yeri kayıt dışı yap (100 m)") {
-                        zoneMessage = controller.addZoneHere(name: "Bölge \(config.zones.count + 1)")
-                            ? "Eklendi." : "Konum yok; kayıt sırasında tekrar dene."
-                    }
-                    if let zoneMessage { Text(zoneMessage).font(.footnote).foregroundStyle(.secondary) }
-                    ForEach(config.zones) { zone in
-                        HStack {
-                            Text(zone.name)
-                            Spacer()
-                            Text(String(format: "%.4f, %.4f", zone.latitude, zone.longitude)).font(.caption.monospaced()).foregroundStyle(.secondary)
+                    Toggle("Geliştirici seçenekleri", isOn: $developerMode.animation())
+                    if developerMode {
+                        NavigationLink(value: SettingsRoute.developer) {
+                            Label("Geliştirici paneli", systemImage: "hammer")
                         }
                     }
-                    .onDelete { config.zones.remove(atOffsets: $0) }
-                    Toggle("Ham kareleri de kaydet (yalnızca veri seti)", isOn: $config.recordToDisk)
                 } header: {
-                    Text("Mahremiyet")
+                    Text("Gelişmiş")
                 } footer: {
-                    Text("Yüzler ve plakalar telefonda bulanıklaştırılır; ham kare saklanmaz (veri seti anahtarı kapalıyken). Kayıt dışı bölgelerde kare alınsa bile hafızaya yazılmaz.")
+                    Text("Yakalama modları, Nemotron sunucusu, zamanlayıcı ayarları ve canlı tanılama. Açıkken Kayıt ekranında da bir düğme görünür.")
+                }
+
+                Section {
+                    LabeledContent("Sürüm", value: Self.versionText)
+                } footer: {
+                    Text("Muisti gördüklerini senin için hatırlar. Hafıza bu telefonda kalır.")
                 }
             }
             .navigationTitle("Ayarlar")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Bitti") {
-                        Task { await controller.applySettings() }
-                        dismiss()
-                    }
+            .navigationDestination(for: SettingsRoute.self) { route in
+                switch route {
+                case .developer:
+                    DeveloperView(controller: controller, config: config, wearables: wearables)
                 }
             }
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Bitti") { dismiss() }
+                }
+            }
+            .onDisappear(perform: applySettings)
         }
     }
 
-    private func fmt(_ value: Double) -> String {
-        value.rounded() == value ? String(Int(value)) : String(format: "%.1f", value)
+    private static var versionText: String {
+        let info = Bundle.main.infoDictionary
+        let version = info?["CFBundleShortVersionString"] as? String ?? "—"
+        let build = info?["CFBundleVersion"] as? String ?? "—"
+        return "\(version) (\(build))"
     }
 
-    private func checkNemotron() async {
-        serverCheck = "Deneniyor…"
-        await controller.applySettings()
-        do {
-            let reply = try await controller.ai.ping()
-            serverCheck = "Nemotron yanıt verdi: \(reply.prefix(20))"
-        } catch {
-            serverCheck = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-        }
+    private func register() {
+        Task { await wearables.register() }
+    }
+
+    private func applySettings() {
+        Task { await controller.applySettings() }
     }
 }

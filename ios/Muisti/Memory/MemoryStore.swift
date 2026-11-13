@@ -214,6 +214,20 @@ actor MemoryStore {
         return (total, pending)
     }
 
+    /// Enriched rows without a vector (embeddings were off when they were stored).
+    func missingEmbeddings(limit: Int) -> [MemoryRecord] {
+        rows("WHERE status = 1 AND embedding IS NULL ORDER BY seen_at DESC LIMIT \(limit)")
+    }
+
+    func setEmbedding(id: Int64, _ vector: [Float]) {
+        guard let stmt = prepare("UPDATE memories SET embedding = ? WHERE id = ?") else { return }
+        defer { sqlite3_finalize(stmt) }
+        let data = vector.withUnsafeBufferPointer { Data(buffer: $0) }
+        _ = data.withUnsafeBytes { sqlite3_bind_blob(stmt, 1, $0.baseAddress, Int32(data.count), transient) }
+        sqlite3_bind_int64(stmt, 2, id)
+        sqlite3_step(stmt)
+    }
+
     func pending(limit: Int) -> [MemoryRecord] {
         rows("WHERE status = 0 ORDER BY seen_at ASC LIMIT \(limit)")
     }

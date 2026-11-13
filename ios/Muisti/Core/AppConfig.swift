@@ -105,6 +105,12 @@ final class AppConfig {
     var apiBaseURL: String { didSet { save("apiBaseURL", apiBaseURL) } }
     var chatModel: String { didSet { save("chatModel", chatModel) } }
     var embedModel: String { didSet { save("embedModel", embedModel) } }
+    /// Empty = same host as chat.
+    var embedBaseURL: String { didSet { save("embedBaseURL", embedBaseURL) } }
+    /// Empty = same key as chat. Keychain only.
+    var embedKey: String {
+        didSet { KeychainStore.write(embedKey.trimmingCharacters(in: .whitespacesAndNewlines), for: "embed-api-key") }
+    }
     var retentionDays: Int { didSet { save("retentionDays", retentionDays) } }
     var voiceLocale: String { didSet { save("voiceLocale", voiceLocale) } }
     var speakAnswers: Bool { didSet { save("speakAnswers", speakAnswers) } }
@@ -138,6 +144,8 @@ final class AppConfig {
         apiBaseURL = defaults.string(forKey: "apiBaseURL") ?? NemotronClient.Provider.verda.baseURL.absoluteString
         chatModel = defaults.string(forKey: "chatModel") ?? NemotronClient.Provider.verda.chatModel
         embedModel = defaults.string(forKey: "embedModel") ?? NemotronClient.Provider.verda.embedModel
+        embedBaseURL = defaults.string(forKey: "embedBaseURL") ?? ""
+        embedKey = KeychainStore.read("embed-api-key") ?? ""
         retentionDays = defaults.object(forKey: "retentionDays") as? Int ?? 7
         voiceLocale = defaults.string(forKey: "voiceLocale") ?? "tr-TR"
         speakAnswers = defaults.object(forKey: "speakAnswers") as? Bool ?? true
@@ -177,13 +185,30 @@ final class AppConfig {
         }
         if !chatModel.isEmpty { s.chatModel = chatModel }
         s.embedModel = embedModel.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let url = URL(string: embedBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)), url.scheme == "https" {
+            s.embedBaseURL = url
+        }
+        s.embedKey = embedKey.trimmingCharacters(in: .whitespacesAndNewlines)
         return s
+    }
+
+    /// Embeddings from NVIDIA build's hosted Nemotron 3.5 Embed (free key), chat stays where it is.
+    func useNVIDIAEmbeddings() {
+        embedBaseURL = NemotronClient.Provider.nvidia.baseURL.absoluteString
+        embedModel = NemotronClient.Provider.nvidia.embedModel
+    }
+
+    /// Embeddings from our own vLLM container on Verda (`--served-model-name nemotron-embed`).
+    func useOwnEmbeddingContainer(baseURL: String) {
+        embedBaseURL = baseURL
+        embedModel = "nemotron-embed"
     }
 
     func use(_ provider: NemotronClient.Provider) {
         apiBaseURL = provider.baseURL.absoluteString
         chatModel = provider.chatModel
         embedModel = provider.embedModel
+        embedBaseURL = ""
     }
 
     func resetTuning() { tuning = AdaptiveTuning() }

@@ -145,7 +145,8 @@ final class VoiceAssistant {
     // MARK: Speak
 
     private func speak(_ text: String, language: String) async {
-        try? Self.activateAudioSession()
+        // Answer in A2DP quality: drop the hands-free (mic) route while speaking.
+        try? Self.activatePlaybackSession()
         let utterance = AVSpeechUtterance(string: text)
         utterance.voice = AVSpeechSynthesisVoice(language: language) ?? AVSpeechSynthesisVoice(language: "en-US")
         utterance.rate = AVSpeechUtteranceDefaultSpeechRate
@@ -175,6 +176,12 @@ final class VoiceAssistant {
         if let bt = session.availableInputs?.first(where: { $0.portType == .bluetoothHFP }) {
             try? session.setPreferredInput(bt)
         }
+    }
+
+    static func activatePlaybackSession() throws {
+        let session = AVAudioSession.sharedInstance()
+        try session.setCategory(.playback, mode: .spokenAudio, options: [.duckOthers])
+        try session.setActive(true)
     }
 
     /// Hands the route back (camera transfers share the Bluetooth link with HFP).

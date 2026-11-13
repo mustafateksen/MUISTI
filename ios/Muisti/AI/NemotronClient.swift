@@ -10,6 +10,12 @@ actor NemotronClient {
         var chatModel = Provider.verda.chatModel
         var embedModel = Provider.verda.embedModel   // empty = no embeddings, keyword search only
         var apiKey = ""
+        /// Embeddings may live on another host (NVIDIA build, own Verda container). nil/empty = same as chat.
+        var embedBaseURL: URL?
+        var embedKey = ""
+
+        var effectiveEmbedURL: URL { embedBaseURL ?? baseURL }
+        var effectiveEmbedKey: String { embedKey.isEmpty ? apiKey : embedKey }
     }
 
     /// Two known OpenAI-compatible hosts for Nemotron 3.5 Super VL.
@@ -54,7 +60,7 @@ actor NemotronClient {
 
     private var settings: Settings
     private let session: URLSession
-    private var lastRequestAt: ContinuousClock.Instant?
+    private var lastRequestAt: [String: ContinuousClock.Instant] = [:]
     /// ≥ 1.6 s between calls keeps a single key under ~40/min.
     private let minSpacing: Duration = .milliseconds(1600)
 
@@ -67,7 +73,8 @@ actor NemotronClient {
     }
 
     func update(_ settings: Settings) {
-        if settings.baseURL != self.settings.baseURL || settings.embedModel != self.settings.embedModel {
+        if settings.effectiveEmbedURL != self.settings.effectiveEmbedURL || settings.embedModel != self.settings.embedModel
+            || settings.effectiveEmbedKey != self.settings.effectiveEmbedKey {
             embeddingsUnavailable = false
         }
         self.settings = settings
@@ -75,7 +82,9 @@ actor NemotronClient {
     var hasKey: Bool { !settings.apiKey.isEmpty }
     /// Set after the host answers 404/400 for embeddings, so we stop spending calls on it.
     private var embeddingsUnavailable = false
-    var embeddingsEnabled: Bool { !settings.embedModel.isEmpty && !embeddingsUnavailable }
+    var embeddingsEnabled: Bool {
+        !settings.embedModel.isEmpty && !settings.effectiveEmbedKey.isEmpty && !embeddingsUnavailable
+    }
 
     // MARK: Chat
 
@@ -104,7 +113,7 @@ actor NemotronClient {
             "stream": false,
             "chat_template_kwargs": ["enable_thinking": false],
         ]
-        let data = try await post("chat/completions", json: body)
+        let data = try await post("chat/completions", json: body, baseURL: settings.baseURL, key: settings.apiKey)
         guard
             let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
             let choices = root["choices"] as? [[String: Any]],
@@ -133,16 +142,22 @@ actor NemotronClient {
 
     func embed(_ text: String, as kind: EmbedKind) async throws -> [Float] {
         guard embeddingsEnabled else { throw NemotronError.badResponse("gömme kapalı") }
-        let body: [String: Any] = [
+        var body: [String: Any] = [
             "model": settings.embedModel,
             "input": [String(text.prefix(4000))],
-            "input_type": kind.rawValue,
             "encoding_format": "float",
-            "truncate": "END",
         ]
+        if settings.effectiveEmbedURL.host?.hasSuffix("nvidia.com") == true {
+            // NVIDIA's retriever API wants the query/passage role explicitly.
+            body["input_type"] = kind.rawValue
+            body["truncate"] = "END"
+        } else {
+            // vLLM & co.: express the role the way retrieval embedders are trained.
+            body["input"] = ["\(kind == .query ? "query" : "passage"): \(text.prefix(4000))"]
+        }
         let data: Data
         do {
-            data = try await post("embeddings", json: body)
+            data = try await post("embeddings", json: body, baseURL: settings.effectiveEmbedURL, key: settings.effectiveEmbedKey)
         } catch NemotronError.http(let status, let message) where status == 404 || status == 400 || status == 422 {
             embeddingsUnavailable = true
             Log.net.info("embeddings unavailable on this host (\(status)); keyword search only")
@@ -164,18 +179,18 @@ actor NemotronClient {
 
     // MARK: Transport
 
-    private func post(_ path: String, json: [String: Any]) async throws -> Data {
-        guard !settings.apiKey.isEmpty else { throw NemotronError.missingKey }
+    private func post(_ path: String, json: [String: Any], baseURL: URL, key: String) async throws -> Data {
+        guard !key.isEmpty else { throw NemotronError.missingKey }
         let payload = try JSONSerialization.data(withJSONObject: json)
         var attempt = 0
         while true {
             attempt += 1
-            await pace()
-            var request = URLRequest(url: settings.baseURL.appendingPathComponent(path))
+            await pace(host: baseURL.host ?? "")
+            var request = URLRequest(url: baseURL.appendingPathComponent(path))
             request.httpMethod = "POST"
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
             request.setValue("application/json", forHTTPHeaderField: "Accept")
-            request.setValue("Bearer \(settings.apiKey)", forHTTPHeaderField: "Authorization")
+            request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
             request.httpBody = payload
             do {
                 let (data, response) = try await session.data(for: request)
@@ -194,12 +209,13 @@ actor NemotronClient {
         }
     }
 
-    private func pace() async {
-        if let last = lastRequestAt {
+    /// Spacing per host, so embeddings on another host never wait behind chat calls.
+    private func pace(host: String) async {
+        if let last = lastRequestAt[host] {
             let elapsed = ContinuousClock.now - last
             if elapsed < minSpacing { try? await Task.sleep(for: minSpacing - elapsed) }
         }
-        lastRequestAt = .now
+        lastRequestAt[host] = .now
     }
 
     /// First balanced `{...}` in the text (ignores ``` fences and stray prose).

@@ -58,6 +58,7 @@ actor EnrichmentWorker {
         while !Task.isCancelled {
             status.hasKey = await ai.hasKey
             guard status.online, status.hasKey, let next = await store.pending(limit: 1).first else {
+                if status.online, await backfillEmbedding() { continue }
                 await waitForWork(timeout: .seconds(30))
                 continue
             }
@@ -79,6 +80,20 @@ actor EnrichmentWorker {
                 }
             }
         }
+    }
+
+    /// Adds a vector to one older record when embeddings became available later. Returns
+    /// whether it did any work (so the loop keeps going until none are missing).
+    private func backfillEmbedding() async -> Bool {
+        guard await ai.embeddingsEnabled, let record = await store.missingEmbeddings(limit: 1).first else { return false }
+        guard let vector = try? await ai.embed(Self.passage(for: record), as: .passage) else { return false }
+        await store.setEmbedding(id: record.id, vector)
+        return true
+    }
+
+    static func passage(for r: MemoryRecord) -> String {
+        [r.kind, r.name, r.caption, r.otherText, r.keywords, r.street, r.ocrText]
+            .compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: "\n")
     }
 
     private func enrich(_ record: MemoryRecord) async throws {

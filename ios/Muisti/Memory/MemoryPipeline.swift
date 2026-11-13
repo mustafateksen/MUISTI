@@ -46,12 +46,18 @@ actor MemoryPipeline {
         case .drop(let reason):
             stats.dropped[reason, default: 0] += 1
             return nil
-        case .keep(let memory, _):
+        case .keep(let memory, _, let replaces):
             guard let id = await store.insert(memory) else {
                 stats.dropped[.unreadable, default: 0] += 1
                 return nil
             }
-            stats.kept += 1
+            await perception.didStore(id: id, capturedAt: frame.capturedAt)
+            if let old = replaces {
+                await store.delete(id: old)
+                stats.dropped[.duplicate, default: 0] += 1
+            } else {
+                stats.kept += 1
+            }
             await worker.signal()
             return id
         }

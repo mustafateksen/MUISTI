@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// Latest frame. In stream modes it is live; in adaptive/interval modes it is the last still
-/// (there is deliberately no live video). While paused the last frame stays on screen.
+/// (there is deliberately no live video). While paused the last frame stays on screen, dimmed.
 struct PreviewView: View {
     let image: UIImage?
     let state: CaptureState
@@ -9,36 +9,56 @@ struct PreviewView: View {
     let mode: CaptureMode
 
     var body: some View {
-        ZStack(alignment: .bottomLeading) {
-            RoundedRectangle(cornerRadius: 16)
-                .fill(Color(.secondarySystemBackground))
-            if let image {
-                Image(uiImage: image)
-                    .resizable()
-                    .scaledToFit()
-                    .clipShape(RoundedRectangle(cornerRadius: 16))
-                    .opacity(isPaused ? 0.55 : 1)
-            } else {
-                VStack(spacing: 8) {
-                    Image(systemName: "eyeglasses").font(.system(size: 40)).foregroundStyle(.secondary)
-                    Text(placeholder).font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
+        VStack(alignment: .leading, spacing: Theme.Spacing.s) {
+            HStack {
+                Text("Son görülen").font(.headline)
+                Spacer()
+                if let lastFrame {
+                    Text(lastFrame.at, style: .relative)
+                        .font(.footnote.monospacedDigit())
+                        .foregroundStyle(.secondary)
                 }
-                .padding()
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            if let lastFrame {
-                Text(caption(lastFrame))
-                    .font(.caption.monospacedDigit())
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(.black.opacity(0.55), in: Capsule())
-                    .foregroundStyle(.white)
-                    .padding(10)
+
+            ZStack(alignment: .bottomLeading) {
+                if let image {
+                    ZStack {
+                        Image(uiImage: image)
+                            .resizable()
+                            .scaledToFill()
+                            .blur(radius: 24)
+                            .opacity(0.55)
+                        Image(uiImage: image)
+                            .resizable()
+                            .scaledToFit()
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .clipped()
+                    .saturation(isPaused ? 0 : 1)
+                    .opacity(isPaused ? 0.6 : 1)
+                    .accessibilityLabel("Son kaydedilen kare")
+                } else {
+                    PreviewPlaceholder(text: placeholder, isWaiting: state == .starting || state == .waitingForDevice)
+                }
+
+                if let lastFrame {
+                    Label(caption(lastFrame), systemImage: lastFrame.hasLocation ? "mappin.and.ellipse" : "clock")
+                        .font(.footnote.weight(.medium).monospacedDigit())
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, Theme.Spacing.s)
+                        .padding(.vertical, Theme.Spacing.xs)
+                        .background(.black.opacity(0.45), in: Capsule())
+                        .padding(Theme.Spacing.s)
+                }
             }
+            .frame(maxWidth: .infinity)
+            .aspectRatio(3.0 / 4.0, contentMode: .fit)
+            .frame(maxHeight: 440)
+            .background(.background.tertiary)
+            .clipShape(.rect(cornerRadius: Theme.Radius.inner))
+            .animation(Theme.Motion.standard, value: image == nil)
         }
-        .aspectRatio(9.0 / 16.0, contentMode: .fit)
-        .frame(maxWidth: .infinity)
-        .frame(maxHeight: 460)
+        .card(padding: Theme.Spacing.m)
     }
 
     private var isPaused: Bool {
@@ -49,14 +69,19 @@ struct PreviewView: View {
     private var placeholder: String {
         switch state {
         case .running:
-            return mode.usesScheduler ? "Çalışıyor. İlk kare birazdan gelir.\nCanlı video yok; pil için yalnızca gerekli anlarda kare alınır." : "Akış başlıyor…"
-        case .waitingForDevice: return "Gözlük bekleniyor.\nAçık, menteşesi açık ve yakında olmalı."
-        default: return state.label
+            return mode.usesScheduler
+                ? "İlk kare birazdan gelir.\nPil için canlı video yok; yalnızca gerekli anlarda kare alınır."
+                : "Görüntü geliyor…"
+        case .starting:
+            return "Hazırlanıyor…"
+        case .waitingForDevice:
+            return "Gözlük bekleniyor"
+        default:
+            return "Kayıt başlayınca son gördüğün kare burada görünür."
         }
     }
 
-    private func caption(_ f: FrameSummary) -> String {
-        let time = f.at.formatted(date: .omitted, time: .standard)
-        return "\(time) · \(f.width)×\(f.height) · \(f.trigger.label)\(f.hasLocation ? " · 📍" : "")"
+    private func caption(_ frame: FrameSummary) -> String {
+        "\(frame.at.formatted(date: .omitted, time: .shortened)) · \(frame.trigger.label)"
     }
 }

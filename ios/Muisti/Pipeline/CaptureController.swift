@@ -119,11 +119,12 @@ final class CaptureController {
         }
         Task { [weak self] in
             guard let self else { return }
-            await self.applySettings()
             await self.store.purge(olderThanDays: self.config.retentionDays)
-            await self.worker.start()
             await self.refreshCounts()
+            await self.applySettings()
+            await self.worker.start()
         }
+        Task.detached(priority: .utility) { PerceptionEngine.warmUpModels() }
     }
 
     isolated deinit {
