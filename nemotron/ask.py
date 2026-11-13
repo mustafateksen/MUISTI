@@ -101,7 +101,7 @@ def _video_start(path: str) -> dt.datetime:
     return dt.datetime.fromisoformat(d).replace(hour=h, minute=int(mi), second=int(s)) - dt.timedelta(seconds=90)
 
 
-def load_memory(pattern: str = "results/*/v7/results.json") -> list[dict]:
+def load_memory(pattern: str = "results/*/v9/results.json") -> list[dict]:
     """Offline mode: build memory from process_video result files."""
     sightings = []
     for path in sorted(glob.glob(pattern)):
@@ -211,7 +211,10 @@ def _tok_match(q: str, text: str) -> float:
             hit += 1
             continue
         best = max((_tok_sim(a, b) for b in tt if abs(len(a) - len(b)) <= 3), default=0)
-        hit += 1 if best >= 0.85 else (0.5 if best >= 0.7 else 0)
+        # Shared word start ("waterfront" ~ "water", "harbour" ~ "harbor"): partial credit.
+        prefix = any(len(x) >= 4 and len(y) >= 4 and (x.startswith(y) or y.startswith(x))
+                     for b in tt for x, y in [(a, b)])
+        hit += 1 if best >= 0.85 else (0.5 if best >= 0.7 or prefix else 0)
     return hit / len(qt)
 
 
@@ -275,7 +278,7 @@ def ask(question: str, docs: list[dict], now: dt.datetime, min_score: float = 0.
         # "Where am I now?" is about the LATEST memories, not about matching words.
         recent = [d for d in docs if d["seen_at"] <= now and (now - d["seen_at"]).total_seconds() <= 180]
         recent.sort(key=lambda d: (d["seen_at"], d["type"] != "object"), reverse=True)
-        floorish = [d for d in recent if re.search(r"floor|level|kat|fl", d["text"], re.I)]
+        floorish = [d for d in recent if re.search(r"floor|level|kat|\bfl\b", d["text"], re.I)]
         pick = (floorish[:3] + [d for d in recent if d not in floorish[:3]])[:5]
         hits = [(1.0, d) for d in pick]
         if not hits:
@@ -366,12 +369,35 @@ def ask(question: str, docs: list[dict], now: dt.datetime, min_score: float = 0.
             ok, note = look_again(d, question); calls += 1
             notes.append(f"{d['name']}@{d['frame']}: {'yes' if ok else 'no'}")
             if ok:
+                guarded = _medium_guard(question, out["answer"], used_docs)
+                if guarded:
+                    return result("DONT_KNOW", guarded, used=out.get("evidence", []), why="medium mismatch (code)")
                 return result("SEEN", out["answer"], used=out.get("evidence", []),
                               why=f"verified {len(quotes)} quote(s) + visual re-check ({d['name']}): {note}")
         d = obj_docs[0]
         return result("DONT_KNOW", f"I noted a {d['name']} earlier, but looking at the photos again I'm not sure. I can show you the frames.",
                       why=f"visual re-check failed on {len(notes)} frame(s): {'; '.join(notes)}")
+    guarded = _medium_guard(question, out["answer"], used_docs)
+    if guarded:
+        return result("DONT_KNOW", guarded, used=out.get("evidence", []), why="medium mismatch (code)")
     return result("SEEN", out["answer"], used=out.get("evidence", []), why=f"verified {len(quotes)} quote(s)")
+
+
+_MEDIA = ["poster", "banner", "billboard", "screen", "sign", "painting"]
+
+
+def _medium_guard(question: str, answer: str, used_docs: list[dict]) -> str | None:
+    """If the user asked about a picture on a specific medium (poster/banner/...) but the
+    evidence is a picture on a DIFFERENT medium, never answer a plain yes."""
+    asked = [m for m in _MEDIA if re.search(rf"\b{m}s?\b", question, re.I)]
+    deps = [d for d in used_docs if d["type"] == "depiction"]
+    # The model labels printed media inconsistently (banner vs poster), so only a real
+    # kind change counts: printed (poster/banner/billboard/sign/painting) vs screen.
+    group = lambda m: "screen" if m == "screen" else "printed"
+    if not asked or not deps or any(group(d.get("medium") or "") in {group(a) for a in asked} for d in deps):
+        return None
+    d = deps[0]
+    return f"Not on a {asked[0]}. I did see {d.get('content')} on a {d.get('medium')}."
 
 
 LOOK_SCHEMA = {

@@ -234,6 +234,56 @@ Answers also fixed along the way: "What did the Cloudinary banner say?" had star
 | final, run 1 | **31/31** | 13/13 | 0 | 0 |
 | final, run 2 | **31/31** | 13/13 | 0 | 0 |
 
+## Object-recognition tuning loop: v7 → v12 (2026-11-14)
+
+Scope: **only our part, object recognition** (objects, relations, counts, pictures, scene). The text lines are an input that comes from Emir's OCR, and they are held fixed in every run, so only our prompt changes. This follows Emir's method: change one thing, keep everything else identical.
+
+### Data
+- **40 frames** taken from 4 public walk-through videos: Shibuya crossing, Times Square, Istanbul Emaar Square Mall, and Ankara Kızılay at night. All are 640×360. The frames are not stored in the repo.
+- **Split:** 20 train frames, used to read errors and change the prompt, and 20 held-out test frames, never looked at while changing the prompt.
+- **Labels** are hand-made in `eval/tune_labels.json`:
+  - `must`: salient things that should be found
+  - `ok`: other things that really are there
+  - `pictures`: does the frame show a picture on a poster or screen?
+- **Tool:** `eval/tune.py`. Variants live in `prompts/vN.py`.
+
+### Metrics
+- **recall:** share of `must` items that were found.
+- **precision (estimated):** listed objects that match `must` or `ok`. Unmatched ones were checked by eye. Several turned out to be missing labels and were added; the rest are real naming errors or hallucinations.
+- **people as objects:** rule violations.
+- **pictures:** pictures found, and pictures invented on frames that have none.
+
+| Variant | Change | Train recall / precision | **Test recall / precision** | Notes |
+|---|---|---|---|---|
+| v7 | baseline (production before) | 61% / 87% | **67% / 85%** | 4.8 objects/frame; 1 truncated JSON; "screen" used for neon signs |
+| v8 | coverage groups (8–15 objects across 7 groups), screen/sign/billboard/poster definitions, shorter details, max_tokens 2500 | 82% / 89% | **86% / 91%** | pictures 10/10 + 13/13 |
+| v9 | + costumed people are people, every shop front is a store, kiosk, name goods, rare landmarks only if certain; **code:** screen→sign when the model's own details say neon/lit sign | 84–86% / 91–93% | **89–92% / 92–95%** | 2 runs each |
+| v10 | + **code:** drop statue/mannequin whose details say costume/performer | 84–89% / 91–94% | **86–88% / 93–97%** | same prompt as v9; differences are noise |
+| v11 | v9 prompt + v10 rules in `extract.py` + JSON retry | 85% / 94% | **88% / 95%** | 0 errors |
+| **v12** | + QR code as its own object, details ≤ 12 words | 85% / 95% | **93% / 91%** | adopted |
+
+### What we learned
+- **The biggest win was coverage, not caution.** v7 listed few things. Telling the model *which groups* to go through raised recall from 67% to 86–93% on unseen frames, and precision did not drop.
+- **Label/details contradictions are fixed in code, not in the prompt.** The prompt definition alone did not stop "screen | blue vertical neon sign". A rule that trusts the model's own details does. The same idea removed "statue | Statue of Liberty costume", a costumed street performer.
+- **A remaining visual hallucination: em_11.** A playground net with blue/yellow tape and coloured balls was reported as an "aquarium" in every run, despite a prompt rule. Nothing in the frame contradicts it in text, so only the answer-time visual re-check can catch it.
+- **Rare runaway output:** about 1 in 40 frames returns 8–9k characters of broken JSON. Fixed by one retry at temperature 0.
+
+### Domain shift: what YouTube tuning did to the glasses memory
+Tuning on bright, stabilised YouTube frames must not hurt the real glasses use case. We re-extracted the two glasses videos with each adopted prompt and re-ran the 31-question Q&A test, with the same text lines and the same questions.
+
+| Prompt in production | Glasses Q&A (31 questions, 2 runs) | Hallucinated / wrong |
+|---|---|---|
+| v7 | 31/31, 31/31 | 0 / 0 |
+| v11 (= v9 prompt) | **28/31, 28/31** | 1 / 0 |
+| v12 + answer fixes | **30/31, 31/31** | 0 / 0 |
+
+What broke with v11, and the fix for each:
+1. **QR code lost.** The 8-word details limit (added to stop truncated JSON) cut "… banner with white text **and QR code**". Fix (v12): QR code as its own object, details ≤ 12 words.
+2. **The harbour photo was no longer found.** It was still in memory, but described as "coastal town with boats by the water" instead of "aerial waterfront", so the word search missed it. Interim fix: word-prefix matching in search. The real fix is Emir's Nemotron Embed semantic search, which is the strongest argument for merging the two backends.
+3. **Beach poster trap: "Yes, on a laptop screen".** Fix: a code guard. If the user asks about a poster or banner and the evidence is on a screen (or the other way round), the system never says a plain yes. Banner, poster, billboard and sign count as one *printed* group, because the model labels them inconsistently. A first version that treated banner ≠ poster wrongly rejected a correct answer.
+
+Remaining glasses miss (1 of 2 runs): the harbour question answered UNSURE with the correct content. Cautious, not wrong.
+
 ## Next ideas to try
 - Apple Vision OCR with bounding boxes instead of the Nemotron stand-in, which would also remove the OCR-stage "Astronomy".
 - Temperature 0 vs 0.2 vs 0.6.

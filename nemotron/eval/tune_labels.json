@@ -1,0 +1,1150 @@
+{
+ "notes": "Hand labels for object recognition tuning. Frames come from 4 public walk-through videos (Shibuya crossing, Times Square, Istanbul Emaar Square Mall, Ankara Kizilay at night), 640x360; frames are NOT in the repo (results/tune/frames). must = salient things a good extractor should list (recall). ok = other things really visible (not a hallucination if listed). pictures = frame shows a picture on a banner/poster/screen (null = unsure, not scored). People are never objects; a costumed street performer is a person.",
+ "frames": {
+  "vp_00": {
+   "must": [
+    "crosswalk",
+    "building",
+    "screen",
+    "crane",
+    "tree"
+   ],
+   "ok": [
+    "bus",
+    "car",
+    "street",
+    "road",
+    "pole",
+    "street light",
+    "sign",
+    "billboard",
+    "skyscraper",
+    "window",
+    "railing",
+    "ventilation unit",
+    "station",
+    "truck",
+    "taxi",
+    "advertisement",
+    "construction",
+    "traffic light",
+    "road marking",
+    "rooftop"
+   ],
+   "pictures": true
+  },
+  "vp_01": {
+   "must": [
+    "crosswalk",
+    "building",
+    "screen",
+    "crane",
+    "tree"
+   ],
+   "ok": [
+    "bus",
+    "car",
+    "street",
+    "road",
+    "pole",
+    "street light",
+    "sign",
+    "billboard",
+    "skyscraper",
+    "window",
+    "railing",
+    "ventilation unit",
+    "station",
+    "truck",
+    "taxi",
+    "advertisement",
+    "construction",
+    "traffic light",
+    "road marking",
+    "rooftop"
+   ],
+   "pictures": true
+  },
+  "vp_02": {
+   "must": [
+    "crosswalk",
+    "building",
+    "screen",
+    "crane",
+    "tree"
+   ],
+   "ok": [
+    "bus",
+    "car",
+    "street",
+    "road",
+    "pole",
+    "street light",
+    "sign",
+    "billboard",
+    "skyscraper",
+    "window",
+    "railing",
+    "ventilation unit",
+    "station",
+    "truck",
+    "taxi",
+    "advertisement",
+    "construction",
+    "traffic light",
+    "road marking",
+    "rooftop"
+   ],
+   "pictures": true
+  },
+  "vp_03": {
+   "must": [
+    "crosswalk",
+    "building",
+    "screen",
+    "crane",
+    "tree"
+   ],
+   "ok": [
+    "bus",
+    "car",
+    "street",
+    "road",
+    "pole",
+    "street light",
+    "sign",
+    "billboard",
+    "skyscraper",
+    "window",
+    "railing",
+    "ventilation unit",
+    "station",
+    "truck",
+    "taxi",
+    "advertisement",
+    "construction",
+    "traffic light",
+    "road marking",
+    "rooftop"
+   ],
+   "pictures": true
+  },
+  "vp_04": {
+   "must": [
+    "crosswalk",
+    "building",
+    "screen",
+    "crane",
+    "tree"
+   ],
+   "ok": [
+    "bus",
+    "car",
+    "street",
+    "road",
+    "pole",
+    "street light",
+    "sign",
+    "billboard",
+    "skyscraper",
+    "window",
+    "railing",
+    "ventilation unit",
+    "station",
+    "truck",
+    "taxi",
+    "advertisement",
+    "construction",
+    "traffic light",
+    "road marking",
+    "rooftop",
+    "glass",
+    "pillar"
+   ],
+   "pictures": true
+  },
+  "vp_05": {
+   "must": [
+    "crosswalk",
+    "building",
+    "screen",
+    "crane",
+    "tree"
+   ],
+   "ok": [
+    "bus",
+    "car",
+    "street",
+    "road",
+    "pole",
+    "street light",
+    "sign",
+    "billboard",
+    "skyscraper",
+    "window",
+    "railing",
+    "ventilation unit",
+    "station",
+    "truck",
+    "taxi",
+    "advertisement",
+    "construction",
+    "traffic light",
+    "road marking",
+    "rooftop",
+    "motorcycle",
+    "scooter"
+   ],
+   "pictures": true
+  },
+  "ts_00": {
+   "must": [
+    "screen",
+    "car",
+    "billboard",
+    "building"
+   ],
+   "ok": [
+    "road",
+    "street",
+    "sign",
+    "crosswalk",
+    "skyscraper",
+    "taxi",
+    "street light",
+    "pole",
+    "advertisement",
+    "traffic light",
+    "bag",
+    "planter"
+   ],
+   "pictures": true
+  },
+  "ts_01": {
+   "must": [
+    "screen",
+    "billboard"
+   ],
+   "ok": [
+    "sign",
+    "building",
+    "traffic light",
+    "street sign",
+    "bicycle",
+    "skyscraper",
+    "advertisement",
+    "pole",
+    "flag",
+    "street",
+    "brochure",
+    "flyer"
+   ],
+   "pictures": true
+  },
+  "ts_02": {
+   "must": [
+    "pedicab",
+    "car",
+    "screen",
+    "building"
+   ],
+   "ok": [
+    "billboard",
+    "road",
+    "street",
+    "sign",
+    "traffic light",
+    "skyscraper",
+    "advertisement",
+    "pole",
+    "street light",
+    "bicycle",
+    "bus",
+    "truck",
+    "flag",
+    "crosswalk"
+   ],
+   "pictures": true
+  },
+  "ts_03": {
+   "must": [
+    "flag",
+    "screen",
+    "building",
+    "chair"
+   ],
+   "ok": [
+    "billboard",
+    "table",
+    "scaffolding",
+    "sign",
+    "skyscraper",
+    "advertisement",
+    "stall",
+    "street",
+    "pole",
+    "street light",
+    "umbrella",
+    "bag",
+    "costume",
+    "plaza"
+   ],
+   "pictures": true
+  },
+  "ts_04": {
+   "must": [
+    "screen",
+    "building"
+   ],
+   "ok": [
+    "billboard",
+    "flag",
+    "sign",
+    "skyscraper",
+    "advertisement",
+    "pole",
+    "street light",
+    "barrier",
+    "fence",
+    "street",
+    "plaza",
+    "scaffolding",
+    "bag",
+    "phone"
+   ],
+   "pictures": true
+  },
+  "ts_05": {
+   "must": [
+    "statue",
+    "screen",
+    "building"
+   ],
+   "ok": [
+    "billboard",
+    "scaffolding",
+    "flag",
+    "sign",
+    "skyscraper",
+    "advertisement",
+    "pole",
+    "street light",
+    "plaza",
+    "street",
+    "phone",
+    "bag"
+   ],
+   "pictures": true
+  },
+  "ts_06": {
+   "must": [
+    "stairs",
+    "railing",
+    "car",
+    "screen"
+   ],
+   "ok": [
+    "billboard",
+    "building",
+    "sign",
+    "road",
+    "street",
+    "taxi",
+    "skyscraper",
+    "advertisement",
+    "pole",
+    "street light",
+    "bag",
+    "glass",
+    "scaffolding",
+    "truck",
+    "suv"
+   ],
+   "pictures": true
+  },
+  "ts_07": {
+   "must": [
+    "taxi",
+    "car",
+    "scaffolding",
+    "screen"
+   ],
+   "ok": [
+    "railing",
+    "sign",
+    "billboard",
+    "building",
+    "road",
+    "street",
+    "barrier",
+    "traffic cone",
+    "street light",
+    "pole",
+    "crosswalk",
+    "truck",
+    "skyscraper",
+    "advertisement",
+    "stairs",
+    "construction",
+    "bus",
+    "van"
+   ],
+   "pictures": true
+  },
+  "ts_08": {
+   "must": [
+    "screen",
+    "billboard",
+    "building"
+   ],
+   "ok": [
+    "street light",
+    "flag",
+    "sign",
+    "skyscraper",
+    "pole",
+    "traffic light",
+    "car",
+    "truck",
+    "advertisement",
+    "street",
+    "plaza",
+    "taxi",
+    "bus",
+    "crowd barrier"
+   ],
+   "pictures": true
+  },
+  "ts_09": {
+   "must": [
+    "screen",
+    "building",
+    "scaffolding",
+    "car"
+   ],
+   "ok": [
+    "billboard",
+    "sign",
+    "pole",
+    "street light",
+    "traffic light",
+    "road",
+    "street",
+    "taxi",
+    "skyscraper",
+    "advertisement",
+    "construction",
+    "truck",
+    "flag",
+    "bus",
+    "van"
+   ],
+   "pictures": true
+  },
+  "em_00": {
+   "must": [
+    "store",
+    "glass door",
+    "railing",
+    "trash bin"
+   ],
+   "ok": [
+    "escalator",
+    "sign",
+    "light",
+    "ceiling light",
+    "display",
+    "column",
+    "wall lamp",
+    "shelf",
+    "mirror",
+    "floor",
+    "ceiling",
+    "glass",
+    "balcony",
+    "door",
+    "corridor",
+    "advertisement",
+    "banner",
+    "screen",
+    "products",
+    "kiosk"
+   ],
+   "pictures": null
+  },
+  "em_01": {
+   "must": [
+    "table",
+    "chair",
+    "street lamp",
+    "plant"
+   ],
+   "ok": [
+    "menu board",
+    "sign",
+    "poster",
+    "window",
+    "balcony",
+    "ceiling",
+    "skylight",
+    "restaurant",
+    "umbrella",
+    "flower",
+    "lantern",
+    "cafe",
+    "store",
+    "door",
+    "tree",
+    "glass roof",
+    "dome",
+    "menu",
+    "plate",
+    "food",
+    "bench",
+    "stand"
+   ],
+   "pictures": true
+  },
+  "em_02": {
+   "must": [
+    "stairs",
+    "railing",
+    "lamp"
+   ],
+   "ok": [
+    "plant",
+    "flower",
+    "sign",
+    "door",
+    "column",
+    "tile",
+    "decoration",
+    "trash bin",
+    "window",
+    "corridor",
+    "floor",
+    "ceiling",
+    "store",
+    "lantern",
+    "wall lamp",
+    "street lamp",
+    "banner",
+    "stand",
+    "mat",
+    "ceiling light"
+   ],
+   "pictures": null
+  },
+  "em_03": {
+   "must": [
+    "store",
+    "mannequin",
+    "screen"
+   ],
+   "ok": [
+    "sign",
+    "railing",
+    "glass",
+    "display",
+    "ceiling light",
+    "poster",
+    "shelf",
+    "column",
+    "shoe",
+    "clothing",
+    "corridor",
+    "floor",
+    "ceiling",
+    "balcony",
+    "advertisement",
+    "banner",
+    "light",
+    "sale sign",
+    "clothes"
+   ],
+   "pictures": true
+  },
+  "em_04": {
+   "must": [
+    "store",
+    "bench",
+    "column"
+   ],
+   "ok": [
+    "carpet",
+    "rug",
+    "railing",
+    "sign",
+    "ceiling light",
+    "escalator",
+    "display",
+    "clothing rack",
+    "sofa",
+    "seat",
+    "chair",
+    "clothes",
+    "mannequin",
+    "floor",
+    "ceiling",
+    "balcony",
+    "glass",
+    "light",
+    "door",
+    "screen",
+    "table",
+    "stairs"
+   ],
+   "pictures": null
+  },
+  "em_05": {
+   "must": [
+    "slide",
+    "store",
+    "column"
+   ],
+   "ok": [
+    "sign",
+    "railing",
+    "barrier",
+    "display",
+    "ceiling light",
+    "security gate",
+    "shelf",
+    "shoe",
+    "clothing",
+    "floor",
+    "ceiling",
+    "glass",
+    "light",
+    "lamp",
+    "screen",
+    "stand",
+    "rope barrier",
+    "sculpture",
+    "mannequin"
+   ],
+   "pictures": null
+  },
+  "em_06": {
+   "must": [
+    "hat",
+    "store",
+    "display"
+   ],
+   "ok": [
+    "sign",
+    "bag",
+    "shelf",
+    "light",
+    "door",
+    "mirror",
+    "glass",
+    "ceiling",
+    "floor",
+    "ceiling light",
+    "accessories",
+    "corridor",
+    "window",
+    "screen",
+    "mannequin",
+    "clothing rack"
+   ],
+   "pictures": false
+  },
+  "em_07": {
+   "must": [
+    "aquarium",
+    "fish"
+   ],
+   "ok": [
+    "coral",
+    "sign",
+    "wall",
+    "light",
+    "display",
+    "tank",
+    "ceiling",
+    "rock",
+    "plant",
+    "water",
+    "glass",
+    "floor",
+    "screen",
+    "seaweed"
+   ],
+   "pictures": false
+  },
+  "em_08": {
+   "must": [
+    "mannequin",
+    "store",
+    "clothing rack",
+    "poster"
+   ],
+   "ok": [
+    "plant",
+    "flower",
+    "sign",
+    "aquarium",
+    "display",
+    "dress",
+    "mirror",
+    "glass",
+    "clothing",
+    "clothes",
+    "light",
+    "ceiling light",
+    "floor",
+    "ceiling",
+    "corridor",
+    "stand",
+    "pedestal",
+    "vase",
+    "screen",
+    "column"
+   ],
+   "pictures": true
+  },
+  "em_09": {
+   "must": [
+    "railing",
+    "store",
+    "sign"
+   ],
+   "ok": [
+    "escalator",
+    "banner",
+    "screen",
+    "column",
+    "ceiling",
+    "poster",
+    "balcony",
+    "glass",
+    "light",
+    "billboard",
+    "advertisement",
+    "floor",
+    "display",
+    "mannequin",
+    "shelf",
+    "kiosk",
+    "ceiling light",
+    "atrium"
+   ],
+   "pictures": true
+  },
+  "em_10": {
+   "must": [
+    "table",
+    "chair",
+    "counter",
+    "chandelier"
+   ],
+   "ok": [
+    "display case",
+    "sofa",
+    "armchair",
+    "light",
+    "menu",
+    "sign",
+    "shelf",
+    "ceiling light",
+    "restaurant",
+    "cafe",
+    "floor",
+    "ceiling",
+    "bench",
+    "lamp",
+    "bottle",
+    "cup",
+    "food",
+    "glass",
+    "column",
+    "tile",
+    "phone",
+    "trash bin",
+    "screen"
+   ],
+   "pictures": false
+  },
+  "em_11": {
+   "must": [
+    "railing",
+    "column"
+   ],
+   "ok": [
+    "shutter",
+    "grille",
+    "ceiling",
+    "skylight",
+    "sign",
+    "store",
+    "glass",
+    "light",
+    "camera",
+    "security camera",
+    "ceiling light",
+    "balcony",
+    "floor",
+    "net",
+    "netting",
+    "screen",
+    "banner",
+    "door",
+    "corridor",
+    "pillar",
+    "mesh"
+   ],
+   "pictures": null
+  },
+  "kz_00": {
+   "must": [
+    "street lamp",
+    "taxi",
+    "store",
+    "tree",
+    "building"
+   ],
+   "ok": [
+    "stairs",
+    "sign",
+    "mannequin",
+    "tactile paving",
+    "car",
+    "clothing rack",
+    "pole",
+    "bag",
+    "sidewalk",
+    "road",
+    "traffic sign",
+    "billboard",
+    "window",
+    "clothes",
+    "skyscraper",
+    "street",
+    "bus",
+    "truck",
+    "lamp post",
+    "display"
+   ],
+   "pictures": null
+  },
+  "kz_01": {
+   "must": [
+    "escalator",
+    "stairs",
+    "building",
+    "sign"
+   ],
+   "ok": [
+    "railing",
+    "tree",
+    "plant",
+    "billboard",
+    "pole",
+    "street light",
+    "screen",
+    "store",
+    "umbrella",
+    "mall",
+    "glass",
+    "window",
+    "column",
+    "planter",
+    "advertisement",
+    "bush",
+    "entrance",
+    "shrub"
+   ],
+   "pictures": true
+  },
+  "kz_02": {
+   "must": [
+    "building",
+    "sign",
+    "umbrella"
+   ],
+   "ok": [
+    "store",
+    "restaurant",
+    "billboard",
+    "poster",
+    "glass",
+    "entrance",
+    "table",
+    "chair",
+    "screen",
+    "kiosk",
+    "advertisement",
+    "window",
+    "column",
+    "awning",
+    "mall",
+    "cafe",
+    "door",
+    "bag",
+    "stall"
+   ],
+   "pictures": true
+  },
+  "kz_03": {
+   "must": [
+    "traffic light",
+    "crosswalk",
+    "car",
+    "taxi",
+    "building",
+    "street lamp"
+   ],
+   "ok": [
+    "sign",
+    "pole",
+    "billboard",
+    "road",
+    "skyscraper",
+    "window",
+    "store",
+    "street",
+    "bus",
+    "truck",
+    "lamp post",
+    "advertisement"
+   ],
+   "pictures": null
+  },
+  "kz_04": {
+   "must": [
+    "crosswalk",
+    "street lamp",
+    "building",
+    "taxi"
+   ],
+   "ok": [
+    "billboard",
+    "kiosk",
+    "advertising column",
+    "sign",
+    "car",
+    "pole",
+    "bus",
+    "road",
+    "skyscraper",
+    "store",
+    "street",
+    "lamp post",
+    "traffic light",
+    "poster",
+    "advertisement",
+    "screen",
+    "bag",
+    "bin",
+    "trash bin",
+    "cylinder",
+    "pillar"
+   ],
+   "pictures": null
+  },
+  "kz_05": {
+   "must": [
+    "billboard",
+    "building",
+    "car",
+    "street lamp"
+   ],
+   "ok": [
+    "taxi",
+    "screen",
+    "sign",
+    "pole",
+    "road",
+    "bus",
+    "street",
+    "skyscraper",
+    "store",
+    "lamp post",
+    "advertisement",
+    "tree",
+    "traffic light",
+    "window"
+   ],
+   "pictures": true
+  },
+  "kz_06": {
+   "must": [
+    "building",
+    "metro sign",
+    "entrance"
+   ],
+   "ok": [
+    "store",
+    "sign",
+    "railing",
+    "bank",
+    "window",
+    "stairs",
+    "pole",
+    "arch",
+    "door",
+    "glass",
+    "advertisement",
+    "banner",
+    "billboard",
+    "street",
+    "sidewalk",
+    "street sign",
+    "awning",
+    "escalator",
+    "metro entrance"
+   ],
+   "pictures": false
+  },
+  "kz_07": {
+   "must": [
+    "sign",
+    "taxi",
+    "car",
+    "tree",
+    "kiosk"
+   ],
+   "ok": [
+    "building",
+    "store",
+    "traffic cone",
+    "bridge",
+    "overpass",
+    "road",
+    "pole",
+    "billboard",
+    "street",
+    "awning",
+    "window",
+    "advertisement",
+    "bus",
+    "street light",
+    "canopy",
+    "structure"
+   ],
+   "pictures": null
+  },
+  "kz_08": {
+   "must": [
+    "tree",
+    "building",
+    "sign"
+   ],
+   "ok": [
+    "trash bin",
+    "street lamp",
+    "kiosk",
+    "store",
+    "pole",
+    "bench",
+    "stall",
+    "window",
+    "billboard",
+    "street light",
+    "street",
+    "sidewalk",
+    "bag",
+    "lamp post",
+    "awning",
+    "advertisement"
+   ],
+   "pictures": null
+  },
+  "kz_09": {
+   "must": [
+    "building",
+    "tree",
+    "sign",
+    "store"
+   ],
+   "ok": [
+    "street lamp",
+    "display case",
+    "kiosk",
+    "stall",
+    "pole",
+    "window",
+    "street light",
+    "cafe",
+    "bakery",
+    "bag",
+    "street",
+    "sidewalk",
+    "awning",
+    "billboard",
+    "lamp post",
+    "light"
+   ],
+   "pictures": null
+  },
+  "kz_10": {
+   "must": [
+    "flower",
+    "store",
+    "display case"
+   ],
+   "ok": [
+    "plant",
+    "sign",
+    "phone",
+    "awning",
+    "building",
+    "light",
+    "poster",
+    "shelf",
+    "greenhouse",
+    "stall",
+    "street",
+    "sidewalk",
+    "window",
+    "advertisement",
+    "pot",
+    "flower pot",
+    "kiosk",
+    "counter",
+    "bucket",
+    "display",
+    "street lamp",
+    "street light"
+   ],
+   "pictures": null
+  },
+  "kz_11": {
+   "must": [
+    "fish",
+    "bench",
+    "tree",
+    "store"
+   ],
+   "ok": [
+    "display",
+    "sign",
+    "street lamp",
+    "plant",
+    "light",
+    "building",
+    "trash bin",
+    "railing",
+    "stall",
+    "market",
+    "ice",
+    "crate",
+    "box",
+    "street light",
+    "shrub",
+    "bush",
+    "planter",
+    "awning",
+    "counter",
+    "pole",
+    "street",
+    "sidewalk",
+    "stool",
+    "bin"
+   ],
+   "pictures": false
+  }
+ }
+}

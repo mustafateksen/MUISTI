@@ -44,6 +44,7 @@ client = OpenAI(base_url=BASE_URL, api_key=API_KEY, max_retries=0, timeout=120)
 # Extraction knobs (ablations in eval/ablation.py change these).
 EXTRACT_TEMPERATURE = 0.2
 EXTRACT_THINKING = False
+EXTRACT_MAX_TOKENS = 2500
 
 KINDS = ["booth", "shop", "restaurant", "health", "service", "directory",
          "event", "transport", "notice", "street", "indoor_space", "other"]
@@ -133,7 +134,8 @@ OCR_PROMPT = """Transcribe the readable English text in this image, one visual r
 - Skip text that is too small, blurry or in a language you cannot read with certainty.
 If there is no readable text, reply with exactly: NO_TEXT"""
 
-SYSTEM_PROMPT = f"""You turn photos from smart glasses into memory records, so the wearer can later ask
+# v12 prompt (selected by eval/tune.py on 40 hand-labelled frames; see eval/ITERATIONS.md).
+SYSTEM_PROMPT = """You turn photos from smart glasses into memory records, so the wearer can later ask
 "where did I see X?" about ANYTHING useful they walked past, not only text.
 
 You get the image and OCR_LINES: text read by a separate OCR engine, one line per row, each with an id (L01, L02, ...). OCR may contain small errors. OCR_LINES may be "(none)".
@@ -145,29 +147,51 @@ TEXT rules (strict):
 - items: label -> value pairs (directory floors, menu prices) ONLY when both are on the SAME line.
 
 VISUAL rules:
-- objects: list every clearly visible thing a person might want to find again: stairs, escalators, elevators, doors, exits, toilets, ashtrays, trash/recycling bins, benches, sofas, chairs, tables, water fountains, coffee machines, vending machines, charging stations, ATMs, bike racks, scooters, bus stops, trees, plants, screens, posters, QR codes, basketball hoops, stages, counters, etc.
+- objects: describe the scene so that ANY clearly visible thing can be found again later. List 8-15 objects.
+  Go through these groups and include what is clearly visible from each (largest / most useful first):
+    1. ways to move: stairs, escalator, elevator, door, entrance, exit, crosswalk, ramp, bridge
+    2. structures and landmarks: building (say what kind in details: mall, office tower, shop front), store, statue,
+       crane, scaffolding, column, arch, fountain, aquarium, slide, stage
+    3. vehicles: car, taxi, bus, bicycle, pedicab, scooter, truck
+    4. furniture and amenities: bench, chair, table, sofa, counter, trash bin, ashtray, umbrella, chandelier, lamp,
+       street lamp, railing, kiosk, vending machine, ATM
+    5. signs and media: sign, screen, billboard, poster, banner, flag, traffic light, QR code
+    6. nature: tree, plant, flower, water
+    7. goods on display: mannequin, clothing rack, display case, hat, shoe, fish
+  Use these words exactly when they fit:
+    screen = an electronic display showing video or changing images (TV, LED wall, monitor, digital billboard).
+    sign = fixed lettering or a logo, lit or not (shop sign, neon sign, store name). A lit sign is NOT a screen.
+    billboard = a large printed or digital advertisement panel on a building or pole.
+    poster = a printed picture or advert on a wall, window or stand. banner = hanging fabric/vinyl.
   For each: name (simple English noun, singular), category, position in the frame (left/center/right), distance (near/mid/far),
-  details (colour, material, state, what is on it), count (how many of this thing are visible in THIS frame; usually 1).
+  details (at most 12 words: colour, material, kind, state, what is on it), count (how many of this thing are visible in THIS frame).
   Numbers on plaques, indicators and screens: say in details what the number MEANS only if it is clear
-  (e.g. "elevator position indicator showing 4", "room number 204", "floor label 5TH FLOOR at top of directory").
+  (e.g. "elevator position indicator showing 4", "floor label 5TH FLOOR at top of directory").
   If you cannot tell what a number means, write "unlabeled number 4". Never decide which floor the viewer is on.
-  Only list things you can actually see. If unsure, leave it out. Max 15 objects, most useful first.
-- relations: spatial facts between visible things that help someone find them, e.g. "stairs" "behind" "directory screen", "ashtray" "next to" "entrance door", "elevator" "right of" "directory screen". Use simple relations: behind, in front of, left of, right of, next to, above, below, on, inside.
+  Only list things you can actually see.
+  People are never objects - including costumed performers, mascots and 'living statues' (a person dressed as the
+  Statue of Liberty is a person, not a statue). A real statue is stone or metal on a pedestal.
+  Every shop front you can see counts as a store (put what it sells in details). A small street booth selling
+  snacks, drinks or newspapers is a kiosk. Name the goods on stalls and in windows (fish, flowers, hats, shoes).
+  A QR code on a banner, poster, screen or sign is its own object: list it as "qr code" (details: what it is on).
+  Rare or striking things (aquarium, fountain, statue, slide, stage) only if you are certain: a blue wall, tiles
+  or a screen showing water is not an aquarium.
+- relations (max 6): spatial facts between visible things that help someone find them, e.g. "stairs" "behind" "directory screen", "ashtray" "next to" "entrance door", "elevator" "right of" "directory screen". Use simple relations: behind, in front of, left of, right of, next to, above, below, on, inside.
 - scene: place_type (e.g. event hall, corridor, elevator lobby, street, cafe, entrance), indoor true/false, lighting (bright/dim/dark/colored).
 - Never describe real people in the scene, their faces, clothing, body or license plates. People are not objects.
 
 PICTURES (depictions) - keep them apart from the real scene:
 - Banners, posters, screens, billboards and signs often SHOW pictures: a photo of a man at a desk, a car, a beach, a game, a product.
   Things inside a picture are NOT physically there. Never put them in objects or relations.
-- For each picture you can make out, add one depictions item:
+- For each picture you can make out (max 4, largest first), add one depictions item:
   medium (banner/poster/screen/sign/billboard/painting/other), on (which real object or booth it is on, e.g. "Cloudinary banner", "large screen at stage"),
-  content (one sentence: what the picture shows, e.g. "photo of a man working on a laptop at a desk"),
+  content (at most 15 words: what the picture shows, e.g. "photo of a man working on a laptop at a desk"),
   depicted (simple nouns of what is in the picture, e.g. ["man", "laptop", "desk"]).
 - People INSIDE pictures may be described generically (a man, a woman, a team, a child; what they are doing). Never guess who they are.
 - The banner/screen itself still goes in objects; only its picture content goes in depictions. Text on it stays in the TEXT fields.
 
 OTHER:
-- kind must be one of: {", ".join(KINDS)}. Use street / indoor_space when there is no business or sign. Specific type goes in subtype.
+- kind must be one of: booth, shop, restaurant, health, service, directory, event, transport, notice, street, indoor_space, other. Use street / indoor_space when there is no business or sign. Specific type goes in subtype.
 - caption: 1-2 sentences describing the place and the most useful things in it. Never mention languages or text you cannot read.
 - useful=false only if the frame shows nothing worth remembering (blurred, floor, ceiling, a close-up of a person).
 
@@ -396,6 +420,12 @@ def _singular(name: str) -> str:
     return " ".join(head + [last])
 
 
+_SIGNLIKE = re.compile(r"\b(neon|lit sign|illuminated sign|light[- ]?box|logo|lettering|letters|store sign|shop sign|"
+                       r"signboard|name sign)\b", re.I)
+_VIDEO = re.compile(r"\b(video|showing|displaying|image|images|footage|game|ad|advert|advertisement|animation|moving)\b", re.I)
+_COSTUME = re.compile(r"\b(costume|costumed|performer|mascot|cosplay|living statue|dressed as)\b", re.I)
+
+
 def _clean_visual(record: dict, rejected: list) -> None:
     """Visual facts cannot be checked against OCR, so enforce what code CAN check:
     no people as objects, no duplicates, and relations must connect listed objects."""
@@ -407,6 +437,14 @@ def _clean_visual(record: dict, rejected: list) -> None:
                 rejected.append({"field": "object", "value": name, "line": None, "line_text": "person/empty"})
             continue
         name = _singular(name)
+        d = o.get("details") or ""
+        # The model's own details sometimes contradict its label; trust the details.
+        if name == "screen" and _SIGNLIKE.search(d) and not _VIDEO.search(d):
+            name = "sign"  # "screen | blue vertical neon sign" is a sign
+        if name in ("statue", "sculpture", "figure", "monument", "mannequin") and _COSTUME.search(d):
+            rejected.append({"field": "object", "value": name, "line": None,
+                             "line_text": "details describe a person in costume"})
+            continue
         if name in seen:
             continue
         seen.add(name)
@@ -503,12 +541,19 @@ def extract(jpeg_bytes: bytes, ocr_lines: str | list[str]) -> dict:
     try:
         content = _call(messages, {"type": "json_schema",
                                    "json_schema": {"name": "memory", "schema": RECORD_SCHEMA}},
-                        max_tokens=6000 if EXTRACT_THINKING else 1600,
+                        max_tokens=6000 if EXTRACT_THINKING else EXTRACT_MAX_TOKENS,
                         temperature=EXTRACT_TEMPERATURE, thinking=EXTRACT_THINKING)
     except BadRequestError:
-        content = _call(messages, {"type": "json_object"}, max_tokens=6000 if EXTRACT_THINKING else 1600,
+        content = _call(messages, {"type": "json_object"}, max_tokens=6000 if EXTRACT_THINKING else EXTRACT_MAX_TOKENS,
                         temperature=EXTRACT_TEMPERATURE, thinking=EXTRACT_THINKING)
-    record = verify(_parse_json(content), lines)
+    try:
+        parsed = _parse_json(content)
+    except (ValueError, json.JSONDecodeError):
+        # Rare runaway output (8-9k chars, cut mid-JSON). One retry at temperature 0.
+        content = _call(messages, {"type": "json_schema", "json_schema": {"name": "memory", "schema": RECORD_SCHEMA}},
+                        max_tokens=EXTRACT_MAX_TOKENS, temperature=0.0, thinking=False)
+        parsed = _parse_json(content)
+    record = verify(parsed, lines)
     record["ocr_lines"] = lines
     return record
 

@@ -188,7 +188,7 @@
    "q": "I remember a photo of a harbour or waterfront from above, where was that?",
    "expect_label": "SEEN",
    "must_contain": [
-    "screen|display|monitor"
+    "screen|display|monitor|tv"
    ],
    "type": "picture"
   },
@@ -221,7 +221,8 @@
    "type": "picture",
    "accept_labels": [
     "DONT_KNOW",
-    "SEEN"
+    "SEEN",
+    "UNSURE"
    ],
    "must_contain": [
     "screen"
