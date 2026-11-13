@@ -1,4 +1,6 @@
+import logging
 import os
+from time import perf_counter
 from contextlib import asynccontextmanager
 from datetime import timedelta
 from uuid import UUID, uuid5, NAMESPACE_URL
@@ -100,23 +102,53 @@ def frame(key: int):
 @app.post("/ask")
 def ask(q: Question):
     unknown = {"answer": "I couldn't verify that from the signs.", "label": "BILMIYORUM", "sources": [], "evidence": []}
-    embedding = vector("query: " + q.question)
-    with app.state.pool.connection() as conn:
-        rows = conn.execute(
-            "SELECT memory_id, seen_at, lines FROM memories WHERE seen_at > %s AND seen_at <= %s "
-            "ORDER BY embedding <=> %s::vector LIMIT 5",
-            (q.now - timedelta(minutes=q.window_minutes), q.now, embedding),
-        ).fetchall()
-    sources = format_sources(rows)
-    if not sources:
-        return unknown
-    choice = choose_floor(q.question, sources)
-    if choice is None and os.getenv("NVIDIA_MODEL") and os.getenv("NVIDIA_API_KEY"):
-        try:
-            choice = read_choice(q.question, sources)
-        except (httpx.HTTPError, ValueError, KeyError, IndexError, TypeError):
+    start = perf_counter()
+    ids = []
+    selected = None
+    outcome = "embedding_error"
+    try:
+        embedding = vector("query: " + q.question)
+        outcome = "retrieval_error"
+        with app.state.pool.connection() as conn:
+            rows = conn.execute(
+                "SELECT memory_id, seen_at, lines FROM memories WHERE seen_at > %s AND seen_at <= %s "
+                "ORDER BY embedding <=> %s::vector LIMIT 5",
+                (q.now - timedelta(minutes=q.window_minutes), q.now, embedding),
+            ).fetchall()
+        ids = [row[0] for row in rows]
+        sources = format_sources(rows)
+        if not sources:
+            outcome = "no_candidates"
             return unknown
-    if choice is None:
-        return unknown
-    src = sources[choice]
-    return {"answer": src["text"], "label": "GORDUM", "sources": [], "evidence": [src]}
+        choice = choose_floor(q.question, sources)
+        outcome = "rule_selected"
+        if choice is None:
+            if not (os.getenv("NVIDIA_MODEL") and os.getenv("NVIDIA_API_KEY")):
+                outcome = "model_unconfigured"
+                return unknown
+            try:
+                choice = read_choice(q.question, sources)
+            except httpx.TimeoutException:
+                outcome = "model_timeout"
+                return unknown
+            except httpx.HTTPStatusError as exc:
+                outcome = f"model_http_{exc.response.status_code}"
+                return unknown
+            except httpx.HTTPError:
+                outcome = "model_connection_error"
+                return unknown
+            except (ValueError, KeyError, IndexError, TypeError, AttributeError):
+                outcome = "invalid_model_response"
+                return unknown
+            if choice is None:
+                outcome = "model_no_evidence"
+                return unknown
+            outcome = "model_selected"
+        src = sources[choice]
+        selected = src["memory_id"]
+        return {"answer": src["text"], "label": "GORDUM", "sources": [], "evidence": [src]}
+    finally:
+        logging.getLogger("uvicorn.error").info(
+            "ask outcome=%s candidates=%s selected=%s elapsed_ms=%.1f",
+            outcome, ids, selected, (perf_counter() - start) * 1000,
+        )

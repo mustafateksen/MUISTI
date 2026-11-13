@@ -47,4 +47,8 @@ def read_choice(question, sources):
     if not isinstance(content, str) or not content.strip():
         raise ValueError('Nemotron bos cevap verdi. finish_reason=' + str(choice.get('finish_reason')))
     index = json.loads(content.strip())
-    return index if type(index) is int and 0 <= index < len(sources) else None
+    if index is None:
+        return None
+    if type(index) is not int or not 0 <= index < len(sources):
+        raise ValueError("Invalid evidence index")
+    return index
