@@ -39,6 +39,19 @@ struct NemotronDeveloperSection: View {
                 SecureField("boş = sohbetle aynı", text: $config.embedKey)
                     .multilineTextAlignment(.trailing)
             }
+            Menu("Yeniden sıralayıcı (reranker)") {
+                Button("Kapalı") { config.rerankModel = "" }
+                Button("Nemotron 3.5 Rerank 8B (önerilen)") { config.rerankModel = NemotronClient.defaultRerankModel }
+                Button("Llama Nemotron Rerank VL 1B (hızlı)") { config.rerankModel = NemotronClient.fallbackRerankModel }
+            }
+            LabeledContent("Rerank modeli") {
+                TextField("boş = kapalı", text: $config.rerankModel)
+                    .multilineTextAlignment(.trailing)
+            }
+            LabeledContent("Rerank anahtarı") {
+                SecureField("boş = gömme anahtarı", text: $config.rerankKey)
+                    .multilineTextAlignment(.trailing)
+            }
             LabeledContent("Nemotron bekleyen", value: "\(controller.pendingCount)")
             LabeledContent("Yapılandırılan / başarısız", value: "\(controller.enrichment.enriched) / \(controller.enrichment.failed)")
             if let error = controller.enrichment.lastError {

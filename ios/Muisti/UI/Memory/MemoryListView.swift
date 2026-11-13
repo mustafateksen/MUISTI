@@ -1,10 +1,12 @@
 import SwiftUI
 
-/// What is stored on this phone: every kept frame (blurred), what was read, what Nemotron
-/// made of it. Search, swipe to delete, "son 10 dakikayı unut", delete all.
+/// What is stored on this phone, as memory episodes (folders: one walk or visit each, grouped
+/// by time and place). Searching shows matching frames directly. Swipe to delete,
+/// "son 10 dakikayı unut", delete all.
 struct MemoryListView: View {
     let controller: CaptureController
     @State private var records: [MemoryRecord] = []
+    @State private var episodes: [MemoryEpisode] = []
     @State private var query = ""
     @State private var confirmDeleteAll = false
     @Environment(\.calendar) private var calendar
@@ -18,28 +20,44 @@ struct MemoryListView: View {
         NavigationStack {
             List {
                 if !records.isEmpty, query.isEmpty {
+                    // A header, not a row: rows clip their content (the outer cards' edges were
+                    // cut off) and their cells reach past the screen edges.
                     Section {
+                    } header: {
                         MemorySummaryHeader(
                             total: controller.memoryCount,
                             pending: controller.pendingCount,
                             retentionDays: controller.config.retentionDays
                         )
-                        .listRowInsets(EdgeInsets())
-                        .listRowBackground(Color.clear)
+                        .textCase(nil)
+                        .foregroundStyle(.primary)
                     } footer: {
                         Label("Hepsi yalnızca bu telefonda. Yüzler ve plakalar bulanıklaştırılır; video saklanmaz.", systemImage: "lock.fill")
                             .padding(.top, Theme.Spacing.xs)
                     }
                 }
 
-                ForEach(MemoryDaySection.group(filtered, calendar: calendar)) { section in
-                    Section(section.title(calendar: calendar)) {
-                        ForEach(section.records) { record in
-                            NavigationLink(value: record) {
-                                MemoryRow(record: record, store: controller.store)
+                if query.isEmpty {
+                    ForEach(MemoryDaySection.groupEpisodes(episodes, calendar: calendar), id: \.day) { section in
+                        Section(MemoryDaySection.title(section.day, calendar: calendar)) {
+                            ForEach(section.episodes) { episode in
+                                NavigationLink(value: episode) {
+                                    EpisodeRow(episode: episode, store: controller.store)
+                                }
+                                .accessibilityIdentifier("episodeRow")
                             }
-                            .swipeActions {
-                                Button("Sil", systemImage: "trash", role: .destructive) { delete(record) }
+                        }
+                    }
+                } else {
+                    ForEach(MemoryDaySection.group(filtered, calendar: calendar)) { section in
+                        Section(section.title(calendar: calendar)) {
+                            ForEach(section.records) { record in
+                                NavigationLink(value: record) {
+                                    MemoryRow(record: record, store: controller.store)
+                                }
+                                .swipeActions {
+                                    Button("Sil", systemImage: "trash", role: .destructive) { delete(record) }
+                                }
                             }
                         }
                     }
@@ -60,6 +78,9 @@ struct MemoryListView: View {
             .navigationTitle("Hafıza")
             .navigationDestination(for: MemoryRecord.self) { record in
                 MemoryDetailView(record: record, controller: controller)
+            }
+            .navigationDestination(for: MemoryEpisode.self) { episode in
+                EpisodeDetailView(episode: episode, controller: controller)
             }
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
@@ -82,6 +103,7 @@ struct MemoryListView: View {
 
     private func reload() async {
         records = await controller.store.recent(limit: 300)
+        episodes = await controller.store.episodes(limit: 200)
     }
 
     private func delete(_ record: MemoryRecord) {

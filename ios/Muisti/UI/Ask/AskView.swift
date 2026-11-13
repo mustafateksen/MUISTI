@@ -12,11 +12,11 @@ struct AskView: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: Theme.Spacing.l) {
-                    VStack(spacing: Theme.Spacing.l) {
-                        MicOrb(phase: voice.phase, action: toggleListening)
-                        AskPhaseText(phase: voice.phase, transcript: voice.transcript)
+                    VStack(spacing: Theme.Spacing.s) {
+                        VoiceOrb(voice: voice, action: toggleListening)
+                            .frame(height: voice.lastResult == nil ? 320 : 220)
+                        AskPhaseText(phase: voice.phase, transcript: voice.transcript, showsHint: voice.lastResult == nil)
                     }
-                    .padding(.top, Theme.Spacing.l)
 
                     if let result = voice.lastResult {
                         AnswerCard(result: result, store: controller.store)
@@ -36,9 +36,7 @@ struct AskView: View {
             }
             .scrollDismissesKeyboard(.interactively)
             .background(alignment: .top) {
-                Theme.headerGradient
-                    .frame(height: 360)
-                    .ignoresSafeArea()
+                AskBackdrop(phase: voice.phase)
             }
             .safeAreaInset(edge: .bottom) {
                 AskInputBar(text: $typed, focus: $typing, isBusy: voice.isBusy, onSend: send)

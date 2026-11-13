@@ -34,7 +34,8 @@ struct MemoryRow: View {
             }
         }
         .padding(.vertical, Theme.Spacing.xxs)
-        .accessibilityElement(children: .combine)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel([record.title, subtitle, record.phone, record.hours].compactMap { $0 }.joined(separator: ", "))
     }
 
     private var subtitle: String {

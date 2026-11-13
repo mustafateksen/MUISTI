@@ -22,12 +22,16 @@ struct MemorySummaryHeader: View {
             Text(value)
                 .font(.title3.bold().monospacedDigit())
                 .lineLimit(1)
-                .minimumScaleFactor(0.7)
+                .minimumScaleFactor(0.6)
             Text(label)
                 .font(.footnote)
                 .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
         }
-        .card(radius: Theme.Radius.inner, padding: Theme.Spacing.m)
+        // Equal shares of the row: three cards never add up to more than the screen.
+        .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+        .card(radius: Theme.Radius.inner, padding: Theme.Spacing.s)
         .accessibilityElement(children: .combine)
     }
 }

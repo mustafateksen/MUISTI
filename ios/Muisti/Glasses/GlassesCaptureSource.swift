@@ -238,6 +238,7 @@ final class GlassesCaptureSource: CaptureSource {
     func stop() async {
         wantRunning = false
         blocked = nil
+        lastError = nil
         backgroundPaused = false
         reconnectTask?.cancel()
         reconnectTask = nil
@@ -609,6 +610,12 @@ final class GlassesCaptureSource: CaptureSource {
             blocked = .failed(message: error.localizedDescription)
         case .dwaOutOfStuRange:
             break   // non-blocking compatibility warning
+        case .unexpectedError(let description):
+            // Session teardown (folded, taken off, out of range) arrives here as free text.
+            // No raw SDK text on screen and no matching on it: the device state ("Gözlük
+            // bekleniyor") and auto-reconnect already tell the user what is happening.
+            Log.glasses.info("session error: \(description, privacy: .public)")
+            lastError = nil
         default:
             lastError = error.localizedDescription
         }

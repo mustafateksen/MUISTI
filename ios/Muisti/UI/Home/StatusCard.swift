@@ -13,10 +13,13 @@ struct StatusCard: View {
                     Text(status.title)
                         .font(.title2.bold())
                         .contentTransition(.opacity)
+                    // Same height for every state (starting → running used to change the line
+                    // count and shift everything below, right when the first frame arrived).
                     Text(status.message)
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
+                        .lineLimit(3, reservesSpace: true)
+                        .minimumScaleFactor(0.9)
                 }
             }
 

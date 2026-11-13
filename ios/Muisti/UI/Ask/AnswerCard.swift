@@ -11,7 +11,7 @@ struct AnswerCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.m) {
             HStack(alignment: .firstTextBaseline) {
-                Label(seen ? "Gördüm" : "Emin değilim", systemImage: seen ? "checkmark.seal.fill" : "questionmark.circle.fill")
+                Label(result.label.title, systemImage: seen ? "checkmark.seal.fill" : "questionmark.circle.fill")
                     .font(.subheadline.bold())
                     .foregroundStyle(seen ? .green : .orange)
                     .padding(.horizontal, Theme.Spacing.s)
@@ -44,6 +44,11 @@ struct AnswerCard: View {
                 Text("\(result.latencyMs) ms · \(result.usedAI ? "Nemotron" : "yerel arama")")
                     .font(.footnote.monospaced())
                     .foregroundStyle(.tertiary)
+                if let trace = result.trace {
+                    Text(trace)
+                        .font(.caption2.monospaced())
+                        .foregroundStyle(.tertiary)
+                }
             }
 
             if !result.evidence.isEmpty {

@@ -87,6 +87,16 @@ struct DebugMenu: View {
                 Button("Tüm hafızayı sil", role: .destructive) {
                     Task { await controller.deleteAllMemories() }
                 }
+                #if DEBUG
+                Button("Hafızayı silip örnek fotoğrafları yükle") {
+                    Task {
+                        await controller.deleteAllMemories()
+                        _ = await controller.ingestFolder("ingest")
+                    }
+                }
+                Text("Örnekler: Documents/ingest (manifest.json + fotoğraflar). Gerçek akıştan geçer: OCR, bulanıklaştırma, bölümler, Nemotron.")
+                    .font(.footnote).foregroundStyle(.secondary)
+                #endif
                 Text("Ham veri seti (açıksa): Dosyalar > Bu iPhone'da > Muisti > sessions").font(.footnote)
                 if !sessionsPath.isEmpty {
                     Text(sessionsPath).font(.caption2.monospaced()).textSelection(.enabled)

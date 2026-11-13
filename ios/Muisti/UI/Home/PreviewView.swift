@@ -20,46 +20,67 @@ struct PreviewView: View {
                 }
             }
 
-            ZStack(alignment: .bottomLeading) {
-                if let image {
-                    ZStack {
-                        Image(uiImage: image)
-                            .resizable()
-                            .scaledToFill()
-                            .blur(radius: 24)
-                            .opacity(0.55)
-                        Image(uiImage: image)
-                            .resizable()
-                            .scaledToFit()
+            // Fixed-height box: the frame decides the size, images are overlays clipped to it.
+            // (An aspect-ratio box capped by maxHeight let 3:4 content overflow the card and push
+            // the layout down when the first frame arrived; portrait stream frames and landscape
+            // 12 MP stills also changed the content size.)
+            Color.clear
+                .frame(maxWidth: .infinity)
+                .frame(height: Self.boxHeight)
+                .overlay {
+                    if let image {
+                        // A box-sized carrier with the image layers as overlays: its own size (and
+                        // hit/accessibility frame) is exactly the box, never the scaled-to-fill
+                        // backdrop, which is taller for portrait frames, wider for landscape stills.
+                        Color.clear
+                            .overlay {
+                                Image(uiImage: image)
+                                    .resizable()
+                                    .scaledToFill()
+                                    .blur(radius: 24)
+                                    .opacity(0.55)
+                            }
+                            .overlay {
+                                Image(uiImage: image)
+                                    .resizable()
+                                    .scaledToFit()
+                            }
+                            .clipped()
+                            .saturation(isPaused ? 0 : 1)
+                            .opacity(isPaused ? 0.6 : 1)
+                    } else {
+                        PreviewPlaceholder(text: placeholder, isWaiting: state == .starting || state == .waitingForDevice)
                     }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .clipped()
-                    .saturation(isPaused ? 0 : 1)
-                    .opacity(isPaused ? 0.6 : 1)
-                    .accessibilityLabel("Son kaydedilen kare")
-                } else {
-                    PreviewPlaceholder(text: placeholder, isWaiting: state == .starting || state == .waitingForDevice)
                 }
-
-                if let lastFrame {
-                    Label(caption(lastFrame), systemImage: lastFrame.hasLocation ? "mappin.and.ellipse" : "clock")
-                        .font(.footnote.weight(.medium).monospacedDigit())
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, Theme.Spacing.s)
-                        .padding(.vertical, Theme.Spacing.xs)
-                        .background(.black.opacity(0.45), in: Capsule())
-                        .padding(Theme.Spacing.s)
+                .overlay(alignment: .bottomLeading) {
+                    if let lastFrame {
+                        Label(caption(lastFrame), systemImage: lastFrame.hasLocation ? "mappin.and.ellipse" : "clock")
+                            .font(.footnote.weight(.medium).monospacedDigit())
+                            .foregroundStyle(.white)
+                            .lineLimit(1)
+                            .padding(.horizontal, Theme.Spacing.s)
+                            .padding(.vertical, Theme.Spacing.xs)
+                            .background(.black.opacity(0.45), in: Capsule())
+                            .padding(Theme.Spacing.s)
+                    }
                 }
-            }
-            .frame(maxWidth: .infinity)
-            .aspectRatio(3.0 / 4.0, contentMode: .fit)
-            .frame(maxHeight: 440)
-            .background(.background.tertiary)
-            .clipShape(.rect(cornerRadius: Theme.Radius.inner))
-            .animation(Theme.Motion.standard, value: image == nil)
+                .background(.background.tertiary)
+                .clipShape(.rect(cornerRadius: Theme.Radius.inner))
+                .contentShape(.rect)
+                // The box is the one VoiceOver element (its frame is exactly the box; the fill
+                // backdrop's own accessibility frame overflowed the card).
+                .accessibilityElement(children: .ignore)
+                .accessibilityAddTraits(image == nil ? [] : .isImage)
+                .accessibilityLabel(image == nil ? placeholder : "Son kaydedilen kare")
+                .accessibilityValue(lastFrame.map(caption) ?? "")
+                .accessibilityIdentifier("previewBox")
+                .animation(Theme.Motion.standard, value: image == nil)
         }
         .card(padding: Theme.Spacing.m)
     }
+
+    /// Same height with and without an image, portrait or landscape.
+    static let boxHeight: CGFloat = 320
 
     private var isPaused: Bool {
         if case .paused = state { return true }

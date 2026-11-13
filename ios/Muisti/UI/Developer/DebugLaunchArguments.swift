@@ -3,7 +3,7 @@ import Foundation
 import UIKit
 
 /// DEBUG launch arguments for device and simulator testing (see README):
-/// `--nemotron-key=…`, `--embed=url|model|key`, `--rotate=…`, `--source=…`, `--autostart`, `--mock-autostart`,
+/// `--nemotron-key=…`, `--embed=url|model|key`, `--rerank=model|key`, `--asks=q1||q2`, `--rotate=…`, `--source=…`, `--autostart`, `--mock-autostart`,
 /// `--mode=…`, `--script=…`, `--mock-script=…`, `--ask=…`.
 @MainActor
 enum DebugLaunchArguments {
@@ -24,11 +24,30 @@ enum DebugLaunchArguments {
                 await controller.applySettings()
             }
         }
+        // `--rerank=<model>|<key>`: reranker on a test device (empty model = off).
+        if let rerank = args.first(where: { $0.hasPrefix("--rerank=") }) {
+            let parts = rerank.dropFirst(9).split(separator: "|", omittingEmptySubsequences: false).map(String.init)
+            config.rerankModel = parts[0]
+            if parts.count > 1 { config.rerankKey = parts[1] }
+            await controller.applySettings()
+        }
         if let rot = args.first(where: { $0.hasPrefix("--rotate=") }), let deg = Int(rot.dropFirst(9)) {
             config.glassesPhotoRotation = deg
         }
         if let source = args.first(where: { $0.hasPrefix("--source=") }) {
             config.sourceKind = SourceKind(rawValue: String(source.dropFirst(9))) ?? config.sourceKind
+        }
+        // `--ask-only --asks=q1||q2`: only ask (no capture), e.g. against a device's memory.
+        if args.contains("--ask-only") {
+            try? await Task.sleep(for: .seconds(3))
+            await runScript("asks@0", controller: controller, wearables: wearables)
+            return
+        }
+        // `--script-only=wipe@0,ingest@1,asks@200`: run a script without starting capture.
+        if let script = args.first(where: { $0.hasPrefix("--script-only=") }) {
+            try? await Task.sleep(for: .seconds(2))
+            await runScript(String(script.dropFirst(14)), controller: controller, wearables: wearables)
+            return
         }
         // `--autostart`: real glasses, start capturing on launch (device debugging).
         if args.contains("--autostart") {
@@ -82,6 +101,18 @@ enum DebugLaunchArguments {
             case "permit": await glasses.requestPermissionAndStart(using: wearables)
             case "highres": await controller.requestHighRes()
             case "ask": await controller.voice.ask(ProcessInfo.processInfo.arguments.first { $0.hasPrefix("--ask=") }.map { String($0.dropFirst(6)) } ?? "Ne gördüm?")
+            case "asks":
+                // `--asks=q1||q2||…`: one question after another (retrieval eval in the simulator).
+                let all = ProcessInfo.processInfo.arguments.first { $0.hasPrefix("--asks=") }.map { String($0.dropFirst(7)) } ?? ""
+                for question in all.components(separatedBy: "||") where !question.isEmpty {
+                    await controller.voice.ask(question)
+                }
+            case "wipe": await controller.deleteAllMemories()
+            case "ingest":
+                // `--ingest=<folder in Documents>`: test photos through the real pipeline.
+                let folder = ProcessInfo.processInfo.arguments.first { $0.hasPrefix("--ingest=") }.map { String($0.dropFirst(9)) } ?? "ingest"
+                let kept = await controller.ingestFolder(folder)
+                Log.mock.info("ingest done: \(kept) kept")
             case "capture": await controller.captureNow()
             case "stop": await controller.stop()
             case "start": await controller.start()

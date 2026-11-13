@@ -8,6 +8,7 @@ struct MemoryDetailView: View {
     @AppStorage(DeveloperMode.storageKey) private var developerMode = false
     @Environment(\.dismiss) private var dismiss
     @State private var confirmDelete = false
+    @State private var episode: MemoryEpisode?
 
     private var coordinate: CLLocationCoordinate2D? {
         guard let lat = record.latitude, let lon = record.longitude else { return nil }
@@ -17,10 +18,11 @@ struct MemoryDetailView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: Theme.Spacing.m) {
-                KeyframeImage(url: controller.store.frameURL(record), maxPixel: 1280)
+                KeyframeImage(url: controller.store.frameURL(record), maxPixel: 1280, contentMode: .fit)
                     .frame(maxWidth: .infinity)
                     .frame(height: 380)
                     .clipShape(.rect(cornerRadius: Theme.Radius.card))
+                    .opensPhotoViewer(url: controller.store.frameURL(record), title: record.name ?? record.title)
 
                 VStack(alignment: .leading, spacing: Theme.Spacing.xxs) {
                     if let kind = record.kind, record.name != nil {
@@ -30,6 +32,7 @@ struct MemoryDetailView: View {
                     }
                     Text(record.name ?? record.title)
                         .font(.title.bold())
+                        .fixedSize(horizontal: false, vertical: true)
                     Label(record.seenAt.formatted(date: .complete, time: .shortened), systemImage: "clock")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
@@ -44,6 +47,35 @@ struct MemoryDetailView: View {
 
                 MemoryFactsCard(record: record, showsTechnical: developerMode)
 
+                if let episode {
+                    NavigationLink(value: episode) {
+                        Label {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Bu anının bölümü").font(.footnote).foregroundStyle(.secondary)
+                                Text(episode.displayTitle).font(.body).lineLimit(2)
+                            }
+                        } icon: {
+                            Image(systemName: "folder.fill")
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .card()
+                }
+
+                if let visual = record.visual {
+                    VStack(alignment: .leading, spacing: Theme.Spacing.s) {
+                        Label("Görsel detaylar", systemImage: "eye")
+                            .font(.headline)
+                        ForEach(Array(visual.split(separator: "\n").enumerated()), id: \.offset) { _, line in
+                            Text(line)
+                                .font(.callout)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    }
+                    .card()
+                }
+
                 VStack(alignment: .leading, spacing: Theme.Spacing.s) {
                     Label("Karede okunan yazı", systemImage: "text.viewfinder")
                         .font(.headline)
@@ -51,6 +83,8 @@ struct MemoryDetailView: View {
                         .font(.callout.monospaced())
                         .foregroundStyle(record.ocrText.isEmpty ? .secondary : .primary)
                         .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .card()
 
@@ -76,6 +110,9 @@ struct MemoryDetailView: View {
         }
         .navigationTitle(record.title)
         .navigationBarTitleDisplayMode(.inline)
+        .task(id: record.episodeID) {
+            if let id = record.episodeID { episode = await controller.store.episode(id: id) }
+        }
     }
 
     private func delete() {

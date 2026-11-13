@@ -48,7 +48,7 @@ actor PerceptionEngine {
         var duplicateHamming = 6                 // dHash bits; lower = more similar
         var duplicateWindow: TimeInterval = 45
         var keepTextlessEvery: TimeInterval = 60 // keep one scene frame per minute even without text
-        var keyframeMaxPixel = 1280
+        var keyframeMaxPixel = 1536   // team measurement: 1536 px long side for Nemotron
         var ocrMaxPixel = 2400
     }
 
@@ -68,7 +68,7 @@ actor PerceptionEngine {
               let image = ctx.makeImage()
         else { return }
         _ = recognizeText(image)
-        _ = detectFaces(image)
+        _ = HeadBlur.heads(in: image)
     }
 
     func process(_ frame: CapturedFrame, street: String?) -> PerceptionResult {
@@ -91,28 +91,38 @@ actor PerceptionEngine {
         var replaces: Int64?
         recentHashes.removeAll { frame.capturedAt.timeIntervalSince($0.at) > tuning.duplicateWindow }
 
-        // OCR on a ~2400 px copy (12 MP is slower and not more legible for Vision).
-        let lines = Self.recognizeText(ocrImage)
+        // OCR and head detection in parallel on the same ~2400 px copy (12 MP is slower and not
+        // more legible for Vision). Heads are only used if the frame is kept below.
+        let parallel = Self.textAndHeads(ocrImage)
+        let lines = parallel.lines
         let plates = lines.filter { Self.looksLikePlate($0.text) }
         let textLines = lines.filter { !Self.looksLikePlate($0.text) }
-        let ocrText = textLines.map(\.text).joined(separator: "\n")
+        let ocrText = Self.visualRows(textLines).joined(separator: "\n")
 
-        if frame.trigger != .manual {
-            // Same view (image hash) with the same text, or the same sign read again while it
-            // slides across the frame (text overlap) — unless this read is clearly more complete.
-            for (index, recent) in recentHashes.enumerated() {
-                let imageClose = (recent.hash ^ hash).nonzeroBitCount <= tuning.duplicateHamming
-                if imageClose && Self.sameText(recent.text, ocrText) { return .drop(.duplicate) }
-                guard !ocrText.isEmpty, !recent.text.isEmpty,
-                      Self.tokenOverlap(recent.text, ocrText) >= 0.5 else { continue }
-                let moreComplete = ocrText.count >= recent.text.count + 3
-                    && Double(ocrText.count) >= Double(recent.text.count) * 1.05
-                if !moreComplete { return .drop(.duplicate) }
-                // Same sign, read better now: keep this one and retire the partial read.
-                replaces = recent.memoryId
-                recentHashes.remove(at: index)
-                break
+        let manual = frame.trigger == .manual
+        // Same view (image hash) with the same text, or the same sign read again while it
+        // slides across the frame (text overlap) — unless this read is clearly more complete.
+        // A frame taken by hand is never dropped, but it still retires an earlier partial read.
+        for (index, recent) in recentHashes.enumerated() {
+            let imageClose = (recent.hash ^ hash).nonzeroBitCount <= tuning.duplicateHamming
+            if imageClose && Self.sameText(recent.text, ocrText) {
+                if manual { continue }
+                return .drop(.duplicate)
             }
+            guard !ocrText.isEmpty, !recent.text.isEmpty,
+                  Self.tokenOverlap(recent.text, ocrText) >= 0.5 else { continue }
+            let moreComplete = ocrText.count >= recent.text.count + 3
+                && Double(ocrText.count) >= Double(recent.text.count) * 1.05
+            if !moreComplete {
+                if manual { continue }
+                return .drop(.duplicate)
+            }
+            // Same sign, read better now: keep this one and retire the partial read.
+            replaces = recent.memoryId
+            recentHashes.remove(at: index)
+            break
+        }
+        if !manual {
             if ocrText.isEmpty {
                 if let last = lastTextlessKeep, frame.capturedAt.timeIntervalSince(last) < tuning.keepTextlessEvery {
                     return .drop(.noText)
@@ -122,10 +132,11 @@ actor PerceptionEngine {
         }
         recentHashes.append((hash, frame.capturedAt, ocrText, nil))
 
-        // Privacy: blur faces and plates before anything is stored or sent.
-        let faces = Self.detectFaces(ocrImage)
-        let regions = faces + plates.map(\.box)
-        guard let keyframe = blurredKeyframe(ocrImage, regions: regions) else { return .drop(.unreadable) }
+        // Privacy: mask heads and plates before anything is stored or sent. If head detection
+        // fails, the frame is dropped (fail-safe), never kept unmasked.
+        guard let heads = parallel.heads,
+              let keyframe = blurredKeyframe(ocrImage, heads: heads, plates: plates.map(\.box))
+        else { return .drop(.unreadable) }
 
         let memory = NewMemory(
             seenAt: frame.capturedAt,
@@ -149,6 +160,19 @@ actor PerceptionEngine {
 
     // MARK: OCR
 
+    /// Text recognition and head detection at the same time (two cores / Neural Engine).
+    static func textAndHeads(_ image: CGImage) -> (lines: [TextLine], heads: [CGRect]?) {
+        final class Box: @unchecked Sendable {
+            var lines: [TextLine] = []
+            var heads: [CGRect]?
+        }
+        let box = Box()
+        DispatchQueue.concurrentPerform(iterations: 2) { i in
+            if i == 0 { box.lines = recognizeText(image) } else { box.heads = HeadBlur.heads(in: image) }
+        }
+        return (box.lines, box.heads)
+    }
+
     struct TextLine: Sendable {
         let text: String
         let box: CGRect   // normalised, Vision coordinates (origin bottom-left)
@@ -157,6 +181,7 @@ actor PerceptionEngine {
 
     static func recognizeText(_ image: CGImage) -> [TextLine] {
         let request = VNRecognizeTextRequest()
+        HeadBlur.prepare(request)
         request.recognitionLevel = .accurate
         request.usesLanguageCorrection = true
         request.minimumTextHeight = 0.012
@@ -174,6 +199,24 @@ actor PerceptionEngine {
         }
         // Reading order: top to bottom, then left to right.
         .sorted { abs($0.box.midY - $1.box.midY) > 0.02 ? $0.box.midY > $1.box.midY : $0.box.minX < $1.box.minX }
+    }
+
+    /// One string per visual row, top to bottom; boxes on the same row are joined left to right,
+    /// so a label and its value side by side ("5TH FLOOR  ARDUINO LAB") stay on one line.
+    /// Vision boxes are normalised with the origin at the bottom left.
+    static func visualRows(_ lines: [TextLine]) -> [String] {
+        var rows: [[TextLine]] = []
+        for line in lines.sorted(by: { $0.box.midY > $1.box.midY }) {
+            // Same row: vertical centres closer than half the smaller box height.
+            if let i = rows.firstIndex(where: { row in
+                row.contains { abs($0.box.midY - line.box.midY) < 0.5 * min($0.box.height, line.box.height) }
+            }) {
+                rows[i].append(line)
+            } else {
+                rows.append([line])
+            }
+        }
+        return rows.map { row in row.sorted { $0.box.minX < $1.box.minX }.map(\.text).joined(separator: "  ") }
     }
 
     /// Finnish / EU style plates: "ABC-123", "AB-1234", "ABC 123". Never stored as text.
@@ -207,16 +250,9 @@ actor PerceptionEngine {
 
     // MARK: Privacy
 
-    static func detectFaces(_ image: CGImage) -> [CGRect] {
-        let request = VNDetectFaceRectanglesRequest()
-        let handler = VNImageRequestHandler(cgImage: image, options: [:])
-        do { try handler.perform([request]) } catch { return [] }
-        return (request.results ?? []).map(\.boundingBox)
-    }
-
-    /// Downsizes to keyframe size first, then pixellates only the (padded) face/plate regions
-    /// and composites them back. Whole-image filters on a 2400 px frame took seconds.
-    private func blurredKeyframe(_ image: CGImage, regions: [CGRect]) -> Data? {
+    /// Downsizes to keyframe size first, then masks heads and plates on that small copy
+    /// (masking at OCR size took seconds; at 1280 px it is a few milliseconds on the GPU).
+    private func blurredKeyframe(_ image: CGImage, heads: [CGRect], plates: [CGRect]) -> Data? {
         var base = CIImage(cgImage: image)
         let longEdge = max(base.extent.width, base.extent.height)
         let factor = min(1, CGFloat(tuning.keyframeMaxPixel) / longEdge)
@@ -224,21 +260,7 @@ actor PerceptionEngine {
             base = base.transformed(by: CGAffineTransform(scaleX: factor, y: factor))
         }
         let extent = base.extent
-        var output = base
-        for r in regions {
-            let rect = CGRect(x: extent.minX + r.minX * extent.width, y: extent.minY + r.minY * extent.height,
-                              width: r.width * extent.width, height: r.height * extent.height)
-                .insetBy(dx: -r.width * extent.width * 0.25, dy: -r.height * extent.height * 0.25)
-                .intersection(extent)
-            guard !rect.isEmpty else { continue }
-            let block = max(8, max(rect.width, rect.height) / 8)
-            let patch = base.cropped(to: rect).clampedToExtent()
-                .applyingFilter("CIPixellate", parameters: [kCIInputScaleKey: block,
-                                                            kCIInputCenterKey: CIVector(x: rect.midX, y: rect.midY)])
-                .applyingGaussianBlur(sigma: block / 3)
-                .cropped(to: rect)
-            output = patch.composited(over: output)
-        }
+        let output = HeadBlur.mask(base, heads: heads, plates: plates)
         guard let space = CGColorSpace(name: CGColorSpace.sRGB) else { return nil }
         let options = [CIImageRepresentationOption(rawValue: kCGImageDestinationLossyCompressionQuality as String): 0.78]
         return context.jpegRepresentation(of: output.cropped(to: extent), colorSpace: space, options: options)

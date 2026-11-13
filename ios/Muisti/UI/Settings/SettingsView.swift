@@ -36,11 +36,7 @@ struct SettingsView: View {
                 AISettingsSection(controller: controller, config: config)
 
                 Section {
-                    Picker("Soru dili", selection: $config.voiceLocale) {
-                        Text("Türkçe").tag("tr-TR")
-                        Text("English").tag("en-US")
-                        Text("Suomi").tag("fi-FI")
-                    }
+                    LabeledContent("Soru dili", value: "English")
                     Toggle("Cevabı sesli oku", isOn: $config.speakAnswers)
                 } header: {
                     Text("Ses")

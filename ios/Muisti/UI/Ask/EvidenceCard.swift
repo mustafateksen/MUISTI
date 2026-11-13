@@ -9,10 +9,11 @@ struct EvidenceCard: View {
     var body: some View {
         let record = hit.record
         VStack(alignment: .leading, spacing: Theme.Spacing.s) {
-            KeyframeImage(url: store.frameURL(record), maxPixel: 900)
+            KeyframeImage(url: store.frameURL(record), maxPixel: 900, contentMode: .fit)
                 .frame(maxWidth: .infinity)
                 .frame(height: 200)
                 .clipShape(.rect(cornerRadius: Theme.Radius.inner))
+                .opensPhotoViewer(url: store.frameURL(record), title: record.name ?? record.title)
 
             VStack(alignment: .leading, spacing: Theme.Spacing.xxs) {
                 Text(record.title)

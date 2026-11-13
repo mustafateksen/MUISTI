@@ -53,7 +53,7 @@ final class MotionProvider {
         stepDistance = 0
 
         if CMMotionActivityManager.isActivityAvailable() {
-            activityManager.startActivityUpdates(to: .main) { [weak self] activity in
+            activityManager.startActivityUpdates(to: .main) { @Sendable [weak self] activity in
                 guard let activity else { return }
                 let kind = MotionActivityKind(activity)
                 MainActor.assumeIsolated { self?.activity = kind }
@@ -61,7 +61,8 @@ final class MotionProvider {
         }
 
         if CMPedometer.isStepCountingAvailable() {
-            pedometer.startUpdates(from: Date()) { [weak self] data, _ in
+            // Background queue: must not be a main-actor closure (runtime isolation trap).
+            pedometer.startUpdates(from: Date()) { @Sendable [weak self] data, _ in
                 guard let data else { return }
                 let steps = data.numberOfSteps.intValue
                 // ~0.7 m per step when the pedometer has no distance estimate.
@@ -75,7 +76,7 @@ final class MotionProvider {
 
         if motion.isDeviceMotionAvailable {
             motion.deviceMotionUpdateInterval = 0.1   // 10 Hz: enough for a blur gate, cheap
-            motion.startDeviceMotionUpdates(using: .xArbitraryZVertical, to: .main) { [weak self] sample, _ in
+            motion.startDeviceMotionUpdates(using: .xArbitraryZVertical, to: .main) { @Sendable [weak self] sample, _ in
                 guard let sample else { return }
                 let a = sample.userAcceleration
                 let r = sample.rotationRate

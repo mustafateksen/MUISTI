@@ -12,10 +12,19 @@ struct MemoryDaySection: Identifiable {
             .sorted { $0.day > $1.day }
     }
 
-    func title(calendar: Calendar) -> String {
+    func title(calendar: Calendar) -> String { Self.title(day, calendar: calendar) }
+
+    static func title(_ day: Date, calendar: Calendar) -> String {
         if calendar.isDateInToday(day) { return "Bugün" }
         if calendar.isDateInYesterday(day) { return "Dün" }
         return day.formatted(.dateTime.weekday(.wide).day().month(.wide))
+    }
+
+    /// Episodes by the day they started, newest first.
+    static func groupEpisodes(_ episodes: [MemoryEpisode], calendar: Calendar) -> [(day: Date, episodes: [MemoryEpisode])] {
+        Dictionary(grouping: episodes) { calendar.startOfDay(for: $0.startedAt) }
+            .map { ($0.key, $0.value.sorted { $0.endedAt > $1.endedAt }) }
+            .sorted { $0.0 > $1.0 }
     }
 }
 

@@ -120,6 +120,7 @@ final class CaptureController {
         Task { [weak self] in
             guard let self else { return }
             await self.store.purge(olderThanDays: self.config.retentionDays)
+            await self.store.assignMissingEpisodes()
             await self.refreshCounts()
             await self.applySettings()
             await self.worker.start()
@@ -186,6 +187,7 @@ final class CaptureController {
     /// Pushes Nemotron / recorder / zone / voice settings to the actors.
     func applySettings() async {
         await ai.update(config.nemotronSettings)
+        await store.useEmbeddingModel(config.nemotronSettings.embedModel)
         await pipeline.configure(recordRaw: config.recordToDisk, streamEveryN: config.passthroughEveryN, zones: config.zones)
         scheduler.tuning = config.tuning
         voice.localeIdentifier = config.voiceLocale
@@ -252,6 +254,48 @@ final class CaptureController {
         await store.delete(id: id)
         await refreshCounts()
     }
+
+    #if DEBUG
+    /// Test data: feeds photos from `Documents/<folder>/manifest.json`
+    /// (`[{"file","seen_at" ISO-8601,"lat","lon","street"}]`) through the real pipeline (OCR,
+    /// head/plate masking, dedup, episodes, Nemotron), as if the glasses had taken them then.
+    func ingestFolder(_ folder: String) async -> Int {
+        struct Entry: Decodable { let file: String; let seen_at: String; let lat: Double?; let lon: Double?; let street: String? }
+        guard let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { return 0 }
+        let dir = documents.appendingPathComponent(folder, isDirectory: true)
+        guard let data = try? Data(contentsOf: dir.appendingPathComponent("manifest.json")),
+              let entries = try? JSONDecoder().decode([Entry].self, from: data)
+        else {
+            Log.pipeline.error("ingest: no manifest in \(dir.path, privacy: .public)")
+            return 0
+        }
+        var kept = 0
+        for entry in entries.sorted(by: { $0.seen_at < $1.seen_at }) {
+            guard let raw = try? Data(contentsOf: dir.appendingPathComponent(entry.file)),
+                  let jpeg = ImageData.ensureJPEG(raw),
+                  let date = ISO8601.date(from: entry.seen_at) else {
+                Log.pipeline.error("ingest: skipped \(entry.file, privacy: .public)")
+                continue
+            }
+            var frame = CapturedFrame(capturedAt: date, origin: .glassesPhoto, jpeg: jpeg,
+                                      pixelSize: ImageData.pixelSize(of: jpeg), isHighRes: true, trigger: .manual)
+            frame.latitude = entry.lat
+            frame.longitude = entry.lon
+            frame.horizontalAccuracy = 10
+            let before = await pipeline.stats.dropped
+            let id = await pipeline.handle(frame, street: entry.street)
+            if id == nil {
+                let after = await pipeline.stats.dropped
+                let reasons = after.filter { before[$0.key, default: 0] < $0.value }.map { "\($0.key)" }
+                Log.pipeline.info("ingest \(entry.file, privacy: .public) dropped: \(reasons.joined(separator: ","), privacy: .public)")
+            }
+            if id != nil { kept += 1 }
+            Log.pipeline.info("ingest \(entry.file, privacy: .public) → \(id.map(String.init) ?? "dropped", privacy: .public)")
+        }
+        await refreshCounts()
+        return kept
+    }
+    #endif
 
     func refreshCounts() async {
         let counts = await store.count()

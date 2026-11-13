@@ -9,14 +9,36 @@ struct AskResult: Sendable, Identifiable {
     let usedAI: Bool
     let latencyMs: Int
     let note: String?
+    /// ISO 639-1 language of the question, as Nemotron reported it (drives the spoken voice).
+    var language: String?
+    /// Stage timings and retrieval facts, for the developer view and logs.
+    var trace: String?
 }
 
-/// Question → plan (Nemotron) → local search (time/place/keywords/embedding) → answer from
-/// evidence only (Nemotron) → evidence rule check. Falls back to a purely local answer when
-/// there is no network or key, so "what did I just see?" still works offline.
+/// On-phone RAG over everything the glasses saw:
+/// question → Nemotron query embedding → hybrid retrieval on the phone (FTS5 + in-memory
+/// vectors + partial-read matching + recency, fused by rank) → grouping of repeated reads of
+/// the same sign → Nemotron 3.5 rerank → one Nemotron call that understands the question
+/// (language, time/place references, forget requests) and answers from the records only →
+/// evidence rule on every number and quote.
+///
+/// There is deliberately no hand-written language parsing here (no keyword lists, no regexes
+/// for "just now"/"here"/"forget"): understanding the question is the model's job, steered by
+/// `MemoryPrompts.answerSystem`.
 actor QueryEngine {
     private let store: MemoryStore
     private let ai: NemotronClient
+
+    /// Groups shown to the answer model.
+    static let answerContext = 8
+    /// Episodes (with their frames) shown to the answer model.
+    static let episodeContext = 3
+    /// Frames shown per episode.
+    static let framesPerEpisode = 14
+    /// Groups sent to the reranker.
+    static let rerankDepth = 20
+    /// Longest "forget" the model may trigger in one request (one day).
+    static let maxForgetMinutes = 24 * 60
 
     init(store: MemoryStore, ai: NemotronClient) {
         self.store = store
@@ -26,182 +48,404 @@ actor QueryEngine {
     func ask(_ question: String, location: LocationFix?, now: Date = Date()) async -> AskResult {
         let started = ContinuousClock.now
         let trimmed = question.trimmingCharacters(in: .whitespacesAndNewlines)
-        var aiUsed = false
-        var note: String?
+        var trace = Trace()
+        let ai = self.ai
+        await ai.beginQuestion()
+        defer { Task { await ai.endQuestion() } }
 
-        // 1. "Son 10 dakikayı unut" works without any network.
-        if let minutes = Self.localForgetMinutes(trimmed) {
-            let removed = await store.delete(since: now.addingTimeInterval(-Double(minutes) * 60))
-            return result(trimmed, Self.forgotText(minutes, removed, language: Self.guessLanguage(trimmed)), .seen, [], false, started, nil)
-        }
+        // 1. Query vector (~0.3–0.9 s; skipped when embeddings are off or slow).
+        let (embedding, embedMs) = await Self.queryVector(ai, question: trimmed)
+        trace.add(embedding == nil ? "vektör yok" : "vektör \(embedMs) ms")
 
-        // 2. Plan.
-        var plan: QueryPlan
-        do {
-            plan = try await ai.chatJSON(QueryPlan.self, system: MemoryPrompts.planSystem,
-                                         user: MemoryPrompts.planUser(question: trimmed, now: ISO8601.string(from: now)),
-                                         maxTokens: 300)
-            aiUsed = true
-        } catch {
-            plan = Self.localPlan(trimmed)
-            note = (error as? LocalizedError)?.errorDescription
-        }
-        let language = plan.language ?? Self.guessLanguage(trimmed)
-        if plan.is_forget_command == true, let minutes = plan.forget_minutes {
-            let removed = await store.delete(since: now.addingTimeInterval(-Double(minutes) * 60))
-            return result(trimmed, Self.forgotText(minutes, removed, language: language), .seen, [], aiUsed, started, note)
-        }
-
-        // 3. Search on the phone.
+        // 2. Retrieve on the phone.
+        let searchStarted = ContinuousClock.now
         var search = MemorySearch()
-        search.keywords = plan.keywords + Self.localKeywords(trimmed)
-        if let minutes = plan.minutes_back, minutes > 0 { search.since = now.addingTimeInterval(-Double(minutes) * 60) }
-        if let meters = plan.near_me_meters, let location {
-            search.near = (location.latitude, location.longitude, Double(max(50, meters)))
-        }
-        if aiUsed {
-            search.embedding = try? await ai.embed(([trimmed] + plan.keywords).joined(separator: " "), as: .query)
-        }
-        var hits = await store.search(search)
-        if hits.isEmpty, search.since != nil || search.near != nil {
-            // Nothing in the window: look wider, the answer will say when/where it was.
-            search.since = nil
-            search.near = nil
-            hits = await store.search(search)
-        }
-        guard !hits.isEmpty else {
-            return result(trimmed, Self.notSeenText(language), .unknown, [], aiUsed, started, note)
-        }
+        search.keywords = [trimmed]
+        search.embedding = embedding
+        let hits = await store.search(search)
 
-        // 4. Answer from evidence only.
-        let records = hits.map(\.record)
-        if aiUsed {
-            do {
-                let draft = try await ai.chatJSON(
-                    AnswerDraft.self,
-                    system: MemoryPrompts.answerSystem(language: language),
-                    user: "Question: \(trimmed)\n\nRecords:\n" + records.map(Self.describe).joined(separator: "\n\n"),
-                    maxTokens: 400
-                )
-                return checked(draft, question: trimmed, hits: hits, language: language, started: started)
-            } catch {
-                note = (error as? LocalizedError)?.errorDescription
+        // 3. One entry per sign/object: repeated and partial reads collapse into one group.
+        var groups = Self.group(hits).map { Self.withDistance($0, from: location) }
+        trace.add("arama \((ContinuousClock.now - searchStarted).milliseconds) ms · \(hits.count) kayıt → \(groups.count) grup")
+
+        // 4. Cross-encoder rerank of the top groups.
+        if !groups.isEmpty, await ai.rerankEnabled {
+            let head = Array(groups.prefix(Self.rerankDepth))
+            let passages = head.map(Self.passage)
+            let rerankStarted = ContinuousClock.now
+            if let logits = await withTimeout(seconds: 8, { try await ai.rerank(query: trimmed, passages: passages) }),
+               logits.count == head.count {
+                var reranked = zip(head, logits).map { hit, logit -> MemoryHit in
+                    var hit = hit
+                    hit.signals.rerankLogit = logit
+                    return hit
+                }
+                reranked.sort { ($0.signals.rerankLogit ?? -.infinity) > ($1.signals.rerankLogit ?? -.infinity) }
+                groups = reranked + groups.dropFirst(head.count)
+                trace.add("rerank \((ContinuousClock.now - rerankStarted).milliseconds) ms (\(await ai.rerankModelName.split(separator: "/").last ?? ""))")
+            } else {
+                trace.add("rerank yok")
             }
         }
-        // 5. Offline fallback: read back the best frame's text, labelled honestly.
-        let best = records[0]
-        return result(trimmed, Self.localAnswer(best, language: language), .seen, [hits[0]], aiUsed, started,
-                      note ?? "Çevrimdışı: cevap yerel aramadan.")
+        let context = Array(groups.prefix(Self.answerContext))
+        if !context.isEmpty { trace.add("ilk: " + context.prefix(3).map(Self.traceLabel).joined(separator: ", ")) }
+
+        // 5. One model call: understand the question and answer from the records only.
+        guard await ai.hasKey else {
+            return offline(trimmed, context, started, note: "Nemotron anahtarı yok; yerel arama.", trace)
+        }
+        // Episodes of the best records: the frames seen just before and after them, in order,
+        // so the model can answer "what was next to / after / on the same walk as X".
+        var episodeIDs: [Int64] = []
+        for id in context.prefix(5).compactMap(\.record.episodeID) where !episodeIDs.contains(id) { episodeIDs.append(id) }
+        episodeIDs = Array(episodeIDs.prefix(Self.episodeContext))
+        let episodes = await store.episodes(episodeIDs)
+        var episodeText: [String] = []
+        var pool = context
+        var position: [Int64: (index: Int, count: Int)] = [:]
+        for id in episodeIDs {
+            guard let episode = episodes.first(where: { $0.id == id }) else { continue }
+            let frames = await store.records(inEpisode: id)
+            for (i, r) in frames.enumerated() { position[r.id] = (i + 1, frames.count) }
+            let shown = Self.window(frames, around: Set(context.flatMap(\.allRecords).map(\.id)))
+            episodeText.append(Self.describe(episode, frames: shown, total: frames.count,
+                                             position: { position[$0]?.index }))
+            let known = Set(pool.flatMap(\.allRecords).map(\.id))
+            pool += shown.filter { !known.contains($0.id) }.map { MemoryHit(record: $0, score: 0) }
+        }
+        if !episodeText.isEmpty { trace.add("\(episodeText.count) anı bölümü") }
+
+        let answerStarted = ContinuousClock.now
+        let user = MemoryPrompts.answerUser(question: trimmed, now: now, hasLocation: location != nil,
+                                            records: context.map { Self.describe($0, now: now, position: position[$0.record.id]) },
+                                            episodes: episodeText)
+        #if DEBUG
+        // Last prompt, for checking retrieval/episode context (Documents/last_prompt.txt).
+        if let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first {
+            try? user.write(to: docs.appendingPathComponent("last_prompt.txt"), atomically: true, encoding: .utf8)
+        }
+        #endif
+        let answered = await withTimeoutResult(seconds: 40) {
+            try await ai.chatJSON(AnswerDraft.self, system: MemoryPrompts.answerSystem, user: user,
+                                  jsonSchema: MemoryPrompts.answerSchema, schemaName: "answer", maxTokens: 400, temperature: 0)
+        }
+        let draft: AnswerDraft
+        switch answered {
+        case .success(let value):
+            draft = value
+        case .failure(let error):
+            let why = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            Log.net.error("answer call failed: \(why, privacy: .public)")
+            return offline(trimmed, context, started, note: "Nemotron cevap vermedi (\(why)); yerel arama.", trace)
+        }
+        trace.add("cevap \((ContinuousClock.now - answerStarted).milliseconds) ms")
+
+        // One repair round: tell the model exactly which check failed and let it answer again.
+        var final = draft
+        if final.action == .answer, let why = Self.rejection(final, hits: pool) {
+            Log.pipeline.info("evidence check failed (\(why, privacy: .public)); asking again")
+            let retry = user + "\n\nYour previous reply was rejected by the evidence check: \(why). " +
+                "Answer again following the rules: leave out anything you cannot copy from the records' text."
+            if case .success(let second) = await withTimeoutResult(seconds: 20, {
+                try await ai.chatJSON(AnswerDraft.self, system: MemoryPrompts.answerSystem, user: retry,
+                                      jsonSchema: MemoryPrompts.answerSchema, schemaName: "answer", maxTokens: 400, temperature: 0)
+            }) {
+                final = second
+                trace.add("düzeltme turu")
+            }
+        }
+
+        // 6. Forget request, as understood by the model.
+        if draft.action == .forget {
+            guard let minutes = draft.forget_minutes, (1...Self.maxForgetMinutes).contains(minutes) else {
+                trace.add("unut: süre geçersiz (\(draft.forget_minutes.map(String.init) ?? "-"))")
+                return result(trimmed, draft.unclear_reply ?? draft.answer, .unknown, [], true, started, nil, draft.language, trace)
+            }
+            let removed = await store.delete(since: now.addingTimeInterval(-Double(minutes) * 60))
+            trace.add("unut: \(minutes) dk, \(removed) kayıt silindi")
+            return result(trimmed, draft.answer, .seen, [], true, started, nil, draft.language, trace)
+        }
+        return checked(final, question: trimmed, hits: pool, started: started, trace: trace)
+    }
+
+    private static func queryVector(_ ai: NemotronClient, question: String) async -> ([Float]?, Int) {
+        let started = ContinuousClock.now
+        guard await ai.embeddingsEnabled else { return (nil, 0) }
+        let vector = await withTimeout(seconds: 6) { try await ai.embed(question, as: .query) }
+        return (vector, (ContinuousClock.now - started).milliseconds)
+    }
+
+    private static func withDistance(_ hit: MemoryHit, from location: LocationFix?) -> MemoryHit {
+        guard let location else { return hit }
+        var hit = hit
+        hit.distanceMeters = hit.allRecords.compactMap { r -> Double? in
+            guard let lat = r.latitude, let lon = r.longitude else { return nil }
+            return MemoryStore.haversine(location.latitude, location.longitude, lat, lon)
+        }.min()
+        return hit
+    }
+
+    // MARK: Grouping
+
+    /// Collapses reads of the same sign/object (same name or mostly the same words, within
+    /// 150 m) into one hit whose `record` is the most complete read.
+    static func group(_ hits: [MemoryHit]) -> [MemoryHit] {
+        var groups: [[MemoryHit]] = []
+        for hit in hits {
+            if let i = groups.firstIndex(where: { $0.contains { sameThing($0.record, hit.record) } }) {
+                groups[i].append(hit)
+            } else {
+                groups.append([hit])
+            }
+        }
+        return groups.map { members in
+            let best = members.max { completeness($0.record) < completeness($1.record) } ?? members[0]
+            var merged = best
+            merged.score = members.map(\.score).max() ?? best.score
+            merged.related = members.filter { $0.record.id != best.record.id }.map(\.record).sorted { $0.seenAt > $1.seenAt }
+            merged.distanceMeters = members.compactMap(\.distanceMeters).min()
+            merged.signals.ftsRank = members.compactMap(\.signals.ftsRank).min()
+            merged.signals.vectorRank = members.compactMap(\.signals.vectorRank).min()
+            merged.signals.cosine = members.compactMap(\.signals.cosine).max()
+            merged.signals.fuzzy = members.contains { $0.signals.fuzzy }
+            return merged
+        }
+        .sorted { $0.score > $1.score }
+    }
+
+    static func sameThing(_ a: MemoryRecord, _ b: MemoryRecord) -> Bool {
+        if let la = a.latitude, let oa = a.longitude, let lb = b.latitude, let ob = b.longitude,
+           MemoryStore.haversine(la, oa, lb, ob) > 150 { return false }
+        let ta = tokens(a.ocrText), tb = tokens(b.ocrText)
+        let shared = ta.intersection(tb).count
+        let smaller = min(ta.count, tb.count)
+        let containment = smaller == 0 ? 0 : Double(shared) / Double(smaller)
+        if let na = normalizedName(a.name), na == normalizedName(b.name), containment >= 0.4 { return true }
+        if smaller >= 2, containment >= 0.8 { return true }
+        let union = ta.union(tb).count
+        return union > 0 && Double(shared) / Double(union) >= 0.5
+    }
+
+    private static func tokens(_ text: String) -> Set<String> {
+        Set(MemoryStore.terms([text]).filter { $0.count >= 3 })
+    }
+
+    private static func normalizedName(_ name: String?) -> String? {
+        guard let name else { return nil }
+        let folded = MemoryStore.terms([name]).joined()
+        return folded.count >= 3 ? folded : nil
+    }
+
+    /// Prefer the read with the fields people ask for and the most text.
+    private static func completeness(_ r: MemoryRecord) -> Double {
+        (r.phone == nil ? 0 : 1) + (r.hours == nil ? 0 : 1)
+            + Double(min(tokens(r.ocrText).count, 30)) / 30
+            + (r.confidence ?? 0.5) * 0.5
+            + (r.status == .enriched ? 0.3 : 0)
+    }
+
+    /// The representative's OCR plus lines only other reads caught.
+    static func mergedOCR(_ hit: MemoryHit) -> String {
+        var lines = hit.record.ocrText.split(separator: "\n").map(String.init)
+        var seen = MemoryStore.terms([hit.record.ocrText]).joined(separator: " ")
+        for other in hit.related {
+            for line in other.ocrText.split(separator: "\n").map(String.init) {
+                let folded = MemoryStore.terms([line]).joined(separator: " ")
+                guard folded.count >= 3, !seen.contains(folded) else { continue }
+                lines.append(line)
+                seen += " " + folded
+            }
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    /// What the reranker reads for one group.
+    static func passage(_ hit: MemoryHit) -> String {
+        let r = hit.record
+        var parts = [r.kind, r.name, r.caption, r.hours.map { "hours: \($0)" }, r.phone.map { "phone: \($0)" },
+                     r.visual, r.keywords, r.street.map { "street: \($0)" }].compactMap { $0 }.filter { !$0.isEmpty }
+        let ocr = mergedOCR(hit)
+        parts.append(ocr.isEmpty ? "(no text read)" : ocr.replacingOccurrences(of: "\n", with: " | "))
+        return parts.joined(separator: "\n")
+    }
+
+    private static func traceLabel(_ hit: MemoryHit) -> String {
+        var s = "#\(hit.record.id) \(hit.record.name ?? hit.record.kind ?? String(hit.record.ocrText.prefix(14)))"
+        if let logit = hit.signals.rerankLogit { s += String(format: " r%.2f", logit) }
+        if let cosine = hit.signals.cosine { s += String(format: " c%.2f", cosine) }
+        if !hit.related.isEmpty { s += " ×\(hit.related.count + 1)" }
+        return s
     }
 
     // MARK: Evidence rule on the answer
 
-    private func checked(_ draft: AnswerDraft, question: String, hits: [MemoryHit], language: String, started: ContinuousClock.Instant) -> AskResult {
-        let used = hits.filter { draft.used_ids?.contains($0.record.id) ?? false }
-        let evidence = used.isEmpty ? Array(hits.prefix(1)) : used
-        let ocr = evidence.map(\.record.ocrText).joined(separator: "\n")
-        var label = AnswerLabel(rawValue: draft.label.uppercased()) ?? .unknown
-        var answer = draft.answer
+    /// Code-side checks on the model's answer (the prompt alone is not enough):
+    /// - every quote must appear in the text of a record it cites,
+    /// - every number in the reply must appear in the OCR text of the cited records (the only
+    ///   exceptions are when the frame was seen).
+    /// Returns why the draft is rejected, or nil when it passes.
+    private static func rejection(_ draft: AnswerDraft, hits: [MemoryHit]) -> String? {
+        guard AnswerLabel(rawValue: draft.label.uppercased()) == .seen else { return nil }
+        let evidence = evidence(for: draft, in: hits)
+        let ocr = evidence.map(mergedOCR).joined(separator: "\n")
+        let fullText = evidence.map(recordText).joined(separator: "\n")
+        var reasons: [String] = []
+        if let quote = draft.quotes.first(where: { !EvidenceRule.supports($0, in: fullText) }) {
+            reasons.append("the quote \"\(quote)\" is not in the text of the records listed in used_ids")
+        }
+        let missing = EvidenceRule.unsupportedNumbers(in: draft.answer, ocr: ocr, allowed: seenTimes(evidence))
+        if !missing.isEmpty {
+            reasons.append("these numbers are not in the OCR text of the records listed in used_ids: \(missing.joined(separator: ", "))")
+        }
+        return reasons.isEmpty ? nil : reasons.joined(separator: "; ")
+    }
 
-        // Any quoted literal, and every number in the answer (phone, time, price), must be in
-        // the OCR text. The only numbers allowed from elsewhere are when the frame was seen.
-        let literalOK = draft.value.map { EvidenceRule.supports($0, in: ocr) } ?? true
-        let seenTimes = Set(evidence.flatMap { hit -> [String] in
-            let d = hit.record.seenAt
+    private static func evidence(for draft: AnswerDraft, in hits: [MemoryHit]) -> [MemoryHit] {
+        let usedIDs = Set(draft.used_ids ?? [])
+        let used = hits.filter { hit in hit.allRecords.contains { usedIDs.contains($0.id) } }
+        return used.isEmpty ? Array(hits.prefix(1)) : used
+    }
+
+    /// When a frame was seen may be said even though it is not on the sign.
+    private static func seenTimes(_ evidence: [MemoryHit]) -> Set<String> {
+        Set(evidence.flatMap(\.allRecords).flatMap { record -> [String] in
+            let d = record.seenAt
             let cal = Calendar.current
             let h = cal.component(.hour, from: d), m = cal.component(.minute, from: d)
             return [String(format: "%d:%02d", h, m), String(format: "%02d:%02d", h, m), String(cal.component(.day, from: d))]
                 .map(EvidenceRule.canonicalNumber)
         })
-        let digitsOK = EvidenceRule.numbersSupported(in: answer, ocr: ocr, allowed: seenTimes)
-        if label == .seen, !(literalOK && digitsOK) {
+    }
+
+    /// Final result: a reply that still fails the checks becomes "not clearly seen"; a reply
+    /// the model itself marks "inferred" is shown as its observations, labelled EMİN DEĞİLİM.
+    private func checked(_ draft: AnswerDraft, question: String, hits: [MemoryHit],
+                         started: ContinuousClock.Instant, trace: Trace) -> AskResult {
+        let evidence = Self.evidence(for: draft, in: hits)
+        var label = AnswerLabel(rawValue: draft.label.uppercased()) ?? .unknown
+        var answer = draft.answer
+        var trace = trace
+        if let why = Self.rejection(draft, hits: hits) {
             label = .unknown
-            answer = Self.notClearText(language)
-            Log.pipeline.info("evidence rule rejected answer value \(draft.value ?? "-", privacy: .public)")
+            answer = draft.unclear_reply ?? Self.unclearText
+            trace.add("kanıt kuralı reddetti")
+            Log.pipeline.info("evidence rule rejected “\(draft.answer, privacy: .public)”: \(why, privacy: .public)")
+        } else if label == .seen, draft.support == .inferred {
+            label = .unsure
+            let ocr = evidence.map(Self.mergedOCR).joined(separator: "\n")
+            if let observations = draft.observations, !observations.isEmpty,
+               EvidenceRule.numbersSupported(in: observations, ocr: ocr, allowed: Self.seenTimes(evidence)) {
+                answer = observations
+            }
+            trace.add("yorum → emin değilim")
         }
-        return result(question, answer, label, evidence, true, started, nil)
+        return result(question, answer, label, evidence, true, started, nil, draft.language, trace)
     }
 
-    private func result(_ q: String, _ a: String, _ l: AnswerLabel, _ e: [MemoryHit], _ ai: Bool, _ started: ContinuousClock.Instant, _ note: String?) -> AskResult {
+    /// Everything stored for a group (OCR and the vision model's fields), for quote checks.
+    private static func recordText(_ hit: MemoryHit) -> String {
+        hit.allRecords.flatMap { r in
+            [r.ocrText, r.kind, r.name, r.phone, r.hours, r.otherText, r.caption, r.visual, r.street].compactMap { $0 }
+        }.joined(separator: "\n")
+    }
+
+    /// No key / no answer from Nemotron: show the best retrieved frame, labelled honestly.
+    /// (App UI language; without the model there is no understanding of the question.)
+    private func offline(_ question: String, _ context: [MemoryHit], _ started: ContinuousClock.Instant,
+                         note: String, _ trace: Trace) -> AskResult {
+        guard let best = context.first else {
+            return result(question, Self.emptyText, .unknown, [], false, started, note, nil, trace)
+        }
+        let r = best.record
+        let text = Self.mergedOCR(best).split(separator: "\n").prefix(3).joined(separator: ", ")
+        let time = r.seenAt.formatted(date: .omitted, time: .shortened)
+        let answer = text.isEmpty ? "En ilgili kare saat \(time); yazı okunmadı." : "En ilgili kayıt (saat \(time)): \(text)."
+        return result(question, answer, .unknown, [best], false, started, note, nil, trace)
+    }
+
+    private func result(_ q: String, _ a: String, _ l: AnswerLabel, _ e: [MemoryHit], _ ai: Bool,
+                        _ started: ContinuousClock.Instant, _ note: String?, _ language: String?, _ trace: Trace) -> AskResult {
         AskResult(question: q, answer: a, label: l, evidence: e, usedAI: ai,
-                  latencyMs: (ContinuousClock.now - started).milliseconds, note: note)
+                  latencyMs: (ContinuousClock.now - started).milliseconds, note: note, language: language,
+                  trace: trace.parts.isEmpty ? nil : trace.parts.joined(separator: " · "))
     }
 
-    // MARK: Text helpers
+    struct Trace: Sendable {
+        var parts: [String] = []
+        mutating func add(_ part: String) { parts.append(part) }
+    }
 
-    private static func describe(_ r: MemoryRecord) -> String {
-        let time = r.seenAt.formatted(date: .abbreviated, time: .shortened)
-        var lines = ["id: \(r.id)", "seen: \(time)"]
-        if let street = r.street { lines.append("street: \(street)") }
-        if let kind = r.kind { lines.append("kind: \(kind)") }
-        if let name = r.name { lines.append("name: \(name)") }
-        if let phone = r.phone { lines.append("phone: \(phone)") }
-        if let hours = r.hours { lines.append("hours: \(hours)") }
-        if let caption = r.caption { lines.append("caption: \(caption)") }
-        lines.append("ocr_text: \(r.ocrText.isEmpty ? "(none)" : r.ocrText.replacingOccurrences(of: "\n", with: " | "))")
+    // MARK: Record text for the model
+
+    private static let promptDate: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "EEEE d MMMM yyyy, HH:mm"
+        return f
+    }()
+
+    static func promptTime(_ date: Date) -> String { promptDate.string(from: date) }
+
+    /// Labelled record text: without labels the model did not tell a slogan from a sign's name.
+    private static func describe(_ hit: MemoryHit, now: Date, position: (index: Int, count: Int)? = nil) -> String {
+        let r = hit.record
+        let minutesAgo = max(0, Int(now.timeIntervalSince(r.seenAt) / 60))
+        var lines = ["id: \(r.id)", "Seen: \(promptTime(r.seenAt)) (minutes_ago: \(minutesAgo))"]
+        if let episode = r.episodeID {
+            lines.append("Episode: #\(episode)" + (position.map { ", frame \($0.index) of \($0.count)" } ?? ""))
+        }
+        if !hit.related.isEmpty {
+            let times = hit.allRecords.map(\.seenAt)
+            lines.append("Read \(hit.allRecords.count) times between \(promptTime(times.min()!)) and \(promptTime(times.max()!)); other ids: \(hit.related.map { String($0.id) }.joined(separator: ", "))")
+        }
+        if let street = r.street { lines.append("Street: \(street)") }
+        if let distance = hit.distanceMeters { lines.append("distance_m: \(Int(distance.rounded()))") }
+        if let kind = r.kind { lines.append("Type: \(kind)") }
+        if let name = r.name { lines.append("Name on sign: \(name)") }
+        if let phone = r.phone { lines.append("Phone on sign: \(phone)") }
+        if let hours = r.hours { lines.append("Hours on sign: \(hours)") }
+        if let other = r.otherText { lines.append("Other text on sign: \(other)") }
+        if let visual = r.visual { lines.append(visual) }
+        if let caption = r.caption { lines.append("Caption: \(caption)") }
+        let ocr = mergedOCR(hit)
+        lines.append("OCR text: \(ocr.isEmpty ? "(none)" : ocr.replacingOccurrences(of: "\n", with: " | "))")
         return lines.joined(separator: "\n")
     }
 
-    static func guessLanguage(_ text: String) -> String {
-        let t = text.lowercased()
-        if t.range(of: "[çğıöşü]", options: .regularExpression) != nil { return "tr" }
-        let tr = ["ne", "neydi", "nedir", "nerede", "hangi", "var", "gördüm", "gördüğüm", "numara", "numarası", "saat", "kaç", "mı", "mi", "unut", "demosu", "telefonu"]
-        let words = Set(t.split(separator: " ").map(String.init))
-        return tr.contains(where: words.contains) ? "tr" : "en"
+    /// At most `framesPerEpisode` frames, centred on the frames that were retrieved.
+    private static func window(_ frames: [MemoryRecord], around ids: Set<Int64>) -> [MemoryRecord] {
+        guard frames.count > framesPerEpisode else { return frames }
+        let anchor = frames.firstIndex { ids.contains($0.id) } ?? 0
+        let start = max(0, min(frames.count - framesPerEpisode, anchor - framesPerEpisode / 2))
+        return Array(frames[start ..< start + framesPerEpisode])
     }
 
-    static func localForgetMinutes(_ text: String) -> Int? {
-        let t = text.lowercased()
-        guard t.contains("unut") || t.contains("forget") || t.contains("sil") || t.contains("delete") else { return nil }
-        guard t.contains("dakika") || t.contains("minute") || t.contains("dk") else { return nil }
-        if let match = t.range(of: #"\d+"#, options: .regularExpression), let n = Int(t[match]) { return min(n, 24 * 60) }
-        return 10
-    }
-
-    private static let stopWords: Set<String> = [
-        "the", "a", "an", "what", "was", "is", "of", "in", "on", "at", "did", "i", "see", "number", "phone",
-        "ne", "neydi", "bir", "bu", "şu", "o", "mı", "mi", "mu", "mü", "da", "de", "ve", "ile", "gördüğüm",
-        "numarası", "numara", "telefon", "saat", "kaç", "nerede", "neresi", "az", "önce", "geçtiğimiz",
-    ]
-
-    static func localKeywords(_ text: String) -> [String] {
-        text.lowercased()
-            .split(whereSeparator: { !$0.isLetter && !$0.isNumber })
-            .map(String.init)
-            .filter { $0.count >= 3 && !stopWords.contains($0) }
-    }
-
-    static func localPlan(_ text: String) -> QueryPlan {
-        let t = text.lowercased()
-        var minutes: Int?
-        if t.contains("az önce") || t.contains("just now") || t.contains("geçtiğimiz") { minutes = 30 }
-        var wanted: String?
-        if t.contains("numara") || t.contains("telefon") || t.contains("phone") || t.contains("number") { wanted = "phone" }
-        else if t.contains("saat") || t.contains("açık") || t.contains("hours") || t.contains("open") { wanted = "hours" }
-        return QueryPlan(minutes_back: minutes, near_me_meters: nil, keywords: localKeywords(text),
-                         wanted: wanted, language: guessLanguage(text), is_forget_command: false, forget_minutes: nil)
-    }
-
-    static func notSeenText(_ language: String) -> String {
-        language == "tr" ? "Bunu görmedim." : "I didn't see that."
-    }
-
-    static func notClearText(_ language: String) -> String {
-        language == "tr" ? "Bunu net görmedim; en yakın kareyi gösteriyorum." : "I didn't see that clearly; here is the closest frame."
-    }
-
-    static func forgotText(_ minutes: Int, _ removed: Int, language: String) -> String {
-        language == "tr" ? "Son \(minutes) dakikayı unuttum (\(removed) kayıt silindi)."
-                         : "Forgot the last \(minutes) minutes (\(removed) records deleted)."
-    }
-
-    static func localAnswer(_ r: MemoryRecord, language: String) -> String {
-        let time = r.seenAt.formatted(date: .omitted, time: .shortened)
-        let text = r.ocrText.split(separator: "\n").prefix(3).joined(separator: ", ")
-        let place = r.street.map { language == "tr" ? ", \($0) civarında" : " near \($0)" } ?? ""
-        if language == "tr" {
-            return text.isEmpty ? "Saat \(time)\(place) bir kare var ama yazı okunmadı." : "Saat \(time)\(place) gördüğüm kayıtta şu yazıyor: \(text)."
+    /// One episode, its summary and its frames in the order seen (compact).
+    private static func describe(_ episode: MemoryEpisode, frames: [MemoryRecord], total: Int,
+                                 position: (Int64) -> Int?) -> String {
+        var lines = ["Episode #\(episode.id): \(episode.title ?? "(no title yet)")",
+                     "Time: \(promptTime(episode.startedAt)) to \(promptTime(episode.endedAt)), \(total) frames"]
+        if let street = episode.street { lines.append("Street: \(street)") }
+        if let summary = episode.summary { lines.append("Summary: \(summary)") }
+        lines.append(total > frames.count ? "Frames in order (part):" : "Frames in order:")
+        for r in frames {
+            let offset = Int(r.seenAt.timeIntervalSince(episode.startedAt))
+            let order = position(r.id).map { "#\($0)" } ?? "#?"
+            var parts = ["\(order) id \(r.id)", "+\(offset / 60)m\(String(format: "%02d", offset % 60))s"]
+            if let kind = r.kind { parts.append(kind) }
+            if let name = r.name { parts.append("\"\(name)\"") }
+            if let street = r.street, street != episode.street { parts.append("street: \(street)") }
+            if let visual = r.visual {
+                let things = visual.split(separator: "\n").filter { $0.hasPrefix("Visible things") || $0.hasPrefix("Spatial") || $0.hasPrefix("PICTURE") }
+                if !things.isEmpty { parts.append(things.joined(separator: "; ")) }
+            }
+            if !r.ocrText.isEmpty { parts.append("OCR: " + String(r.ocrText.replacingOccurrences(of: "\n", with: " | ").prefix(160))) }
+            lines.append("- " + parts.joined(separator: " · "))
         }
-        return text.isEmpty ? "There is a frame from \(time)\(place) but no text was read." : "At \(time)\(place) I saw: \(text)."
+        return lines.joined(separator: "\n")
     }
+
+    // App UI strings for the paths where the model did not answer.
+    static let emptyText = "Hafızada bununla ilgili bir kayıt bulamadım."
+    static let unclearText = "Bunu net görmedim; en yakın kareyi gösteriyorum."
 }

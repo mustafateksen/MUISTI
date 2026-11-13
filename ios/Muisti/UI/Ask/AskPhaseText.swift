@@ -4,6 +4,8 @@ import SwiftUI
 struct AskPhaseText: View {
     let phase: VoiceAssistant.Phase
     let transcript: String
+    /// The idle hint line; off once an answer is on screen.
+    var showsHint = true
 
     var body: some View {
         VStack(spacing: Theme.Spacing.xs) {
@@ -19,11 +21,11 @@ struct AskPhaseText: View {
                     .contentTransition(.opacity)
             }
 
-            if !transcript.isEmpty {
+            if !transcript.isEmpty, phase == .listening || phase == .thinking || phase == .speaking {
                 Text("“\(transcript)”")
                     .font(.title3)
                     .multilineTextAlignment(.center)
-            } else if phase == .idle {
+            } else if phase == .idle, showsHint {
                 Text("Gördüğün tabelaları, numaraları ve saatleri sorabilirsin.")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)

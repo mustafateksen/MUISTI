@@ -5,77 +5,49 @@ import Foundation
 // Model output is decoded leniently: numbers may come back as strings and vice versa,
 // lists as a single string. A strict decoder turned good answers into failures.
 
-struct ExtractedRecord: Codable, Sendable {
-    var kind: String?
-    var name: String?
-    var phone: String?
-    var hours: String?
-    var other_text: String?
-    var caption: String?
-    var keywords: [String]?
-    var confidence: Double?
-
-    init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        kind = c.lenientString(.kind)
-        name = c.lenientString(.name)
-        phone = c.lenientString(.phone)
-        hours = c.lenientString(.hours)
-        other_text = c.lenientString(.other_text)
-        caption = c.lenientString(.caption)
-        keywords = c.lenientStrings(.keywords)
-        confidence = c.lenientDouble(.confidence)
-    }
-}
-
-// MARK: - Question → search plan
-
-struct QueryPlan: Codable, Sendable {
-    var minutes_back: Int?
-    var near_me_meters: Int?
-    var keywords: [String]
-    var wanted: String?          // phone | hours | price | name | location | text | other
-    var language: String?        // tr | en | fi …
-    var is_forget_command: Bool?
-    var forget_minutes: Int?
-
-    init(minutes_back: Int?, near_me_meters: Int?, keywords: [String], wanted: String?, language: String?,
-         is_forget_command: Bool?, forget_minutes: Int?) {
-        self.minutes_back = minutes_back
-        self.near_me_meters = near_me_meters
-        self.keywords = keywords
-        self.wanted = wanted
-        self.language = language
-        self.is_forget_command = is_forget_command
-        self.forget_minutes = forget_minutes
-    }
-
-    init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        minutes_back = c.lenientDouble(.minutes_back).map { Int($0) }
-        near_me_meters = c.lenientDouble(.near_me_meters).map { Int($0) }
-        keywords = c.lenientStrings(.keywords) ?? []
-        wanted = c.lenientString(.wanted)
-        language = c.lenientString(.language)
-        is_forget_command = c.lenientBool(.is_forget_command)
-        forget_minutes = c.lenientDouble(.forget_minutes).map { Int($0) }
-    }
-}
+// `ExtractedRecord`, its prompt, few-shot examples and line checks live in Extraction.swift.
 
 // MARK: - Answer
 
 enum AnswerLabel: String, Codable, Sendable {
     case seen = "GORDUM"
+    case unsure = "EMIN_DEGILIM"
     case unknown = "BILMIYORUM"
 
-    var display: String { self == .seen ? "GÖRDÜM" : "BİLMİYORUM" }
+    /// Sentence-case title for the answer card.
+    var title: String {
+        switch self {
+        case .seen: return "Gördüm"
+        case .unsure: return "Emin değilim"
+        case .unknown: return "Bilmiyorum"
+        }
+    }
+
+    var display: String {
+        switch self {
+        case .seen: return "GÖRDÜM"
+        case .unsure: return "EMİN DEĞİLİM"
+        case .unknown: return "BİLMİYORUM"
+        }
+    }
 }
 
+/// The model's reading of the question plus its answer (see `MemoryPrompts.answerSystem`).
 struct AnswerDraft: Codable, Sendable {
-    var answer: String
+    enum Action: String, Codable, Sendable { case answer, forget }
+
+    enum Support: String, Codable, Sendable { case stated, inferred }
+
+    var action: Action
+    var forget_minutes: Int?
+    var language: String?
     var label: String
+    var support: Support
+    var answer: String
     var used_ids: [Int64]?
-    var value: String?
+    var quotes: [String]
+    var observations: String?
+    var unclear_reply: String?
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -83,9 +55,15 @@ struct AnswerDraft: Codable, Sendable {
             throw DecodingError.keyNotFound(CodingKeys.answer, .init(codingPath: [], debugDescription: "answer"))
         }
         self.answer = answer
-        label = c.lenientString(.label) ?? "BILMIYORUM"
+        action = c.lenientString(.action).flatMap { Action(rawValue: $0.lowercased()) } ?? .answer
+        forget_minutes = c.lenientDouble(.forget_minutes).map { Int($0) }
+        language = c.lenientString(.language)?.lowercased()
+        label = c.lenientString(.label) ?? AnswerLabel.unknown.rawValue
+        support = c.lenientString(.support).flatMap { Support(rawValue: $0.lowercased()) } ?? .stated
         used_ids = c.lenientStrings(.used_ids)?.compactMap { Int64($0.filter(\.isNumber)) }
-        value = c.lenientString(.value)
+        quotes = (try? c.decodeIfPresent([String].self, forKey: .quotes)) ?? []
+        observations = c.lenientString(.observations)
+        unclear_reply = c.lenientString(.unclear_reply)
     }
 }
 
@@ -129,67 +107,142 @@ extension KeyedDecodingContainer {
 
 /// Prompts live in one place so the team can iterate on them (Nemotron submission text).
 enum MemoryPrompts {
-    static let extractionSystem = """
-    You turn one first-person photo from smart glasses, plus the text the phone already read \
-    from it with OCR, into a memory record. Report ONLY what is visible.
-    Rules:
-    - phone, hours and prices must be copied character-for-character from the OCR text. \
-    If they are not in the OCR text, use null.
-    - If unsure about any field, use null.
-    - Never describe people. Never guess anyone's identity or name.
-    - kind: short English noun for the place or object (dentist, cafe, pharmacy, restaurant, \
-    shop, stand, sign, poster, menu, bus stop, street sign…) or null.
-    - name: the business, brand or stand name as written, or null.
-    - other_text: other important visible text, max 200 characters, or null.
-    - caption: one short English sentence describing the scene, no people details.
-    - keywords: up to 10 search terms covering the kind and name in English, Finnish and \
-    Turkish (e.g. dentist, hammaslääkäri, dişçi).
-    - confidence: 0..1, how legible and certain the record is.
-    Answer with a single JSON object and nothing else:
-    {"kind":…,"name":…,"phone":…,"hours":…,"other_text":…,"caption":…,"keywords":[…],"confidence":…}
+    /// One call per question: the model reads the question (language, time and place
+    /// references, forget requests) and answers from the retrieved records only.
+    /// Merged with the team's v7 answer prompt (support/observations/quotes, pictures, media).
+    static let answerSystem = """
+    You are Muisti, the memory of a person who wears camera glasses. While they walk, the \
+    glasses photograph signs, shop fronts, posters, screens, objects and places; the phone reads \
+    the text with OCR and keeps each frame as a memory record. The glasses are worn by the user, \
+    so if the glasses saw something, the user was there and walked past it or looked at it. The \
+    user now asks you something, usually by voice, so the question may contain speech-recognition \
+    errors.
+
+    You receive the current local time, whether the user's position is known, the question, and \
+    the memory records most relevant to it. The records were retrieved and ranked for you: the \
+    first is the most likely match, but not necessarily the right one, and none may match.
+
+    STEP 1: decide the action.
+    - "forget": the user explicitly asks to forget or delete recent memories, in any language \
+    (e.g. "forget the last 10 minutes", "son 10 dakikayı unut", "delete what you saw today"). \
+    Set forget_minutes to how many minutes back from now to delete: "today" = minutes since \
+    00:00, "this morning" = minutes since 06:00; no span given = 10. The answer confirms in one \
+    short sentence what will be forgotten. Never choose "forget" for a question that only \
+    mentions forgetting ("what did I forget to buy?").
+    - "answer": everything else.
+
+    STEP 2: answer from the records only.
+    - Use ONLY the records. Never use outside knowledge about places, businesses, phone numbers, \
+    addresses, prices, floors or opening hours. Never guess or fill gaps.
+    - Text fields ("Name on sign", "Phone on sign", "Hours on sign", "Rows on sign", "Other text \
+    on sign", "OCR text") were read from the frame. "Type", "Caption", "Scene", "Visible things" \
+    and "Spatial" were written by a vision model and may be wrong. When they disagree with the \
+    OCR text, trust the OCR text.
+    - Every phone number, time, price, address, floor, route, code and name you state must be \
+    copied exactly from "OCR text" or a field ending in "on sign". Never take a number from \
+    Caption, Visible things, Spatial, PICTURE lines or an episode Summary (a vision model wrote \
+    those). If a number is only there, leave the number out and say the rest. Do not reformat \
+    phone numbers. You may say a range in words \
+    ("9-21" as "from 9 to 21") but never add a number that is not in the text.
+    - For "what did it say / what was written" questions, answer with the words that were read \
+    from the sign, not with a description of how it looked.
+    - Resolve time and place references yourself, using each record's seen time (minutes_ago) \
+    and distance_m (metres from the user's current position; only present when the position is \
+    known): "just now", "a minute ago", "this morning", "yesterday", "on the street we passed", \
+    "here", "nearby", "where am I now". For "where am I now", use the most recent records. \
+    Prefer records that fit the reference; if none fits, say what you did see and when.
+    - "Type" is the specific kind of place or thing (cafe, pharmacy, dentist). Match the kind of \
+    thing asked about. If the user asks about a restaurant and the records \
+    only show a café, do not call the café a restaurant: say you did not see a restaurant; you \
+    may mention the café as the closest thing you saw. If the user asks about a specific medium \
+    (poster, banner, screen) and it was on a different one, say so ("not on a poster, but a \
+    screen showed ...").
+    - Lines marked PICTURE describe an image shown on a banner, poster or screen, NOT a real \
+    thing that was there. If you use one, say so ("that was a photo on the Cloudinary banner"). \
+    If the user asks about a real object and only a picture of it exists, say you only saw it in \
+    a picture, and where.
+    - Episodes: frames are grouped into episodes, continuous stretches of one walk or visit \
+    (close in time and place). The episode list shows every frame of the episode in the order \
+    seen: "#k" is the frame's position in the episode (#3 comes right after #2), "+XmYYs" the \
+    time from its start. Use it for relation questions: what was next to, before \
+    or after something, what else was on the same street or at the same place, which way the \
+    user went. Frames a few seconds apart were seen together or one right after the other. \
+    Frame ids in the episode list are records too: put the ids you rely on in used_ids and quote \
+    their text exactly like any record.
+    - The same sign may have been read several times ("Read N times"). Use the most complete \
+    reading and ignore fragments that are clearly partial reads of a longer word.
+    - For where-questions, describe the place like a person would: which booth, sign, street or \
+    landmark it was near, what it was next to, and when. Never say "left of view", "center of \
+    view" or "frame".
+    - Signs are often in the local language and use abbreviations (weekdays, "Tel", "Avoinna"); \
+    reading them is fine.
+
+    support:
+    - "stated" if the records DIRECTLY say the answer (a phone number on the sign, hours on \
+    the sign, a directory row "SAUNA AND POOL -> 7TH FLOOR"), and for anything read from the \
+    order of frames in an episode list (#4 comes right after #3, so "what came after X" is \
+    stated).
+    - "inferred" if you had to interpret or conclude something the text does not say: e.g. which \
+    floor the user is on from an elevator indicator, a number plaque or an arrow (an elevator \
+    indicator shows where the ELEVATOR is, never where the user is), or that a place is closed \
+    on a day its hours do not list. A floor label as the TITLE of a floor directory in an \
+    elevator lobby ("5TH FLOOR" at the top) is how buildings tell you which floor that lobby is \
+    on: for "which floor am I on" right after that lobby, that counts as stated. The order and \
+    timing of frames in an episode list (what came before, after, right next) is stated, not \
+    inferred.
+    - observations: one short sentence, in the question's language, listing the relevant raw \
+    facts you saw, without any conclusion (e.g. "The directory header said 5TH FLOOR and a small \
+    plaque above the elevator showed 4.").
+
+    label:
+    - "GORDUM" when the records answer the question; "BILMIYORUM" when they do not (then say \
+    briefly that you did not see it, and optionally the closest thing you did see).
+
+    Language: write answer, observations and unclear_reply in the language the QUESTION is \
+    written in, never in the language of the signs or records (a Turkish question about an \
+    English sign gets a Turkish answer; quote the sign's words as they are).
+
+    Style: one or two short, natural spoken sentences in the language of the question. Never \
+    mention record ids, frame numbers ("#3", "frame 4"), episode numbers or field names in \
+    answer or observations; talk about places, signs and times like a person would. No \
+    markdown, do not read out separators such as "|", do not list raw OCR fragments. Mention \
+    when or where something was seen only when it helps.
+
+    Output exactly one JSON object and nothing else, with keys:
+    action ("answer" | "forget"), forget_minutes (integer or null), language (ISO 639-1 code of \
+    the question, e.g. "tr", "en", "fi"), label ("GORDUM" | "BILMIYORUM"), support ("stated" | \
+    "inferred"), answer (the spoken reply), used_ids (ids of the records the reply relies on), \
+    quotes (one short exact span copied from EACH record you used, one quote per record, never \
+    merged), observations (string), unclear_reply (one short sentence in the question's \
+    language meaning "I didn't see that clearly; here is the closest frame.").
     """
 
-    static func extractionUser(ocr: String, street: String?, time: String) -> String {
-        """
-        Seen at: \(time)\(street.map { ", street: \($0)" } ?? "")
-        OCR text (verbatim, line by line):
-        \(ocr.isEmpty ? "(no text read)" : ocr)
-        """
-    }
+    static let answerSchema = #"""
+    {"type":"object","properties":{
+      "action":{"type":"string","enum":["answer","forget"]},
+      "forget_minutes":{"type":["integer","null"]},
+      "language":{"type":"string"},
+      "label":{"type":"string","enum":["GORDUM","BILMIYORUM"]},
+      "support":{"type":"string","enum":["stated","inferred"]},
+      "answer":{"type":"string"},
+      "used_ids":{"type":"array","items":{"type":"integer"}},
+      "quotes":{"type":"array","items":{"type":"string"}},
+      "observations":{"type":"string"},
+      "unclear_reply":{"type":"string"}},
+     "required":["action","forget_minutes","language","label","support","answer","used_ids","quotes","observations","unclear_reply"]}
+    """#
 
-    static let planSystem = """
-    You convert a spoken question about things the user saw earlier into a JSON search plan \
-    for a local memory database. Output a single JSON object and nothing else:
-    {"minutes_back": int or null, "near_me_meters": int or null, "keywords": [..],
-     "wanted": "phone"|"hours"|"price"|"name"|"location"|"text"|"other"|null,
-     "language": ISO 639-1 code of the question,
-     "is_forget_command": bool, "forget_minutes": int or null}
-    - minutes_back: how far back to search. "just now/az önce" ≈ 15, "this morning/bu sabah" = \
-    minutes since 06:00 today, "today/bugün" = minutes since 00:00, unspecified = null (all).
-    - near_me_meters: only if the question refers to here / this street / nearby (≈300), else null.
-    - keywords: 4–12 search terms for what is being looked for, with synonyms in English, \
-    Finnish and Turkish (dişçi → dentist, hammaslääkäri, dental, dişçi). No stop words.
-    - is_forget_command: true if the user asks to forget/delete recent memories \
-    ("son 10 dakikayı unut"), with forget_minutes.
-    """
-
-    static func planUser(question: String, now: String) -> String {
-        "Now: \(now)\nQuestion: \(question)"
-    }
-
-    static func answerSystem(language: String) -> String {
+    static func answerUser(question: String, now: Date, hasLocation: Bool, records: [String], episodes: [String] = []) -> String {
         """
-        You answer the user's question ONLY from the memory records below. Each record is \
-        something the user's glasses saw, with the exact OCR text read from the frame.
-        Rules:
-        - Phone numbers, opening hours and prices may ONLY be given if they appear in a \
-        record's ocr_text. Copy them exactly.
-        - If the answer is not in the records, say you did not see it clearly. Never guess.
-        - Mention when and where it was seen if helpful (use the given local time and street).
-        - Keep the answer to one or two short spoken sentences, in language "\(language)".
-        Output a single JSON object and nothing else:
-        {"answer": "...", "label": "GORDUM" or "BILMIYORUM", "used_ids": [record ids], \
-        "value": the exact literal you quoted (phone/hours/price) or null}
+        Current local time: \(QueryEngine.promptTime(now))
+        User position known: \(hasLocation ? "yes" : "no")
+        Question: \(question)
+
+        Records (most relevant first):
+        \(records.isEmpty ? "(none — nothing relevant is in memory)" : records.joined(separator: "\n\n"))
+
+        Episodes of these records (every frame of the same walk or visit, in the order seen):
+        \(episodes.isEmpty ? "(none)" : episodes.joined(separator: "\n\n"))
         """
     }
 }
@@ -234,8 +287,14 @@ enum EvidenceRule {
     /// Every number in `answer` (except `allowed`, e.g. when the frame was seen) must appear in
     /// the OCR text. Short non-time numbers (< 3 digits, e.g. "2 m") are not checked.
     static func numbersSupported(in answer: String, ocr: String, allowed: Set<String>) -> Bool {
+        unsupportedNumbers(in: answer, ocr: ocr, allowed: allowed).isEmpty
+    }
+
+    /// Numbers in `answer` that the OCR text does not contain (see `numbersSupported`).
+    static func unsupportedNumbers(in answer: String, ocr: String, allowed: Set<String>) -> [String] {
         let ocrNumbers = numberRuns(ocr).map(canonicalNumber)
         let ocrDigits = digits(ocr)
+        var missing: [String] = []
         for (run, inRange) in numberRunsDetailed(answer) {
             let isTime = inRange || run.contains(":") || run.contains(".")
             let n = canonicalNumber(run)
@@ -244,26 +303,32 @@ enum EvidenceRule {
             // long ones (phones) may span OCR's own spacing.
             let supported = ocrNumbers.contains(n)
                 || (n.count >= 4 && (ocrDigits.contains(n) || ocrDigits.contains(digits(run))))
-            if !supported { return false }
+            if !supported { missing.append(run) }
         }
-        return true
+        return missing
     }
 
-    /// Is `value` supported by `ocr`?
+    /// Letters/digits only, lower-cased, accent-folded, single spaces ("NOT LENAC | EUROP" → "not lenac europ").
+    static func words(_ s: String) -> String {
+        String(normalized(s).map { $0.isLetter || $0.isNumber ? $0 : " " })
+            .split(separator: " ").joined(separator: " ")
+    }
+
+    /// Is `value` supported by `ocr`? A multi-line quote ("A | B | C", "A\nB") is checked part
+    /// by part; numbers must match digit-for-digit, words ignoring punctuation and case.
     static func supports(_ value: String, in ocr: String) -> Bool {
-        let d = digits(value)
+        let parts = value.components(separatedBy: CharacterSet(charactersIn: "|\n;"))
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        guard !parts.isEmpty else { return false }
+        if parts.count > 1 { return parts.allSatisfy { supports($0, in: ocr) } }
+        let part = parts[0]
+        let d = digits(part)
         if d.count >= 3 {
             return digits(ocr).contains(d)
         }
-        let v = normalized(value)
-        return !v.isEmpty && normalized(ocr).contains(v)
+        let v = words(part)
+        return !v.isEmpty && words(ocr).contains(v)
     }
 
-    /// Drops extracted literals that the OCR text does not contain.
-    static func clean(_ record: ExtractedRecord, ocr: String) -> ExtractedRecord {
-        var r = record
-        if let phone = r.phone, !supports(phone, in: ocr) { r.phone = nil }
-        if let hours = r.hours, !supports(hours, in: ocr) { r.hours = nil }
-        return r
-    }
 }

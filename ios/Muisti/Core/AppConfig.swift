@@ -111,8 +111,16 @@ final class AppConfig {
     var embedKey: String {
         didSet { KeychainStore.write(embedKey.trimmingCharacters(in: .whitespacesAndNewlines), for: "embed-api-key") }
     }
+    /// Empty = no reranking.
+    var rerankModel: String { didSet { save("rerankModel", rerankModel) } }
+    /// Empty = the embedding key (both are NVIDIA build keys). Keychain only.
+    var rerankKey: String {
+        didSet { KeychainStore.write(rerankKey.trimmingCharacters(in: .whitespacesAndNewlines), for: "rerank-api-key") }
+    }
     var retentionDays: Int { didSet { save("retentionDays", retentionDays) } }
-    var voiceLocale: String { didSet { save("voiceLocale", voiceLocale) } }
+    /// Speech recognition is locked to English (not the phone language, not a saved choice).
+    /// Answers are spoken in the language Nemotron detects in the question.
+    let voiceLocale = "en-US"
     var speakAnswers: Bool { didSet { save("speakAnswers", speakAnswers) } }
     var zones: [NoRecordZone] {
         didSet { if let data = try? JSONEncoder().encode(zones) { defaults.set(data, forKey: "zones") } }
@@ -143,11 +151,14 @@ final class AppConfig {
         recordToDisk = defaults.object(forKey: "recordRaw") as? Bool ?? false
         apiBaseURL = defaults.string(forKey: "apiBaseURL") ?? NemotronClient.Provider.verda.baseURL.absoluteString
         chatModel = defaults.string(forKey: "chatModel") ?? NemotronClient.Provider.verda.chatModel
-        embedModel = defaults.string(forKey: "embedModel") ?? NemotronClient.Provider.verda.embedModel
+        var savedEmbed = defaults.string(forKey: "embedModel") ?? NemotronClient.Provider.verda.embedModel
+        if savedEmbed == "nvidia/nemotron-3-embed-1b" { savedEmbed = NemotronClient.Provider.nvidia.embedModel }   // → 3.5, re-embedded in the background
+        embedModel = savedEmbed
         embedBaseURL = defaults.string(forKey: "embedBaseURL") ?? ""
         embedKey = KeychainStore.read("embed-api-key") ?? ""
+        rerankModel = defaults.string(forKey: "rerankModel") ?? NemotronClient.defaultRerankModel
+        rerankKey = KeychainStore.read("rerank-api-key") ?? ""
         retentionDays = defaults.object(forKey: "retentionDays") as? Int ?? 7
-        voiceLocale = defaults.string(forKey: "voiceLocale") ?? "tr-TR"
         speakAnswers = defaults.object(forKey: "speakAnswers") as? Bool ?? true
         if let data = defaults.data(forKey: "zones"), let decoded = try? JSONDecoder().decode([NoRecordZone].self, from: data) {
             zones = decoded
@@ -189,10 +200,13 @@ final class AppConfig {
             s.embedBaseURL = url
         }
         s.embedKey = embedKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        s.rerankModel = rerankModel.trimmingCharacters(in: .whitespacesAndNewlines)
+        s.rerankKey = rerankKey.trimmingCharacters(in: .whitespacesAndNewlines)
         return s
     }
 
     /// Embeddings from NVIDIA build's hosted Nemotron 3.5 Embed (free key), chat stays where it is.
+    /// (Saved embedModel migrates 3-embed → 3.5; the worker re-embeds old rows.)
     func useNVIDIAEmbeddings() {
         embedBaseURL = NemotronClient.Provider.nvidia.baseURL.absoluteString
         embedModel = NemotronClient.Provider.nvidia.embedModel

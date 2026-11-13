@@ -106,7 +106,7 @@ final class LocationProvider: NSObject, CLLocationManagerDelegate {
            fix.timestamp.timeIntervalSince(last.timestamp) < 300 { return }
         geocodeInFlight = true
         lastGeocoded = fix
-        geocoder.reverseGeocodeLocation(fix.clLocation) { [weak self] placemarks, _ in
+        geocoder.reverseGeocodeLocation(fix.clLocation) { @Sendable [weak self] placemarks, _ in
             let name = placemarks?.first?.thoroughfare ?? placemarks?.first?.name
             Task { @MainActor in
                 self?.geocodeInFlight = false

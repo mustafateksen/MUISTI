@@ -14,4 +14,9 @@ enum ISO8601 {
         lock.lock(); defer { lock.unlock() }
         return formatter.string(from: date)
     }
+
+    static func date(from string: String) -> Date? {
+        lock.lock(); defer { lock.unlock() }
+        return formatter.date(from: string)
+    }
 }
