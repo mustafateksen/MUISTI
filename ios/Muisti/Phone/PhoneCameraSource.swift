@@ -129,6 +129,7 @@ final class PhoneCameraEngine: NSObject, @unchecked Sendable,
             if busy { return waiter.resume(returning: nil) }
             queue.async {
                 let settings = AVCapturePhotoSettings(format: [AVVideoCodecKey: AVVideoCodecType.jpeg])
+                settings.maxPhotoDimensions = self.photoOutput.maxPhotoDimensions
                 self.photoOutput.capturePhoto(with: settings, delegate: self)
             }
         }
@@ -157,6 +158,11 @@ final class PhoneCameraEngine: NSObject, @unchecked Sendable,
             if let connection = output.connection(with: .video), connection.isVideoRotationAngleSupported(90) {
                 connection.videoRotationAngle = 90   // portrait, like the glasses
             }
+        }
+        // The 720p preset would also cap stills at 720p; open the photo output to the largest
+        // size this camera format supports so "Yüksek çöz." means something.
+        if let largest = device.activeFormat.supportedMaxPhotoDimensions.max(by: { $0.width * $0.height < $1.width * $1.height }) {
+            photoOutput.maxPhotoDimensions = largest
         }
         session.commitConfiguration()
 

@@ -65,6 +65,9 @@ final class GlassesCaptureSource: CaptureSource {
     @ObservationIgnored private var backgroundPaused = false
     @ObservationIgnored private var suppressErrorsUntil: Date?
 
+    /// Camera permission was confirmed `.granted` (a check before any device was discovered
+    /// cannot answer, so it is repeated once the glasses appear).
+    @ObservationIgnored private var permissionVerified = false
     @ObservationIgnored private var wakeStreamStopIntended = false
     @ObservationIgnored private var photoStartRequested = false
     @ObservationIgnored private var cameraEverStarted = false
@@ -80,8 +83,10 @@ final class GlassesCaptureSource: CaptureSource {
     /// When the photo capability last reported `.started`; the sensor needs a beat after the
     /// wake-up stream is put down before a still is accepted.
     @ObservationIgnored private var photoReadyAt: Date?
-    /// Resolutions that failed on this device; the next lower one is tried instead.
+    /// Resolutions that failed repeatedly on this device; the next lower one is tried instead.
     @ObservationIgnored private var failedResolutions: Set<PhotoResolution> = []
+    /// Consecutive fast failures per resolution. Three in a row = treat as unsupported.
+    @ObservationIgnored private var fastFailures: [PhotoResolution: Int] = [:]
     @ObservationIgnored private let pendingPhoto = OneShot<Data>()
     @ObservationIgnored private let pendingStreamPhoto = OneShot<Data>()
     @ObservationIgnored private let encoder = StreamFrameEncoder()
@@ -89,7 +94,7 @@ final class GlassesCaptureSource: CaptureSource {
     @ObservationIgnored private var deviceMonitorTask: Task<Void, Never>?
     @ObservationIgnored private var backgroundTask: Task<Void, Never>?
 
-    private static let photoTimeout: Duration = .seconds(15)   // first 12 MP still can take >10 s
+    private static let photoTimeout: Duration = .seconds(25)   // field: first 12 MP still took 13–15 s
 
     init(wearables: any WearablesInterface = Wearables.shared) {
         self.wearables = wearables
@@ -169,29 +174,59 @@ final class GlassesCaptureSource: CaptureSource {
             return
         }
 
-        do {
-            let status = try await wearables.checkPermissionStatus(.camera)
-            if status != .granted {
+        if !permissionVerified {
+            switch await checkCameraPermission() {
+            case .granted: permissionVerified = true
+            case .denied:
                 blocked = .needsPermission
                 recompute()
                 return
+            case .unknown:
+                // No connected device to ask yet. Not a denial: ask again when it appears.
+                break
             }
-        } catch {
-            // No connected device to ask yet. Not a denial: wait for the device, and let the
-            // stream report `.permissionDenied` if it really is missing.
-            Log.glasses.info("permission check deferred: \(error.description, privacy: .public)")
         }
 
         if session == nil, hasActiveDevice {
-            startSession()
+            await startSessionIfAllowed()
         }
         recompute()
+    }
+
+    private enum PermissionAnswer { case granted, denied, unknown }
+
+    private func checkCameraPermission() async -> PermissionAnswer {
+        do {
+            return try await wearables.checkPermissionStatus(.camera) == .granted ? .granted : .denied
+        } catch {
+            Log.glasses.info("permission check deferred: \(error.description, privacy: .public)")
+            return .unknown
+        }
+    }
+
+    /// Starts a session, first confirming camera permission if that was not possible earlier.
+    private func startSessionIfAllowed() async {
+        if !permissionVerified {
+            switch await checkCameraPermission() {
+            case .granted:
+                permissionVerified = true
+            case .denied:
+                blocked = .needsPermission
+                recompute()
+                return
+            case .unknown:
+                break   // still unanswerable: try; the stream reports `.permissionDenied` if so
+            }
+        }
+        guard wantRunning, session == nil, blocked == nil else { return }
+        startSession()
     }
 
     /// Call after the user confirmed the switch to Meta AI.
     func requestPermissionAndStart(using controller: WearablesController) async {
         guard let config else { return }
         if await controller.requestCameraPermission() {
+            permissionVerified = true
             blocked = nil
             await start(config: config)
         } else {
@@ -272,11 +307,16 @@ final class GlassesCaptureSource: CaptureSource {
             let elapsed = (ContinuousClock.now - t0).milliseconds
             Log.glasses.error("photo (\(resolution.rawValue, privacy: .public)) failed after \(elapsed) ms")
             if elapsed < 3000, resolution != .small {
-                failedResolutions.insert(resolution)
-                Log.glasses.info("next photo will use \(Self.usableResolution(resolution, excluding: self.failedResolutions).rawValue, privacy: .public)")
+                let count = (fastFailures[resolution] ?? 0) + 1
+                fastFailures[resolution] = count
+                if count >= 3 {
+                    failedResolutions.insert(resolution)
+                    Log.glasses.info("next photo will use \(Self.usableResolution(resolution, excluding: self.failedResolutions).rawValue, privacy: .public)")
+                }
             }
             return nil
         }
+        fastFailures[resolution] = 0
         lastTransferMillis = (ContinuousClock.now - t0).milliseconds
         // MockDeviceKit hands back the image file as-is (already upright).
         let rotation = MockRuntime.isActive ? 0 : (config?.glassesPhotoRotation ?? 90)
@@ -374,7 +414,7 @@ final class GlassesCaptureSource: CaptureSource {
             self.reconnectTask = nil
             guard self.wantRunning, self.session == nil, !self.backgroundPaused,
                   self.hasActiveDevice, self.blocked == nil else { return }
-            self.startSession()
+            await self.startSessionIfAllowed()
         }
     }
 
@@ -433,9 +473,9 @@ final class GlassesCaptureSource: CaptureSource {
             photo.photoDataPublisher.listen { [weak self] data in
                 if let meta = data.metadata {
                     let hex = meta.prefix(400).map { String(format: "%02x", $0) }.joined()
-                    Log.glasses.info("photo metadata \(meta.count) B: \(hex, privacy: .public)")
+                    Log.glasses.debug("photo metadata \(meta.count) B: \(hex, privacy: .public)")
                 } else {
-                    Log.glasses.info("photo metadata: none")
+                    Log.glasses.debug("photo metadata: none")
                 }
                 Task { @MainActor in self?.pendingPhoto.fulfill(data.imageData) }
             }.store(in: cameraTokens)
@@ -580,6 +620,7 @@ final class GlassesCaptureSource: CaptureSource {
         guard !errorsSuppressed else { return }
         switch error {
         case .permissionDenied:
+            permissionVerified = false
             blocked = .needsPermission
             lastError = "Kamera izni yok. İzin ver ya da telefon kamerasına geç."
         case .hingesClosed:
@@ -600,6 +641,7 @@ final class GlassesCaptureSource: CaptureSource {
         guard !errorsSuppressed else { return }
         switch error {
         case .permissionDenied:
+            permissionVerified = false
             blocked = .needsPermission
             lastError = "Kamera izni yok."
         case .deviceHealthCritical:
@@ -765,25 +807,33 @@ final class GlassesCaptureSource: CaptureSource {
 
 // MARK: - Helpers
 
-/// One awaited value with a timeout. Resumes exactly once.
+/// One awaited value with a timeout. Resumes exactly once. Each wait has its own id so a
+/// timeout left over from an earlier wait can never cut a later one short.
 @MainActor
 final class OneShot<Value: Sendable> {
     private var continuation: CheckedContinuation<Value?, Never>?
+    private var waitId = 0
+    private var timeoutTask: Task<Void, Never>?
 
     var isWaiting: Bool { continuation != nil }
 
     func wait(timeout: Duration) async -> Value? {
         fulfill(nil)   // never strand an earlier waiter
+        waitId += 1
+        let id = waitId
         return await withCheckedContinuation { continuation in
             self.continuation = continuation
-            Task { @MainActor [weak self] in
+            timeoutTask = Task { @MainActor [weak self] in
                 try? await Task.sleep(for: timeout)
-                self?.fulfill(nil)
+                guard !Task.isCancelled, let self, self.waitId == id else { return }
+                self.fulfill(nil)
             }
         }
     }
 
     func fulfill(_ value: Value?) {
+        timeoutTask?.cancel()
+        timeoutTask = nil
         guard let continuation else { return }
         self.continuation = nil
         continuation.resume(returning: value)

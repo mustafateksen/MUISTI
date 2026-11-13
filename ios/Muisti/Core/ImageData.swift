@@ -62,4 +62,29 @@ enum ImageData {
         let options = [CIImageRepresentationOption(rawValue: kCGImageDestinationLossyCompressionQuality as String): quality]
         return ciContext.jpegRepresentation(of: image.oriented(orientation), colorSpace: space, options: options) ?? data
     }
+
+    /// Downsampled copy (long edge ≤ `maxPixel`), EXIF orientation applied. Decodes only what
+    /// it needs, so a 12 MP still never sits fully decoded in memory.
+    static func thumbnail(_ data: Data, maxPixel: Int) -> CGImage? {
+        guard let source = CGImageSourceCreateWithData(data as CFData, [kCGImageSourceShouldCache: false] as CFDictionary) else {
+            return nil
+        }
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxPixel,
+            kCGImageSourceShouldCacheImmediately: true,
+        ]
+        return CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
+    }
+
+    /// JPEG whose long edge is at most `maxPixel`; returns the input if it is already small.
+    static func downscaledJPEG(_ data: Data, maxPixel: Int, quality: Double = 0.8) -> Data {
+        let size = pixelSize(of: data)
+        guard max(size.width, size.height) > CGFloat(maxPixel),
+              let image = thumbnail(data, maxPixel: maxPixel),
+              let jpeg = encodeJPEG(image, quality: quality)
+        else { return data }
+        return jpeg
+    }
 }

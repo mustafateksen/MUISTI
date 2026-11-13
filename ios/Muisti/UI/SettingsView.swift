@@ -5,18 +5,43 @@ struct SettingsView: View {
     @Bindable var config: AppConfig
     @Environment(\.dismiss) private var dismiss
     @State private var serverCheck: String?
+    @State private var zoneMessage: String?
 
     var body: some View {
         NavigationStack {
             Form {
-                Section("Sunucu (Kişi 3)") {
-                    TextField("http://192.168.1.10:8000", text: $config.serverBaseURL)
-                        .keyboardType(.URL)
+                Section {
+                    Menu("Hazır sağlayıcı seç") {
+                        ForEach(NemotronClient.Provider.allCases) { provider in
+                            Button(provider.label) { config.use(provider) }
+                        }
+                    }
+                    SecureField("API anahtarı", text: $config.apiKey)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
-                    Toggle("Kareleri /ingest'e gönder", isOn: $config.uploadEnabled)
-                    Button("Bağlantıyı dene") { Task { await checkServer() } }
+                    TextField("Adres (https://…/v1)", text: $config.apiBaseURL)
+                        .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled().font(.footnote)
+                    TextField("Sohbet modeli", text: $config.chatModel)
+                        .textInputAutocapitalization(.never).autocorrectionDisabled().font(.footnote)
+                    TextField("Gömme modeli (boş = yalnız anahtar kelime)", text: $config.embedModel)
+                        .textInputAutocapitalization(.never).autocorrectionDisabled().font(.footnote)
+                    Button("Bağlantıyı dene") { Task { await checkNemotron() } }
                     if let serverCheck { Text(serverCheck).font(.footnote).foregroundStyle(.secondary) }
+                } header: {
+                    Text("Nemotron 3.5 Super VL")
+                } footer: {
+                    Text("Anahtar Keychain'de saklanır, koda ya da yedeğe girmez. Telefondan yalnızca bulanıklaştırılmış küçük kare ve okunan yazı gönderilir; hafıza telefonda kalır.")
+                }
+
+                Section("Ses") {
+                    Picker("Soru dili", selection: $config.voiceLocale) {
+                        Text("Türkçe").tag("tr-TR")
+                        Text("English").tag("en-US")
+                        Text("Suomi").tag("fi-FI")
+                    }
+                    Toggle("Cevabı sesli oku (gözlük hoparlörü)", isOn: $config.speakAnswers)
+                    Text("Eller serbest: “Hey Siri, Muisti'ye sor” ya da Ayarlar > Eylem Düğmesi > Kestirme > Muisti'ye sor.")
+                        .font(.footnote).foregroundStyle(.secondary)
                 }
 
                 Section {
@@ -36,7 +61,7 @@ struct SettingsView: View {
                         ForEach(StillQuality.allCases) { Text($0.rawValue).tag($0) }
                     }
                     Stepper("Sabit aralık (C): \(Int(config.intervalSeconds)) sn", value: $config.intervalSeconds, in: 2...60, step: 1)
-                    Stepper("Akışta her \(config.passthroughEveryN). kareyi geçir", value: $config.passthroughEveryN, in: 1...30)
+                    Stepper("Akışta her \(config.passthroughEveryN). kareyi incele", value: $config.passthroughEveryN, in: 1...30)
                     Toggle("Gözlük gelince yeniden bağlan", isOn: $config.autoReconnect)
                     Picker("Gözlük fotoğrafını döndür", selection: $config.glassesPhotoRotation) {
                         Text("0°").tag(0)
@@ -70,11 +95,29 @@ struct SettingsView: View {
                     Text("Düşük pil (telefon < %20 ya da düşük güç modu, gözlük < %20) ve ısı aralıkları uzatır; kritik ısıda çekim durur.")
                 }
 
-                Section("Kayıt ve mahremiyet") {
-                    Toggle("Kareleri diske kaydet (veri seti)", isOn: $config.recordToDisk)
-                    Button("Son 10 dakikayı unut (kuyruk)", role: .destructive) {
+                Section {
+                    Stepper("Kayıtları \(config.retentionDays) gün sakla", value: $config.retentionDays, in: 1...30)
+                    Button("Son 10 dakikayı unut", role: .destructive) {
                         Task { await controller.forget(minutes: 10) }
                     }
+                    Button("Bulunduğum yeri kayıt dışı yap (100 m)") {
+                        zoneMessage = controller.addZoneHere(name: "Bölge \(config.zones.count + 1)")
+                            ? "Eklendi." : "Konum yok; kayıt sırasında tekrar dene."
+                    }
+                    if let zoneMessage { Text(zoneMessage).font(.footnote).foregroundStyle(.secondary) }
+                    ForEach(config.zones) { zone in
+                        HStack {
+                            Text(zone.name)
+                            Spacer()
+                            Text(String(format: "%.4f, %.4f", zone.latitude, zone.longitude)).font(.caption.monospaced()).foregroundStyle(.secondary)
+                        }
+                    }
+                    .onDelete { config.zones.remove(atOffsets: $0) }
+                    Toggle("Ham kareleri de kaydet (yalnızca veri seti)", isOn: $config.recordToDisk)
+                } header: {
+                    Text("Mahremiyet")
+                } footer: {
+                    Text("Yüzler ve plakalar telefonda bulanıklaştırılır; ham kare saklanmaz (veri seti anahtarı kapalıyken). Kayıt dışı bölgelerde kare alınsa bile hafızaya yazılmaz.")
                 }
             }
             .navigationTitle("Ayarlar")
@@ -94,19 +137,14 @@ struct SettingsView: View {
         value.rounded() == value ? String(Int(value)) : String(format: "%.1f", value)
     }
 
-    private func checkServer() async {
-        guard let url = config.serverURL else {
-            serverCheck = "Adres geçersiz."
-            return
-        }
-        var request = URLRequest(url: url, timeoutInterval: 5)
-        request.httpMethod = "GET"
+    private func checkNemotron() async {
+        serverCheck = "Deneniyor…"
+        await controller.applySettings()
         do {
-            let (_, response) = try await URLSession.shared.data(for: request)
-            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-            serverCheck = "Sunucu yanıt verdi (HTTP \(status))."
+            let reply = try await controller.ai.ping()
+            serverCheck = "Nemotron yanıt verdi: \(reply.prefix(20))"
         } catch {
-            serverCheck = "Ulaşılamadı: \(error.localizedDescription)"
+            serverCheck = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         }
     }
 }

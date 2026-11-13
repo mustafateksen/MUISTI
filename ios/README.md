@@ -89,10 +89,25 @@ Brifingdeki `GlassesPhotoSource` ayrı bir dosya olarak yazılmadı; bu mod `Gla
 
 Sahte cihazla ilgili not: menteşe açılsa bile gözlük **takılana kadar** oturum "Device unavailable" ile reddediliyor. Gerçek gözlükte bunu doğrulamak gerekiyor.
 
+## Gerçek gözlükte ölçülenler (Ray-Ban Meta Gen 2, 13 Kasım)
+
+| Konu | Sonuç |
+|---|---|
+| `camera.photo` `.full` | **4032×3024 (12 MP)**, 1,7–1,9 MB, aktarım **2–15 sn** (ilk kare en yavaş) |
+| Fotoğraf yönü | Sensör sırasıyla geliyor, EXIF'te yön yok → 90° saat yönü pikselde çevriliyor (Ayarlar'dan değişir; sahte gözlükte 0°) |
+| Akış sonrası çekim | Akış durdurulduktan hemen sonra istenen fotoğraf "Capture failed" → fotoğraf `started` olduktan sonra 1 sn bekleniyor |
+| Akış (mod A) `.high` 7 kare/sn | 720×1280, dik, ~4,4 kare/sn kaydedildi |
+| Akış içi fotoğraf (mod B) | **1080×1440**, ~4 sn |
+| Telefon kamerası | Akış 720×1280; yüksek çözünürlük 2376×4224 |
+| `/ingest` yükü | Sunucuya giden kopya uzun kenar 2048 px: 12 MP kare 2,5 MB → **0,86 MB** base64. Diske ve Kişi 2'ye tam boyut |
+
+Telefonla hata ayıklama (DEBUG): `xcrun devicectl device process launch --device <UDID> --console --environment-variables '{"OS_ACTIVITY_DT_MODE":"enable"}' fi.junction.powerpuffboys.muisti --autostart [--mode=…] [--source=phone] [--script=capture@6,highres@10,stop@30,start@33]`
+
 ## Doğrulanmayanlar (gerçek gözlük penceresinde)
 
-- `camera.photo` `.full` boyutu ve Bluetooth aktarım süresi (BirdSpotter: ~1 sn, bazen 9 sn). Varsayılan `.full` + `.medium` kalite. Yavaşsa Ayarlar'dan `.large`'a düşür.
-- `stream.capturePhoto` (mod B) görüntüsünün çözünürlüğü.
+- `.large` boyutu ve aktarım süresi (`.full` 2–15 sn; daha sık kare gerekirse karşılaştır).
+- Yürürken uyarlamalı modun gerçek kare sıklığı (masa başında "duruyor" olduğu için 45 sn'de bir yeniler).
+- Menteşe kapat/aç ve gözlüğü çıkar/tak gerçek gözlükte (sahte cihazda doğrulandı).
 - 10 dakikada pil tüketimi: uyarlamalı, A (2 ve 24 kare/sn) ve C ayrı ayrı ölçülmeli. Uyarlamalı modun asıl iddiası bu.
 - `external-accessory` / `UISupportedExternalAccessoryProtocols` Gen 2 için gerekli mi? (Kılavuz istiyor, CameraAccess örneğinde yok; ikisi de eklendi.)
 - Kayıt sırasında ekran kilitlenmesin diye `isIdleTimerDisabled` açık; arka plana geçince gözlük oturumu kapanıyor.

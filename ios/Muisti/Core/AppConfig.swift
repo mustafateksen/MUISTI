@@ -91,7 +91,6 @@ struct CaptureConfig: Sendable, Equatable {
 final class AppConfig {
     static let allowedFPS: [UInt] = [2, 7, 15, 24, 30]
 
-    var serverBaseURL: String { didSet { save("serverBaseURL", serverBaseURL) } }
     var sourceKind: SourceKind { didSet { save("sourceKind", sourceKind.rawValue) } }
     var mode: CaptureMode { didSet { save("mode", mode.rawValue) } }
     var streamQuality: StreamQuality { didSet { save("streamQuality", streamQuality.rawValue) } }
@@ -100,8 +99,22 @@ final class AppConfig {
     var stillQuality: StillQuality { didSet { save("stillQuality", stillQuality.rawValue) } }
     var intervalSeconds: Double { didSet { save("intervalSeconds", intervalSeconds) } }
     var passthroughEveryN: Int { didSet { save("passthroughEveryN", passthroughEveryN) } }
-    var recordToDisk: Bool { didSet { save("recordToDisk", recordToDisk) } }
-    var uploadEnabled: Bool { didSet { save("uploadEnabled", uploadEnabled) } }
+    /// Raw full-size frames to Documents/sessions (dataset for the glasses window only).
+    /// Off by default: the plan says raw frames are not kept, only blurred keyframes.
+    var recordToDisk: Bool { didSet { save("recordRaw", recordToDisk) } }
+    var apiBaseURL: String { didSet { save("apiBaseURL", apiBaseURL) } }
+    var chatModel: String { didSet { save("chatModel", chatModel) } }
+    var embedModel: String { didSet { save("embedModel", embedModel) } }
+    var retentionDays: Int { didSet { save("retentionDays", retentionDays) } }
+    var voiceLocale: String { didSet { save("voiceLocale", voiceLocale) } }
+    var speakAnswers: Bool { didSet { save("speakAnswers", speakAnswers) } }
+    var zones: [NoRecordZone] {
+        didSet { if let data = try? JSONEncoder().encode(zones) { defaults.set(data, forKey: "zones") } }
+    }
+    /// Stored in the Keychain, never in UserDefaults.
+    var apiKey: String {
+        didSet { KeychainStore.write(apiKey.trimmingCharacters(in: .whitespacesAndNewlines), for: "nvidia-api-key") }
+    }
     var autoReconnect: Bool { didSet { save("autoReconnect", autoReconnect) } }
     var glassesPhotoRotation: Int { didSet { save("glassesPhotoRotation", glassesPhotoRotation) } }
     var tuning: AdaptiveTuning {
@@ -112,7 +125,6 @@ final class AppConfig {
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
-        serverBaseURL = defaults.string(forKey: "serverBaseURL") ?? "http://192.168.1.10:8000"
         sourceKind = SourceKind(rawValue: defaults.string(forKey: "sourceKind") ?? "") ?? .glasses
         mode = CaptureMode(rawValue: defaults.string(forKey: "mode") ?? "") ?? .adaptive
         streamQuality = StreamQuality(rawValue: defaults.string(forKey: "streamQuality") ?? "") ?? .high
@@ -122,8 +134,19 @@ final class AppConfig {
         stillQuality = StillQuality(rawValue: defaults.string(forKey: "stillQuality") ?? "") ?? .medium
         intervalSeconds = defaults.object(forKey: "intervalSeconds") as? Double ?? 5
         passthroughEveryN = defaults.object(forKey: "passthroughEveryN") as? Int ?? 5
-        recordToDisk = defaults.object(forKey: "recordToDisk") as? Bool ?? true
-        uploadEnabled = defaults.object(forKey: "uploadEnabled") as? Bool ?? true
+        recordToDisk = defaults.object(forKey: "recordRaw") as? Bool ?? false
+        apiBaseURL = defaults.string(forKey: "apiBaseURL") ?? NemotronClient.Provider.verda.baseURL.absoluteString
+        chatModel = defaults.string(forKey: "chatModel") ?? NemotronClient.Provider.verda.chatModel
+        embedModel = defaults.string(forKey: "embedModel") ?? NemotronClient.Provider.verda.embedModel
+        retentionDays = defaults.object(forKey: "retentionDays") as? Int ?? 7
+        voiceLocale = defaults.string(forKey: "voiceLocale") ?? "tr-TR"
+        speakAnswers = defaults.object(forKey: "speakAnswers") as? Bool ?? true
+        if let data = defaults.data(forKey: "zones"), let decoded = try? JSONDecoder().decode([NoRecordZone].self, from: data) {
+            zones = decoded
+        } else {
+            zones = []
+        }
+        apiKey = KeychainStore.read("nvidia-api-key") ?? ""
         autoReconnect = defaults.object(forKey: "autoReconnect") as? Bool ?? true
         glassesPhotoRotation = defaults.object(forKey: "glassesPhotoRotation") as? Int ?? 90
         if let data = defaults.data(forKey: "tuning"),
@@ -146,8 +169,21 @@ final class AppConfig {
         )
     }
 
-    var serverURL: URL? {
-        URL(string: serverBaseURL.trimmingCharacters(in: .whitespacesAndNewlines))
+    var nemotronSettings: NemotronClient.Settings {
+        var s = NemotronClient.Settings()
+        s.apiKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let url = URL(string: apiBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)), url.scheme == "https" {
+            s.baseURL = url
+        }
+        if !chatModel.isEmpty { s.chatModel = chatModel }
+        s.embedModel = embedModel.trimmingCharacters(in: .whitespacesAndNewlines)
+        return s
+    }
+
+    func use(_ provider: NemotronClient.Provider) {
+        apiBaseURL = provider.baseURL.absoluteString
+        chatModel = provider.chatModel
+        embedModel = provider.embedModel
     }
 
     func resetTuning() { tuning = AdaptiveTuning() }

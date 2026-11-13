@@ -86,10 +86,10 @@ struct DebugMenu: View {
                 }
 
                 Section("Veri") {
-                    Button("Kuyruğu boşalt", role: .destructive) {
-                        Task { await controller.uploadQueue.purgeAll() }
+                    Button("Tüm hafızayı sil", role: .destructive) {
+                        Task { await controller.deleteAllMemories() }
                     }
-                    Text("Kayıtlar: Dosyalar > Bu iPhone'da > Muisti > sessions").font(.footnote)
+                    Text("Ham veri seti (açıksa): Dosyalar > Bu iPhone'da > Muisti > sessions").font(.footnote)
                     if !sessionsPath.isEmpty {
                         Text(sessionsPath).font(.caption2.monospaced()).textSelection(.enabled)
                     }

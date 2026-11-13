@@ -39,7 +39,13 @@ final class LocationProvider: NSObject, CLLocationManagerDelegate {
     /// Every accepted fix, for the recorder's `gps.jsonl` track.
     @ObservationIgnored var onFix: ((LocationFix) -> Void)?
 
+    /// Street name from reverse geocoding, refreshed every ~50 m (Apple rate-limits this).
+    private(set) var street: String?
+
     @ObservationIgnored private let manager = CLLocationManager()
+    @ObservationIgnored private let geocoder = CLGeocoder()
+    @ObservationIgnored private var lastGeocoded: LocationFix?
+    @ObservationIgnored private var geocodeInFlight = false
     @ObservationIgnored private var lastOdometerFix: LocationFix?
 
     override init() {
@@ -78,6 +84,7 @@ final class LocationProvider: NSObject, CLLocationManagerDelegate {
         for fix in fixes where fix.accuracy > 0 {
             latest = fix
             onFix?(fix)
+            refreshStreetIfNeeded(fix)
             guard fix.accuracy <= 25 else { continue }
             if let previous = lastOdometerFix {
                 let step = fix.clLocation.distance(from: previous.clLocation)
@@ -88,6 +95,22 @@ final class LocationProvider: NSObject, CLLocationManagerDelegate {
                 }
             } else {
                 lastOdometerFix = fix
+            }
+        }
+    }
+
+    private func refreshStreetIfNeeded(_ fix: LocationFix) {
+        guard fix.accuracy <= 50, !geocodeInFlight else { return }
+        if let last = lastGeocoded,
+           fix.clLocation.distance(from: last.clLocation) < 50,
+           fix.timestamp.timeIntervalSince(last.timestamp) < 300 { return }
+        geocodeInFlight = true
+        lastGeocoded = fix
+        geocoder.reverseGeocodeLocation(fix.clLocation) { [weak self] placemarks, _ in
+            let name = placemarks?.first?.thoroughfare ?? placemarks?.first?.name
+            Task { @MainActor in
+                self?.geocodeInFlight = false
+                if let name { self?.street = name }
             }
         }
     }

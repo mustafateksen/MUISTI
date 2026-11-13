@@ -105,7 +105,12 @@ struct StatusBanner: View {
 
     private var locationLine: String {
         guard let fix = controller.location.freshFix() else {
-            return controller.location.isRunning ? "Konum bekleniyor" : "Konum kapalı"
+            switch controller.location.authorization {
+            case .denied, .restricted:
+                return "Konum izni yok: kareler konumsuz kaydediliyor. Ayarlar > Muisti > Konum."
+            default:
+                return controller.location.isRunning ? "Konum bekleniyor" : "Konum kapalı"
+            }
         }
         var parts = [String(format: "±%.0f m", fix.accuracy)]
         if let speed = fix.validSpeed { parts.append(String(format: "%.1f m/sn", speed)) }
@@ -116,16 +121,12 @@ struct StatusBanner: View {
     }
 
     private var queueLine: String {
-        let q = controller.queueStatus
-        var parts = ["alınan \(controller.capturedCount)", "tutulan \(controller.keptCount)"]
-        if !q.enabled {
-            parts.append("yükleme kapalı")
-        } else {
-            parts.append("bekleyen \(q.pending)")
-            parts.append("gönderilen \(q.sent)")
-            if !q.online { parts.append("çevrimdışı") }
-        }
-        if let folder = controller.recordingFolder { parts.append("diske: \(folder)") }
+        let stats = controller.pipelineStats
+        var parts = ["alınan \(controller.capturedCount)", "hafızada \(controller.memoryCount)"]
+        if controller.pendingCount > 0 { parts.append("Nemotron bekleyen \(controller.pendingCount)") }
+        if stats.droppedTotal > 0 { parts.append("elenen \(stats.droppedTotal) (\(stats.droppedSummary))") }
+        if !controller.enrichment.online { parts.append("çevrimdışı") }
+        if let folder = controller.recordingFolder { parts.append("ham: \(folder)") }
         return parts.joined(separator: " · ")
     }
 
@@ -136,7 +137,10 @@ struct StatusBanner: View {
         if config.sourceKind == .glasses, let e = glasses.lastError { return e }
         if config.sourceKind == .glasses, let w = glasses.healthWarning { return w }
         if let e = wearables.lastError { return e }
-        if let e = controller.queueStatus.lastError, controller.queueStatus.enabled { return e }
+        if !controller.enrichment.hasKey, controller.memoryCount > 0 {
+            return "Nemotron API anahtarı yok: kareler telefonda bekliyor (Ayarlar > Nemotron)."
+        }
+        if let e = controller.enrichment.lastError { return e }
         return nil
     }
 }

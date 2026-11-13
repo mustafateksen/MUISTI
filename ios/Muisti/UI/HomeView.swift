@@ -50,12 +50,25 @@ struct HomeView: View {
                 DebugMenu(controller: controller, mock: controller.mock)
             }
             #endif
+            .onChange(of: wearables.registrationState) { _, newState in
+                // Back from Meta AI: continue where the user left off.
+                guard newState == .registered, controller.isRunning, controller.state == .needsRegistration else { return }
+                Task { await controller.start() }
+            }
             #if DEBUG
             .task {
                 let args = ProcessInfo.processInfo.arguments
+                // `--nemotron-key=…`: store a key in the Keychain on a test device (never in code).
+                if let key = args.first(where: { $0.hasPrefix("--nemotron-key=") }) {
+                    config.apiKey = String(key.dropFirst(15))
+                    await controller.applySettings()
+                }
                 // `--autostart`: real glasses, start capturing on launch (device debugging).
                 if let rot = args.first(where: { $0.hasPrefix("--rotate=") }), let deg = Int(rot.dropFirst(9)) {
                     config.glassesPhotoRotation = deg
+                }
+                if let source = args.first(where: { $0.hasPrefix("--source=") }) {
+                    config.sourceKind = SourceKind(rawValue: String(source.dropFirst(9))) ?? config.sourceKind
                 }
                 if args.contains("--autostart") {
                     if let mode = args.first(where: { $0.hasPrefix("--mode=") }) {
@@ -63,17 +76,18 @@ struct HomeView: View {
                     }
                     try? await Task.sleep(for: .seconds(2))
                     await controller.start()
+                    if let script = args.first(where: { $0.hasPrefix("--script=") }) {
+                        await runMockScript(String(script.dropFirst(9)))
+                    }
                     return
                 }
                 // `--mock-autostart`: simulator demo without touching anything.
                 guard args.contains("--mock-autostart") else { return }
-                controller.mock.quickStart()
+                let fresh = args.contains("--mock-unregistered")
+                controller.mock.quickStart(registered: !fresh, permissionsGranted: !fresh)
                 config.sourceKind = .glasses
                 if let mode = ProcessInfo.processInfo.arguments.first(where: { $0.hasPrefix("--mode=") }) {
                     config.mode = CaptureMode(rawValue: String(mode.dropFirst(7))) ?? config.mode
-                }
-                if let server = ProcessInfo.processInfo.arguments.first(where: { $0.hasPrefix("--server=") }) {
-                    config.serverBaseURL = String(server.dropFirst(9))
                 }
                 try? await Task.sleep(for: .seconds(1))
                 await controller.start()
@@ -117,6 +131,13 @@ struct HomeView: View {
             case "hot": controller.mock.setThermal(.severe)
             case "deny": controller.mock.denyCamera()
             case "background": NotificationCenter.default.post(name: UIApplication.didEnterBackgroundNotification, object: nil)
+            case "register": await wearables.register()
+            case "permit": await glasses.requestPermissionAndStart(using: wearables)
+            case "highres": await controller.requestHighRes()
+            case "ask": await controller.voice.ask(ProcessInfo.processInfo.arguments.first { $0.hasPrefix("--ask=") }.map { String($0.dropFirst(6)) } ?? "Ne gördüm?")
+            case "capture": await controller.captureNow()
+            case "stop": await controller.stop()
+            case "start": await controller.start()
             default: break
             }
         }

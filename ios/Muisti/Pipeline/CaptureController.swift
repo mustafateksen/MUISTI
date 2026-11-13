@@ -3,40 +3,9 @@ import MWDATCore
 import Observation
 import UIKit
 
-/// Recorder + perception sink + upload queue, off the main actor, strictly in order.
-actor FramePipeline {
-    private var sink: any FrameSink
-    private var customSink = false
-    private var recordToDisk = true
-    private var upload = true
-    let recorder: SessionRecorder
-    let queue: UploadQueue
-
-    init(recorder: SessionRecorder, queue: UploadQueue) {
-        self.recorder = recorder
-        self.queue = queue
-        sink = PassthroughSink(everyN: 5)
-    }
-
-    func configure(recordToDisk: Bool, upload: Bool, passthroughEveryN: Int) {
-        self.recordToDisk = recordToDisk
-        self.upload = upload
-        if !customSink { sink = PassthroughSink(everyN: passthroughEveryN) }
-    }
-
-    /// Kişi 2 plugs the perception line in here.
-    func setSink(_ sink: any FrameSink) {
-        self.sink = sink
-        customSink = true
-    }
-
-    /// Returns whether the frame was kept by the sink.
-    func handle(_ frame: CapturedFrame) async -> Bool {
-        if recordToDisk { await recorder.write(frame) }
-        guard let payload = await sink.process(frame) else { return false }
-        if upload { await queue.enqueue(payload, seenAt: frame.capturedAt) }
-        return true
-    }
+struct PipelineItem: Sendable {
+    let frame: CapturedFrame
+    let street: String?
 }
 
 struct FrameSummary: Equatable {
@@ -50,8 +19,9 @@ struct FrameSummary: Equatable {
     let hasLocation: Bool
 }
 
-/// The one object the UI talks to. Owns the sources, sensors, the adaptive scheduler and
-/// the pipeline. Single consumer of every source's `frames`.
+/// The one object the UI talks to. Owns the sources, sensors, the adaptive scheduler, the
+/// on-phone memory (perception → SQLite → Nemotron enrichment) and the voice assistant.
+/// Single consumer of every source's `frames`.
 @Observable
 @MainActor
 final class CaptureController {
@@ -70,7 +40,12 @@ final class CaptureController {
     private(set) var lastFrame: FrameSummary?
     private(set) var capturedCount = 0
     private(set) var keptCount = 0
-    private(set) var queueStatus = UploadQueueStatus()
+    private(set) var pipelineStats = PipelineStats()
+    private(set) var enrichment = EnrichmentStatus()
+    private(set) var memoryCount = 0
+    private(set) var pendingCount = 0
+    /// Bumped whenever memories change, so lists can refresh.
+    private(set) var memoryRevision = 0
     private(set) var schedulerText = "—"
     private(set) var movement: Movement = .unknown
     private(set) var batteryFactor: Double = 1
@@ -89,9 +64,13 @@ final class CaptureController {
     @ObservationIgnored private var failedStills = 0
     @ObservationIgnored private var retryNotBefore: Date?
     @ObservationIgnored private let recorder = SessionRecorder()
-    @ObservationIgnored let uploadQueue = UploadQueue()
-    @ObservationIgnored private let pipeline: FramePipeline
-    @ObservationIgnored private let pipelineInput: AsyncStream<CapturedFrame>.Continuation
+    @ObservationIgnored let store = MemoryStore()
+    @ObservationIgnored let ai: NemotronClient
+    @ObservationIgnored private let worker: EnrichmentWorker
+    @ObservationIgnored let queryEngine: QueryEngine
+    let voice: VoiceAssistant
+    @ObservationIgnored private let pipeline: MemoryPipeline
+    @ObservationIgnored private let pipelineInput: AsyncStream<PipelineItem>.Continuation
     @ObservationIgnored private var tasks: [Task<Void, Never>] = []
 
     init(config: AppConfig, wearables: WearablesController) {
@@ -100,16 +79,23 @@ final class CaptureController {
         glasses = GlassesCaptureSource()
         phone = PhoneCameraSource()
         scheduler = AdaptiveScheduler(tuning: config.tuning)
-        pipeline = FramePipeline(recorder: recorder, queue: uploadQueue)
+        ai = NemotronClient(settings: config.nemotronSettings)
+        worker = EnrichmentWorker(store: store, ai: ai)
+        queryEngine = QueryEngine(store: store, ai: ai)
+        voice = VoiceAssistant(engine: queryEngine, location: location)
+        voice.localeIdentifier = config.voiceLocale
+        voice.speakAnswers = config.speakAnswers
+        pipeline = MemoryPipeline(recorder: recorder, store: store, worker: worker)
 
-        let (pipelineStream, pipelineInput) = AsyncStream.makeStream(of: CapturedFrame.self, bufferingPolicy: .bufferingNewest(8))
+        let (pipelineStream, pipelineInput) = AsyncStream.makeStream(of: PipelineItem.self, bufferingPolicy: .bufferingNewest(6))
         self.pipelineInput = pipelineInput
 
         let pipeline = pipeline
         tasks.append(Task.detached { [weak self] in
-            for await frame in pipelineStream {
-                let kept = await pipeline.handle(frame)
-                if kept { await self?.noteKept() }
+            for await item in pipelineStream {
+                let id = await pipeline.handle(item.frame, street: item.street)
+                let stats = await pipeline.stats
+                await self?.pipelineDidProcess(kept: id != nil, stats: stats)
             }
         })
         let glassesFrames = glasses.frames
@@ -120,16 +106,23 @@ final class CaptureController {
         tasks.append(Task { [weak self] in
             for await frame in phoneFrames { self?.ingest(frame) }
         })
-        let queueStatus = uploadQueue.statusStream
+        let enrichmentStatus = worker.statusStream
         tasks.append(Task { [weak self] in
-            for await status in queueStatus { self?.queueStatus = status }
+            for await status in enrichmentStatus {
+                self?.enrichment = status
+                await self?.refreshCounts()
+            }
         })
 
         location.onFix = { [recorder] fix in
             Task { await recorder.record(fix) }
         }
-        Task { [uploadQueue] in
-            await uploadQueue.start(baseURL: config.serverURL, enabled: config.uploadEnabled)
+        Task { [weak self] in
+            guard let self else { return }
+            await self.applySettings()
+            await self.store.purge(olderThanDays: self.config.retentionDays)
+            await self.worker.start()
+            await self.refreshCounts()
         }
     }
 
@@ -147,8 +140,17 @@ final class CaptureController {
         UIDevice.current.isBatteryMonitoringEnabled = true
         await applySettings()
 
+        if let free = Self.freeDiskBytes(), free < 500_000_000 {
+            notice = "Telefonda 500 MB'tan az yer var. Hafıza ve kayıt yazılamayabilir; yer aç."
+        }
         if recordingFolder == nil, config.recordToDisk {
-            recordingFolder = (try? await recorder.begin())?.lastPathComponent
+            if let free = Self.freeDiskBytes(), free < 1_000_000_000 {
+                // Raw 12 MP stills are ~1.8 MB each; below 1 GB free, keep the memory but skip raw copies.
+                notice = "Telefonda 1 GB'tan az yer var; ham kareler kaydedilmiyor (hafıza çalışıyor)."
+                await pipeline.configure(recordRaw: false, streamEveryN: config.passthroughEveryN, zones: config.zones)
+            } else {
+                recordingFolder = (try? await recorder.begin())?.lastPathComponent
+            }
         }
         location.start()
         if config.mode.usesScheduler { motion.start() }
@@ -180,25 +182,19 @@ final class CaptureController {
         UIApplication.shared.isIdleTimerDisabled = false
     }
 
-    /// Pushes server / upload / recorder / passthrough settings to the actors.
+    /// Pushes Nemotron / recorder / zone / voice settings to the actors.
     func applySettings() async {
-        await uploadQueue.configure(baseURL: config.serverURL, enabled: config.uploadEnabled)
-        await pipeline.configure(
-            recordToDisk: config.recordToDisk,
-            upload: config.uploadEnabled,
-            passthroughEveryN: config.passthroughEveryN
-        )
+        await ai.update(config.nemotronSettings)
+        await pipeline.configure(recordRaw: config.recordToDisk, streamEveryN: config.passthroughEveryN, zones: config.zones)
         scheduler.tuning = config.tuning
+        voice.localeIdentifier = config.voiceLocale
+        voice.speakAnswers = config.speakAnswers
+        await worker.signal()
     }
 
     // MARK: Hooks for other lines
 
-    /// Kişi 2: replace the passthrough with the perception line.
-    func setSink(_ sink: any FrameSink) async {
-        await pipeline.setSink(sink)
-    }
-
-    /// Kişi 2: "I saw text, take another look soon" (adaptive) / high-res photo (mode B).
+    /// "I saw text, take another look soon" (adaptive) / high-res photo (mode B).
     func requestFollowUp() {
         if config.mode.usesScheduler {
             scheduler.requestFollowUp()
@@ -238,10 +234,47 @@ final class CaptureController {
         ingest(frame)
     }
 
-    /// "Son N dakikayı unut" — local side. Server side is Kişi 3's.
+    /// "Son N dakikayı unut": deletes records and keyframes on the phone.
     func forget(minutes: Int) async {
-        let removed = await uploadQueue.purge(since: Date().addingTimeInterval(TimeInterval(-60 * minutes)))
-        notice = "Kuyruktan \(removed) kare silindi (son \(minutes) dk)."
+        let removed = await store.delete(since: Date().addingTimeInterval(TimeInterval(-60 * minutes)))
+        notice = "Son \(minutes) dakikadan \(removed) kayıt silindi."
+        await refreshCounts()
+    }
+
+    func deleteAllMemories() async {
+        let removed = await store.deleteAll()
+        notice = "\(removed) kayıt silindi."
+        await refreshCounts()
+    }
+
+    func deleteMemory(_ id: Int64) async {
+        await store.delete(id: id)
+        await refreshCounts()
+    }
+
+    func refreshCounts() async {
+        let counts = await store.count()
+        memoryCount = counts.total
+        pendingCount = counts.pending
+        memoryRevision += 1
+    }
+
+    /// Adds the current location as a 100 m no-record zone.
+    func addZoneHere(name: String) -> Bool {
+        guard let fix = location.latest else { return false }
+        config.zones.append(NoRecordZone(name: name, latitude: fix.latitude, longitude: fix.longitude))
+        Task { await applySettings() }
+        return true
+    }
+
+    private func pipelineDidProcess(kept: Bool, stats: PipelineStats) {
+        pipelineStats = stats
+        if kept {
+            keptCount += 1
+            memoryCount += 1
+            pendingCount += 1
+            memoryRevision += 1
+        }
     }
 
     // MARK: Scheduler loop
@@ -368,19 +401,23 @@ final class CaptureController {
         )
         let jpeg = frame.jpeg
         Task.detached(priority: .utility) { [weak self] in
-            let image = UIImage(data: jpeg)?.preparingForDisplay()
+            // Downsampled: a fully decoded 12 MP still would hold ~48 MB for a phone-sized view.
+            let image = ImageData.thumbnail(jpeg, maxPixel: 1280).map { UIImage(cgImage: $0) }
             await self?.setPreview(image)
         }
-        pipelineInput.yield(frame)
+        pipelineInput.yield(PipelineItem(frame: frame, street: location.street))
+    }
+
+    private static func freeDiskBytes() -> Int64? {
+        let home = URL(fileURLWithPath: NSHomeDirectory())
+        let values = try? home.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
+        return values?.volumeAvailableCapacityForImportantUsage
     }
 
     private func setPreview(_ image: UIImage?) {
         if let image { previewImage = image }
     }
 
-    private func noteKept() {
-        keptCount += 1
-    }
 }
 
 extension HeatLevel {
