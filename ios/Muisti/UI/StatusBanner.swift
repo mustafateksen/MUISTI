@@ -64,6 +64,7 @@ struct StatusBanner: View {
         var parts = ["kayıt: \(wearables.registrationState.label)", "oturum: \(glasses.sessionState.description)"]
         if config.mode.usesPhotoCapability {
             parts.append("foto: \(String(describing: glasses.photoState))")
+            if let res = glasses.effectiveStillResolution { parts.append(res) }
             if let ms = glasses.lastTransferMillis { parts.append("aktarım \(ms) ms") }
             if let fraction = glasses.transferFraction { parts.append("%\(Int(fraction * 100))") }
         } else {

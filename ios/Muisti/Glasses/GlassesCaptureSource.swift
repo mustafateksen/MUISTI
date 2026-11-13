@@ -77,6 +77,11 @@ final class GlassesCaptureSource: CaptureSource {
     @ObservationIgnored private var deviceStateToken: (any AnyListenerToken)?
     @ObservationIgnored private var observedDeviceId: DeviceIdentifier?
 
+    /// When the photo capability last reported `.started`; the sensor needs a beat after the
+    /// wake-up stream is put down before a still is accepted.
+    @ObservationIgnored private var photoReadyAt: Date?
+    /// Resolutions that failed on this device; the next lower one is tried instead.
+    @ObservationIgnored private var failedResolutions: Set<PhotoResolution> = []
     @ObservationIgnored private let pendingPhoto = OneShot<Data>()
     @ObservationIgnored private let pendingStreamPhoto = OneShot<Data>()
     @ObservationIgnored private let encoder = StreamFrameEncoder()
@@ -244,8 +249,13 @@ final class GlassesCaptureSource: CaptureSource {
         return CapturedFrame(origin: photoOrigin, jpeg: jpeg, pixelSize: size, isHighRes: true, trigger: .highRes)
     }
 
-    private func takePhoto(resolution: PhotoResolution, quality: PhotoQuality, trigger: CaptureTrigger) async -> CapturedFrame? {
+    private func takePhoto(resolution requested: PhotoResolution, quality: PhotoQuality, trigger: CaptureTrigger) async -> CapturedFrame? {
         guard let camera, photoState == .started, !isCapturingStill, device.don != .doffed else { return nil }
+        if let readyAt = photoReadyAt {
+            let settle = 1.0 - Date().timeIntervalSince(readyAt)
+            if settle > 0 { try? await Task.sleep(for: .seconds(settle)) }
+        }
+        let resolution = Self.usableResolution(requested, excluding: failedResolutions)
         isCapturingStill = true
         defer {
             isCapturingStill = false
@@ -257,14 +267,32 @@ final class GlassesCaptureSource: CaptureSource {
         guard let data = await pendingPhoto.wait(timeout: Self.photoTimeout),
               let jpeg = ImageData.ensureJPEG(data)
         else {
-            // Brief §7: failed photo → carry on silently, log it.
-            Log.glasses.error("photo (\(resolution.rawValue, privacy: .public)) did not arrive within timeout")
+            // Brief §7: failed photo → carry on silently, log it. A resolution that keeps
+            // failing quickly is probably unsupported on this device: step down next time.
+            let elapsed = (ContinuousClock.now - t0).milliseconds
+            Log.glasses.error("photo (\(resolution.rawValue, privacy: .public)) failed after \(elapsed) ms")
+            if elapsed < 3000, resolution != .small {
+                failedResolutions.insert(resolution)
+                Log.glasses.info("next photo will use \(Self.usableResolution(resolution, excluding: self.failedResolutions).rawValue, privacy: .public)")
+            }
             return nil
         }
         lastTransferMillis = (ContinuousClock.now - t0).milliseconds
         let size = ImageData.pixelSize(of: jpeg)
         Log.glasses.info("photo \(Int(size.width))x\(Int(size.height)) \(jpeg.count) B in \(self.lastTransferMillis ?? -1) ms")
         return CapturedFrame(origin: photoOrigin, jpeg: jpeg, pixelSize: size, isHighRes: true, trigger: trigger)
+    }
+
+    private static func usableResolution(_ wanted: PhotoResolution, excluding failed: Set<PhotoResolution>) -> PhotoResolution {
+        let ladder: [PhotoResolution] = [.full, .large, .medium, .small]
+        let start = ladder.firstIndex(of: wanted) ?? 0
+        return ladder[start...].first { !failed.contains($0) } ?? .small
+    }
+
+    /// Resolution actually used for stills right now (after fallbacks), for the status line.
+    var effectiveStillResolution: String? {
+        guard let config, usesPhoto else { return nil }
+        return Self.usableResolution(config.stillResolution.sdk, excluding: failedResolutions).rawValue
     }
 
     // MARK: - Session
@@ -452,7 +480,7 @@ final class GlassesCaptureSource: CaptureSource {
 
     private func streamStateChanged(_ newState: StreamState) {
         streamState = newState
-        Log.glasses.debug("stream → \(String(describing: newState), privacy: .public)")
+        Log.glasses.info("stream → \(String(describing: newState), privacy: .public)")
         switch newState {
         case .streaming:
             if usesPhoto { startPhotoIfNeeded() }
@@ -484,9 +512,10 @@ final class GlassesCaptureSource: CaptureSource {
 
     private func photoStateChanged(_ newState: PhotoState) {
         photoState = newState
-        Log.glasses.debug("photo → \(String(describing: newState), privacy: .public)")
+        Log.glasses.info("photo → \(String(describing: newState), privacy: .public)")
         switch newState {
         case .started:
+            photoReadyAt = Date()
             if !wakeStreamStopIntended {
                 wakeStreamStopIntended = true
                 camera?.stream.stop()   // stills and frames compete for the sensor
@@ -513,7 +542,7 @@ final class GlassesCaptureSource: CaptureSource {
     }
 
     private func handleSessionError(_ error: DeviceSessionError) {
-        Log.glasses.error("session error: \(error.description, privacy: .public)")
+        Log.glasses.error("session error: \(String(describing: error), privacy: .public)")
         guard !errorsSuppressed else { return }
         switch error {
         case .datAppOnTheGlassesUpdateRequired:
@@ -536,7 +565,7 @@ final class GlassesCaptureSource: CaptureSource {
     }
 
     private func handleStreamError(_ error: StreamError) {
-        Log.glasses.error("stream error: \(error.description, privacy: .public)")
+        Log.glasses.error("stream error: \(String(describing: error), privacy: .public)")
         guard !errorsSuppressed else { return }
         switch error {
         case .permissionDenied:
@@ -555,7 +584,7 @@ final class GlassesCaptureSource: CaptureSource {
     }
 
     private func handlePhotoError(_ error: PhotoError) {
-        Log.glasses.error("photo error: \(error.description, privacy: .public)")
+        Log.glasses.error("photo error: \(error.description, privacy: .public) · \(String(describing: error), privacy: .public)")
         pendingPhoto.fulfill(nil)
         guard !errorsSuppressed else { return }
         switch error {
@@ -615,7 +644,7 @@ final class GlassesCaptureSource: CaptureSource {
     }
 
     private func apply(_ deviceState: DeviceState, name: String) {
-        Log.glasses.debug("device \(name, privacy: .public): link \(String(describing: deviceState.linkState), privacy: .public) hinge \(String(describing: deviceState.hingeState), privacy: .public) don \(String(describing: deviceState.donState), privacy: .public) battery \(deviceState.batteryLevel ?? -1)")
+        Log.glasses.info("device \(name, privacy: .public): link \(String(describing: deviceState.linkState), privacy: .public) hinge \(String(describing: deviceState.hingeState), privacy: .public) don \(String(describing: deviceState.donState), privacy: .public) battery \(deviceState.batteryLevel ?? -1)")
         let previous = device
         device = GlassesDeviceStatus(
             name: name,

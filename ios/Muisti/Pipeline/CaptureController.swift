@@ -85,6 +85,9 @@ final class CaptureController {
     @ObservationIgnored private var schedulerTask: Task<Void, Never>?
     @ObservationIgnored private var lastFixedCapture: Date?
     @ObservationIgnored private var isCapturing = false
+    /// Consecutive failed stills; each one doubles the pause before the next try (max 16 s).
+    @ObservationIgnored private var failedStills = 0
+    @ObservationIgnored private var retryNotBefore: Date?
     @ObservationIgnored private let recorder = SessionRecorder()
     @ObservationIgnored let uploadQueue = UploadQueue()
     @ObservationIgnored private let pipeline: FramePipeline
@@ -155,6 +158,8 @@ final class CaptureController {
 
         scheduler = AdaptiveScheduler(tuning: config.tuning)
         lastFixedCapture = nil
+        failedStills = 0
+        retryNotBefore = nil
         await activeSource.start(config: config.captureConfig)
 
         schedulerTask?.cancel()
@@ -257,6 +262,7 @@ final class CaptureController {
             schedulerText = "Kaynak hazır değil"
             return
         }
+        if let retryNotBefore, Date() < retryNotBefore { return }
 
         if config.mode == .intervalPhoto {
             let due = lastFixedCapture.map { Date().timeIntervalSince($0) >= config.intervalSeconds } ?? true
@@ -284,9 +290,14 @@ final class CaptureController {
         isCapturing = true
         defer { isCapturing = false }
         guard let frame = await activeSource.captureStill(trigger: trigger) else {
-            schedulerText = "Kare gelmedi; tekrar denenecek"
+            failedStills += 1
+            let pause = min(16, pow(2, Double(failedStills - 1)))
+            retryNotBefore = Date().addingTimeInterval(pause)
+            schedulerText = "Kare gelmedi (\(failedStills)); \(Int(pause)) sn sonra tekrar"
             return
         }
+        failedStills = 0
+        retryNotBefore = nil
         if let input {
             var after = input
             after.now = Date()

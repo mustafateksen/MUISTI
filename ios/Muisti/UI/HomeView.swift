@@ -52,8 +52,18 @@ struct HomeView: View {
             #endif
             #if DEBUG
             .task {
+                let args = ProcessInfo.processInfo.arguments
+                // `--autostart`: real glasses, start capturing on launch (device debugging).
+                if args.contains("--autostart") {
+                    if let mode = args.first(where: { $0.hasPrefix("--mode=") }) {
+                        config.mode = CaptureMode(rawValue: String(mode.dropFirst(7))) ?? config.mode
+                    }
+                    try? await Task.sleep(for: .seconds(2))
+                    await controller.start()
+                    return
+                }
                 // `--mock-autostart`: simulator demo without touching anything.
-                guard ProcessInfo.processInfo.arguments.contains("--mock-autostart") else { return }
+                guard args.contains("--mock-autostart") else { return }
                 controller.mock.quickStart()
                 config.sourceKind = .glasses
                 if let mode = ProcessInfo.processInfo.arguments.first(where: { $0.hasPrefix("--mode=") }) {
