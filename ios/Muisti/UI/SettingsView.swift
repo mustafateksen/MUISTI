@@ -38,6 +38,12 @@ struct SettingsView: View {
                     Stepper("Sabit aralık (C): \(Int(config.intervalSeconds)) sn", value: $config.intervalSeconds, in: 2...60, step: 1)
                     Stepper("Akışta her \(config.passthroughEveryN). kareyi geçir", value: $config.passthroughEveryN, in: 1...30)
                     Toggle("Gözlük gelince yeniden bağlan", isOn: $config.autoReconnect)
+                    Picker("Gözlük fotoğrafını döndür", selection: $config.glassesPhotoRotation) {
+                        Text("0°").tag(0)
+                        Text("90° saat yönü").tag(90)
+                        Text("180°").tag(180)
+                        Text("270° saat yönü").tag(270)
+                    }
                 } header: {
                     Text("Yakalama")
                 } footer: {

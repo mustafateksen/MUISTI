@@ -1,4 +1,5 @@
 import CoreGraphics
+import CoreImage
 import Foundation
 import ImageIO
 import UniformTypeIdentifiers
@@ -42,5 +43,23 @@ enum ImageData {
         CGImageDestinationAddImage(dest, image, [kCGImageDestinationLossyCompressionQuality: quality] as CFDictionary)
         guard CGImageDestinationFinalize(dest) else { return nil }
         return out as Data
+    }
+
+    private static let ciContext = CIContext(options: [.cacheIntermediates: false])
+
+    /// Bakes a clockwise turn into the pixels and re-encodes as JPEG. 0 returns the input.
+    static func rotatedJPEG(_ data: Data, clockwiseDegrees: Int, quality: Double = 0.9) -> Data {
+        let turn = ((clockwiseDegrees % 360) + 360) % 360
+        guard turn != 0, let image = CIImage(data: data, options: [.applyOrientationProperty: true]),
+              let space = CGColorSpace(name: CGColorSpace.sRGB)
+        else { return data }
+        let orientation: CGImagePropertyOrientation
+        switch turn {
+        case 90: orientation = .right
+        case 180: orientation = .down
+        default: orientation = .left
+        }
+        let options = [CIImageRepresentationOption(rawValue: kCGImageDestinationLossyCompressionQuality as String): quality]
+        return ciContext.jpegRepresentation(of: image.oriented(orientation), colorSpace: space, options: options) ?? data
     }
 }

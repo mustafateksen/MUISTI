@@ -54,6 +54,9 @@ struct HomeView: View {
             .task {
                 let args = ProcessInfo.processInfo.arguments
                 // `--autostart`: real glasses, start capturing on launch (device debugging).
+                if let rot = args.first(where: { $0.hasPrefix("--rotate=") }), let deg = Int(rot.dropFirst(9)) {
+                    config.glassesPhotoRotation = deg
+                }
                 if args.contains("--autostart") {
                     if let mode = args.first(where: { $0.hasPrefix("--mode=") }) {
                         config.mode = CaptureMode(rawValue: String(mode.dropFirst(7))) ?? config.mode

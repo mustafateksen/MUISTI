@@ -265,7 +265,7 @@ final class GlassesCaptureSource: CaptureSource {
         let t0 = ContinuousClock.now
         camera.photo.capturePhoto(resolution: resolution, quality: quality)
         guard let data = await pendingPhoto.wait(timeout: Self.photoTimeout),
-              let jpeg = ImageData.ensureJPEG(data)
+              let raw = ImageData.ensureJPEG(data)
         else {
             // Brief §7: failed photo → carry on silently, log it. A resolution that keeps
             // failing quickly is probably unsupported on this device: step down next time.
@@ -278,8 +278,13 @@ final class GlassesCaptureSource: CaptureSource {
             return nil
         }
         lastTransferMillis = (ContinuousClock.now - t0).milliseconds
+        // MockDeviceKit hands back the image file as-is (already upright).
+        let rotation = MockRuntime.isActive ? 0 : (config?.glassesPhotoRotation ?? 90)
+        let jpeg = rotation == 0 ? raw : await Task.detached(priority: .userInitiated) {
+            ImageData.rotatedJPEG(raw, clockwiseDegrees: rotation)
+        }.value
         let size = ImageData.pixelSize(of: jpeg)
-        Log.glasses.info("photo \(Int(size.width))x\(Int(size.height)) \(jpeg.count) B in \(self.lastTransferMillis ?? -1) ms")
+        Log.glasses.info("photo \(Int(size.width))x\(Int(size.height)) \(jpeg.count) B in \(self.lastTransferMillis ?? -1) ms (rotated \(rotation)°)")
         return CapturedFrame(origin: photoOrigin, jpeg: jpeg, pixelSize: size, isHighRes: true, trigger: trigger)
     }
 
@@ -427,8 +432,8 @@ final class GlassesCaptureSource: CaptureSource {
             }.store(in: cameraTokens)
             photo.photoDataPublisher.listen { [weak self] data in
                 if let meta = data.metadata {
-                    let text = String(decoding: meta.prefix(600), as: UTF8.self)
-                    Log.glasses.info("photo metadata \(meta.count) B: \(text, privacy: .public)")
+                    let hex = meta.prefix(400).map { String(format: "%02x", $0) }.joined()
+                    Log.glasses.info("photo metadata \(meta.count) B: \(hex, privacy: .public)")
                 } else {
                     Log.glasses.info("photo metadata: none")
                 }

@@ -80,6 +80,9 @@ struct CaptureConfig: Sendable, Equatable {
     var stillResolution: StillResolution
     var stillQuality: StillQuality
     var autoReconnect: Bool
+    /// Clockwise degrees (0/90/180/270) baked into real-glasses photos. Ray-Ban Meta Gen 2
+    /// stills arrive in sensor order with no EXIF orientation; field test 13 Nov: 90° is upright.
+    var glassesPhotoRotation: Int = 90
 }
 
 /// App-wide settings, persisted in `UserDefaults`, editable from Settings and the debug menu.
@@ -100,6 +103,7 @@ final class AppConfig {
     var recordToDisk: Bool { didSet { save("recordToDisk", recordToDisk) } }
     var uploadEnabled: Bool { didSet { save("uploadEnabled", uploadEnabled) } }
     var autoReconnect: Bool { didSet { save("autoReconnect", autoReconnect) } }
+    var glassesPhotoRotation: Int { didSet { save("glassesPhotoRotation", glassesPhotoRotation) } }
     var tuning: AdaptiveTuning {
         didSet { if let data = try? JSONEncoder().encode(tuning) { defaults.set(data, forKey: "tuning") } }
     }
@@ -121,6 +125,7 @@ final class AppConfig {
         recordToDisk = defaults.object(forKey: "recordToDisk") as? Bool ?? true
         uploadEnabled = defaults.object(forKey: "uploadEnabled") as? Bool ?? true
         autoReconnect = defaults.object(forKey: "autoReconnect") as? Bool ?? true
+        glassesPhotoRotation = defaults.object(forKey: "glassesPhotoRotation") as? Int ?? 90
         if let data = defaults.data(forKey: "tuning"),
            let decoded = try? JSONDecoder().decode(AdaptiveTuning.self, from: data) {
             tuning = decoded
@@ -136,7 +141,8 @@ final class AppConfig {
             streamFPS: streamFPS,
             stillResolution: stillResolution,
             stillQuality: stillQuality,
-            autoReconnect: autoReconnect
+            autoReconnect: autoReconnect,
+            glassesPhotoRotation: glassesPhotoRotation
         )
     }
 
