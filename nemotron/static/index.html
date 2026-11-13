@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MUISTI</title>
+<style>
+:root{
+  --bg:#f6f5f2; --card:#ffffff; --fg:#16181d; --mut:#6b7079; --line:#e4e2dc;
+  --accent:#e2531f; --seen:#1f8a4c; --seen-bg:#e5f4ea; --dk:#8a5a1f; --dk-bg:#f7eedf;
+  --forgot:#5a4fb3; --forgot-bg:#ecebf8; --shadow:0 1px 2px rgba(0,0,0,.05),0 4px 16px rgba(0,0,0,.04);
+}
+@media (prefers-color-scheme:dark){
+  :root{--bg:#121316;--card:#1b1d22;--fg:#eceef2;--mut:#9aa0aa;--line:#2b2e35;
+    --seen:#5fd18f;--seen-bg:#16301f;--dk:#e3b273;--dk-bg:#33281a;--forgot:#a99ff0;--forgot-bg:#24213d;
+    --shadow:none}
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+.wrap{max-width:980px;margin:0 auto;padding:20px 16px 60px}
+header{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;margin-bottom:18px}
+h1{margin:0;font-size:26px;letter-spacing:-.02em}
+h1 span{display:inline-block;width:22px;height:4px;background:var(--accent);vertical-align:middle;margin-right:10px;border-radius:2px}
+.sub{color:var(--mut)}
+.stats{margin-left:auto;color:var(--mut);font-size:13px}
+.ask{display:flex;gap:8px;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:8px;box-shadow:var(--shadow)}
+.ask input{flex:1;border:0;background:transparent;color:var(--fg);font-size:17px;padding:10px;min-width:0;outline:none}
+button{border:1px solid var(--line);background:var(--card);color:var(--fg);border-radius:10px;padding:9px 14px;font:inherit;cursor:pointer}
+button.primary{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
+button.mic.on{background:var(--accent);color:#fff;border-color:var(--accent)}
+button:disabled{opacity:.5;cursor:default}
+.chips{display:flex;gap:6px;flex-wrap:wrap;margin:10px 0 18px}
+.chip{font-size:13px;padding:5px 10px;border-radius:999px;border:1px solid var(--line);background:transparent;color:var(--mut)}
+.answer{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;box-shadow:var(--shadow);margin-bottom:22px;display:none}
+.badge{display:inline-block;font-size:12px;font-weight:700;letter-spacing:.06em;padding:3px 9px;border-radius:6px;margin-right:8px}
+.SEEN{background:var(--seen-bg);color:var(--seen)} .DONT_KNOW{background:var(--dk-bg);color:var(--dk)} .UNSURE{background:var(--dk-bg);color:var(--dk)} .FORGOT{background:var(--forgot-bg);color:var(--forgot)}
+.answer .text{font-size:19px;margin:10px 0 6px}
+.meta{color:var(--mut);font-size:12px}
+.ev{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:10px;margin-top:12px}
+.ev figure{margin:0;border:1px solid var(--line);border-radius:10px;overflow:hidden;background:var(--bg)}
+.ev img{width:100%;aspect-ratio:3/4;object-fit:cover;display:block}
+.ev figcaption{padding:8px;font-size:12px;color:var(--mut)}
+.ev figure.used{outline:2px solid var(--seen)}
+h2{font-size:15px;margin:26px 0 10px;color:var(--mut);font-weight:600;display:flex;align-items:center;gap:10px}
+h2 .grow{flex:1}
+.timeline{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px}
+.mem{background:var(--card);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.mem img{width:100%;aspect-ratio:3/4;object-fit:cover;display:block}
+.mem .b{padding:8px;font-size:12px}
+.mem .n{font-weight:600;font-size:13px;overflow-wrap:anywhere}
+.mem.weak{opacity:.55}
+.items{font-size:11px;color:var(--mut);margin-top:4px}
+.objs{display:flex;flex-wrap:wrap;gap:3px;margin-top:6px}
+.objs span.once{opacity:.55;border-style:dashed}
+.objs span{font-size:10.5px;padding:1px 6px;border-radius:999px;background:var(--bg);border:1px solid var(--line);color:var(--mut)}
+.empty{color:var(--mut);padding:20px;border:1px dashed var(--line);border-radius:10px;text-align:center}
+label.tog{font-size:13px;color:var(--mut);display:flex;align-items:center;gap:6px}
+@media (max-width:560px){ .ask{flex-wrap:wrap} .ask input{flex-basis:100%} .stats{margin-left:0;width:100%} }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1><span></span>MUISTI</h1>
+    <div class="sub">Remembers what your glasses saw. Answers only with evidence.</div>
+    <div class="stats" id="stats"></div>
+  </header>
+
+  <form class="ask" id="f">
+    <input id="q" placeholder="Ask what you saw… e.g. Which floor is the sauna on?" autocomplete="off">
+    <button type="button" class="mic" id="mic" title="Ask by voice (Chrome)">🎤</button>
+    <button class="primary" id="go">Ask</button>
+  </form>
+  <div class="chips" id="chips"></div>
+
+  <div class="answer" id="ans">
+    <div><span class="badge" id="badge"></span><span class="meta" id="meta"></span></div>
+    <div class="text" id="atext"></div>
+    <div class="ev" id="ev"></div>
+  </div>
+
+  <h2><span class="grow">Memory timeline</span>
+    <label class="tog"><input type="checkbox" id="speak" checked> speak answers</label>
+    <button id="forget" title="Delete the last 10 minutes of memories">Forget last 10 min</button>
+  </h2>
+  <div class="timeline" id="tl"></div>
+</div>
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => (s ?? "").toString().replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const examples = ["Which floor is the sauna on?","What did the Cloudinary banner say?","Where did I see a sofa?",
+  "What was next to the floor directory screen?","Where did I see a fire extinguisher?","Where did I see an ashtray?",
+  "What's the phone number of the Arduino booth?","Forget the last 5 minutes"];
+$("chips").innerHTML = examples.map(e => `<button class="chip" type="button">${esc(e)}</button>`).join("");
+$("chips").onclick = e => { if (e.target.classList.contains("chip")) { $("q").value = e.target.textContent; ask(); } };
+
+async function load() {
+  try {
+    const [st, mem] = await Promise.all([fetch("/stats").then(r => r.json()), fetch("/memories").then(r => r.json())]);
+    $("stats").textContent = `${st.sightings} memories · ${st.frames} frames · ${st.model}`;
+    $("tl").innerHTML = mem.length ? mem.slice().reverse().map(m => `
+      <div class="mem ${m.weak ? "weak" : ""}">
+        <img loading="lazy" src="${esc(m.frame_url)}" alt="">
+        <div class="b"><div class="n">${esc(m.name || (m.scene && m.scene.place_type) || m.subtype || m.kind || "—")}</div>
+          <div class="meta">${esc(m.seen_at.slice(11,19))} · ${esc(m.kind || "")} · ${m.frames} fr</div>
+          ${m.other_text ? `<div class="items">${esc(m.other_text)}</div>` : ""}
+          ${(m.items||[]).length ? `<div class="items">${m.items.map(i => esc(i.label + " → " + i.value)).join("<br>")}</div>` : ""}
+          ${(m.objects||[]).length ? `<div class="objs">${m.objects.slice(0,8).map(o => `<span class="${o.support > 1 ? "" : "once"}" title="${esc(o.details)} · seen in ${o.support} frame(s)">${(o.count||1) > 1 ? (o.count + " ") : ""}${esc(o.name)}</span>`).join("")}</div>` : ""}
+        </div></div>`).join("") : `<div class="empty">No memories yet. Replay a video or send frames to /ingest.</div>`;
+  } catch (e) { $("stats").textContent = "server not reachable"; }
+}
+
+async function ask() {
+  const q = $("q").value.trim(); if (!q) return;
+  $("go").disabled = true; $("go").textContent = "…";
+  try {
+    const r = await fetch("/ask", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({question:q})}).then(r => r.json());
+    $("ans").style.display = "block";
+    $("badge").className = "badge " + r.label; $("badge").textContent = r.label_tr + " · " + r.label.replace("_"," ");
+    $("meta").textContent = r.latency_s !== undefined ? `${r.latency_s}s · ${r.calls} Nemotron call(s) · ${r.why || ""}` : "";
+    $("atext").textContent = r.answer;
+    $("ev").innerHTML = (r.evidence||[]).map(e => `
+      <figure class="${e.used ? "used" : ""}"><img src="${esc(e.frame_url)}" alt="">
+      <figcaption><b>${esc(e.id)}</b> · seen ${esc(e.seen_at)}<br>${esc(e.text.slice(0,140))}</figcaption></figure>`).join("");
+    if ($("speak").checked && "speechSynthesis" in window) { speechSynthesis.cancel(); speechSynthesis.speak(new SpeechSynthesisUtterance(r.answer)); }
+    if (r.label === "FORGOT") load();
+  } finally { $("go").disabled = false; $("go").textContent = "Ask"; }
+}
+$("f").onsubmit = e => { e.preventDefault(); ask(); };
+$("forget").onclick = async () => { const r = await fetch("/forget", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({minutes:10})}).then(r => r.json()); load(); alert(`Forgot ${r.deleted_frames} frames.`); };
+
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+if (!SR) $("mic").disabled = true; else {
+  const rec = new SR(); rec.lang = "en-US"; rec.interimResults = false;
+  rec.onresult = e => { $("q").value = e.results[0][0].transcript; ask(); };
+  rec.onend = () => $("mic").classList.remove("on");
+  $("mic").onclick = () => { $("mic").classList.add("on"); rec.start(); };
+}
+load(); setInterval(load, 5000);
+</script>
+</body>
+</html>

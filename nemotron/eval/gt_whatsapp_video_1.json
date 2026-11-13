@@ -1,0 +1,22 @@
+{
+  "video": "WhatsApp Video 2026-11-13 at 10.04.33 PM.mp4",
+  "notes": "Hand-labelled from frames. Junction 2026 venue walk: two booths + elevator floor directory.",
+  "entities": [
+    {"id": "cloudinary", "names": ["cloudinary"], "t": [38, 42]},
+    {"id": "arduino", "names": ["arduino"], "t": [69, 72]},
+    {"id": "directory", "names": ["junction", "5th floor"], "kinds": ["directory", "building directory", "office directory", "event"], "t": [80, 84]}
+  ],
+  "pairs": {
+    "SAUNA": "7",
+    "ARDUINO HARDWARE": "5",
+    "LOFT": "4",
+    "MAIN STAGE": "3",
+    "INFO DESK": "2",
+    "EXIT": "M"
+  },
+  "traps": [
+    {"id": "unreadable_booth", "t": [36, 38], "note": "Booth banner not readable; any name here is fabricated (v1 OCR said 'Astronomy')."},
+    {"id": "finnish_note", "t": [80, 82], "note": "Small Finnish paper note on door; must not be described as another language or transliterated into a name."}
+  ],
+  "forbidden_words": ["astronomy", "thai"]
+}

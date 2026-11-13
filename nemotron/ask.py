@@ -1,0 +1,411 @@
+"""MUISTI - /ask: spoken question -> evidence-grounded answer.
+
+Pipeline (at most 2 Nemotron calls, often 1):
+  1. parse    Nemotron turns the question into {target, attribute, time}   (1 call)
+  2. search   lexical + fuzzy scoring over memory docs, time as soft filter  (0 calls)
+  3. gate     nothing relevant -> DONT_KNOW without calling the model        (0 calls)
+  4. answer   Nemotron answers ONLY from evidence E1..E5 and must quote it   (1 call)
+  5. verify   code checks the quote is really in the cited evidence;
+              failure -> DONT_KNOW. Numbers must match exactly.
+
+Memory here is loaded from process_video results (stand-in for Aiven/pgvector).
+"""
+import datetime as dt
+import glob
+import json
+import os
+import re
+import time
+from difflib import SequenceMatcher
+
+import extract as E
+
+ATTRIBUTES = ["location", "phone", "hours", "name", "description", "list", "when", "current_location", "other"]
+TIMES = ["just_now", "last_hour", "today", "any"]
+
+PARSE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "target": {"type": ["string", "null"]},
+        "category": {"type": ["string", "null"]},
+        "attribute": {"type": "string", "enum": ATTRIBUTES},
+        "time": {"type": "string", "enum": TIMES},
+        "synonyms": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["target", "category", "attribute", "time", "synonyms"],
+}
+
+PARSE_PROMPT = """Turn the user's question about things they saw earlier into JSON.
+- target: the specific thing they ask about, using their words (e.g. "arduino hardware lab", "sauna", "info desk"), or null.
+- category: a general type if they ask about a kind of thing (e.g. "gaming", "database", "dentist"), else null.
+- attribute: what they want: location (where is X / which floor is X on), phone, hours, name, description (what did it say/show), list (which ones did I see), when (when did I see it),
+  current_location (where am I NOW / which floor am I on / where am I standing), other.
+- time: just_now (last ~15 min), last_hour, today, any.
+- synonyms: up to 5 other simple English words for the target or category that a sign or a photo description might use
+  (e.g. "somewhere to smoke" -> ["ashtray", "smoking area", "cigarette bin"]; "coffee" -> ["cafe", "coffee machine", "espresso"];
+  "way upstairs" -> ["stairs", "staircase", "escalator", "elevator"]). Empty list if none.
+Return ONLY JSON with keys target, category, attribute, time, synonyms."""
+
+ANSWER_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "label": {"type": "string", "enum": ["SEEN", "DONT_KNOW"]},
+        "answer": {"type": "string"},
+        "evidence": {"type": "array", "items": {"type": "string"}},
+        "quotes": {"type": "array", "items": {"type": "string"}},
+        "support": {"type": "string", "enum": ["stated", "inferred"]},
+        "observations": {"type": "string"},
+    },
+    "required": ["label", "answer", "evidence", "quotes", "support", "observations"],
+}
+
+ANSWER_PROMPT = """You are a memory assistant on smart glasses. Answer the question using ONLY the evidence below.
+Each evidence item is something the glasses actually saw, with an id (E1, E2...).
+The glasses are worn by the user, so if the glasses saw something, the user was there and walked past or looked at it.
+
+Rules:
+- If the evidence does not contain the answer, set label to DONT_KNOW and say briefly what you did see that is closest, or that you did not see it.
+- Never use outside knowledge. Never guess numbers, floors, phones or hours.
+- support: "stated" only if the evidence DIRECTLY says the answer (e.g. a directory row "SAUNA AND POOL -> 7TH FLOOR").
+  "inferred" if you had to interpret something, e.g. guessing which floor the user is on from an elevator indicator,
+  a number plaque or an arrow. Numbers without a clear label are ambiguous: an elevator position indicator shows
+  where the ELEVATOR car is, never where the user is.
+  A floor label as the TITLE of a floor directory in an elevator lobby (e.g. "5TH FLOOR" at the top of the screen) is how
+  buildings tell you which floor that lobby is on: for "which floor am I on" right after that lobby, that counts as stated.
+- observations: one short sentence listing the relevant raw facts you saw, without any conclusion
+  (e.g. "The directory screen header said 5TH FLOOR and a small plaque above the elevator showed 4.").
+- Answer in the same language as the question.
+- If you answer, set label SEEN, list the evidence ids you used, and put in "quotes" one short exact span copied from EACH evidence item you used (one quote per item, never merged).
+- answer: one or two short spoken sentences, natural English, no markdown.
+- For "what did it say / what was written" questions, answer with the words from "Other text on sign" / "Name on sign"
+  (that text was read by OCR). Do not describe how the sign looks instead.
+- If the user asks about a specific medium (poster, banner, screen) and the evidence shows it on a different medium,
+  say that clearly instead of answering yes (e.g. "Not on a poster, but a screen showed ...").
+- Evidence marked PICTURE is an image shown on a banner, poster or screen, NOT a real thing that was there.
+  If you use it, say so clearly (e.g. "That was a photo on the Cloudinary banner", "it was on a screen, not a real car").
+  If the user asks about a real object and only a PICTURE of it exists, answer that you only saw it in a picture, and where.
+- For where-questions, describe the place like a person would: which booth, sign or landmark it was near, what it was next to, and when.
+  Never say "left of view", "center of view" or "frame".
+Return ONLY JSON with keys label, answer, evidence, quotes, support, observations."""
+
+
+# --- memory --------------------------------------------------------------------
+
+def _video_start(path: str) -> dt.datetime:
+    """WhatsApp file names carry the send time; recording started ~duration earlier."""
+    m = re.search(r"(\d{4}-\d{2}-\d{2})[ _]at[ _](\d{1,2})\.(\d{2})\.(\d{2})[ _](AM|PM)", path)
+    if not m:
+        return dt.datetime(2026, 11, 13, 20, 0)
+    d, h, mi, s, ap = m.groups()
+    h = int(h) % 12 + (12 if ap == "PM" else 0)
+    return dt.datetime.fromisoformat(d).replace(hour=h, minute=int(mi), second=int(s)) - dt.timedelta(seconds=90)
+
+
+def load_memory(pattern: str = "results/*/v7/results.json") -> list[dict]:
+    """Offline mode: build memory from process_video result files."""
+    sightings = []
+    for path in sorted(glob.glob(pattern)):
+        start = _video_start(path)
+        src = os.path.basename(os.path.dirname(os.path.dirname(path)))
+        for s in json.load(open(path, encoding="utf-8")).get("records", []):
+            sightings.append({**s, "seen_at": start + dt.timedelta(seconds=s["t"]), "source": src,
+                              "frame_dir": os.path.join(os.path.dirname(path), "frames")})
+    return docs_from_sightings(sightings)
+
+
+def docs_from_sightings(sightings: list[dict]) -> list[dict]:
+    """One doc per sighting, plus one doc per list item (directory row) so
+    'where is the sauna' can hit '7TH FLOOR -> SAUNA AND POOL' directly.
+    Each sighting needs 'seen_at' (datetime)."""
+    docs = []
+    for s in sightings:
+        if True:
+            base = {"seen_at": s["seen_at"], "frame": s.get("evidence_frame"), "frame_dir": s.get("frame_dir"),
+                    "source": s.get("source", ""), "sighting_id": s.get("id"), "weak": s.get("weak", False)}
+            place = (s.get("scene") or {}).get("place_type") or ""
+            where = f"{place}" + (f" near {s['name']}" if s.get("name") else "")
+            variants = [v for v in s.get("name_variants") or [] if v != s.get("name")]
+            # Labelled fields: the answer model must know which text was ON the sign.
+            fields = [f"Type: {s.get('kind')} ({s.get('subtype')})",
+                      s.get("name") and f"Name on sign: {s['name']}",
+                      variants and f"Name also read as: {', '.join(variants)}",
+                      s.get("phone") and f"Phone on sign: {s['phone']}",
+                      s.get("hours") and f"Hours on sign: {s['hours']}",
+                      s.get("other_text") and f"Other text on sign: {s['other_text']}",
+                      s.get("caption") and f"Scene: {s['caption']}",
+                      s.get("objects") and "Visible things: " + ", ".join(o["name"] for o in s["objects"][:12])]
+            text = ". ".join(str(f) for f in fields if f)
+            docs.append({**base, "type": "sighting", "name": " / ".join([s.get("name") or ""] + variants),
+                         "kind": s.get("kind"),
+                         "subtype": s.get("subtype"), "phone": s.get("phone"), "hours": s.get("hours"),
+                         "text": text})
+            for it in s.get("items") or []:
+                docs.append({**base, "type": "item", "name": it["value"], "kind": "directory entry",
+                             "text": f"{it['value']} -> {it['label']} (on the {s.get('name') or ''} {s.get('subtype') or 'sign'})"})
+            # One doc per visible thing, with the spatial relations that mention it.
+            for o in s.get("objects") or []:
+                rels = [f"{r['subject']} {r['relation']} {r['object']}" for r in s.get("relations") or []
+                        if o["name"] in (r["subject"], r["object"])]
+                docs.append({**base, "type": "object", "name": o["name"], "kind": o.get("category"),
+                             "frame": o.get("frame") or base["frame"], "support": o.get("support", 1),
+                             "text": f"Seen object: {o['name']} ({o.get('category')}). How many at once: {o.get('count', 1)}. Details: {o.get('details')}. "
+                                     f"Where: {o.get('position')} of view, {o.get('distance')}, in a {where}."
+                                     + (f" Spatial: {'; '.join(rels)}." if rels else "")
+                                     + f" (Noticed in {o.get('support', 1)} video frame(s); this is NOT a count of objects.)"})
+            # Pictures shown ON banners/screens: not real objects, and the text says so.
+            for dp in s.get("depictions") or []:
+                docs.append({**base, "type": "depiction", "name": " ".join(dp.get("depicted") or []),
+                             "kind": f"picture on {dp.get('medium')}", "frame": dp.get("frame") or base["frame"],
+                             "support": dp.get("support", 1), "content": dp.get("content"), "medium": dp.get("medium"),
+                             "text": f"PICTURE (not a real object): {dp.get('content')}. Shown on: {dp.get('on') or dp.get('medium')} "
+                                     f"({dp.get('medium')}), in a {where}. Things in the picture: {', '.join(dp.get('depicted') or [])}."})
+    return docs
+
+
+# --- search --------------------------------------------------------------------
+
+_GENERIC = {"the", "booth", "stand", "sign", "banner", "poster", "screen", "stall", "of", "on", "at", "a"}
+
+
+def _stem(t: str) -> str:
+    """Tiny stemmer applied to both query and memory: gaming/games/game -> gam, booths -> booth."""
+    for suf in ("ing", "es", "s", "e"):
+        if t.endswith(suf) and len(t) - len(suf) >= 3 and not t.endswith("ss"):
+            return t[: -len(suf)]
+    return t
+
+
+def _tokens(s: str, drop_generic: bool = False) -> list[str]:
+    toks = [_stem(t) for t in re.findall(r"[a-z0-9]+", (s or "").lower()) if len(t) > 1]
+    return [t for t in toks if t not in _GENERIC] if drop_generic else toks
+
+
+_TOK_CACHE: dict[str, frozenset] = {}
+_SIM_CACHE: dict[tuple, float] = {}
+
+
+def _doc_tokens(text: str) -> frozenset:
+    t = _TOK_CACHE.get(text)
+    if t is None:
+        t = _TOK_CACHE[text] = frozenset(_tokens(text))
+    return t
+
+
+def _tok_sim(a: str, b: str) -> float:
+    key = (a, b)
+    v = _SIM_CACHE.get(key)
+    if v is None:
+        v = _SIM_CACHE[key] = SequenceMatcher(None, a, b).ratio()
+    return v
+
+
+def _tok_match(q: str, text: str) -> float:
+    """Share of query tokens that appear (fuzzily) in text. Token sets and pairwise
+    similarities are cached, because memory now holds hundreds of object docs."""
+    qt, tt = _tokens(q, drop_generic=True), _doc_tokens(text)
+    if not qt or not tt:
+        return 0.0
+    hit = 0.0
+    for a in qt:
+        if a in tt:
+            hit += 1
+            continue
+        best = max((_tok_sim(a, b) for b in tt if abs(len(a) - len(b)) <= 3), default=0)
+        hit += 1 if best >= 0.85 else (0.5 if best >= 0.7 else 0)
+    return hit / len(qt)
+
+
+def search(parsed: dict, docs: list[dict], now: dt.datetime, k: int = 5) -> list[tuple[float, dict]]:
+    window = {"just_now": 20, "last_hour": 60, "today": 24 * 60, "any": 10 ** 6}[parsed["time"]]
+    scored = []
+    for d in docs:
+        s = 0.0
+        # The user's own word counts fully; model-suggested synonyms count 70%.
+        terms = [(t, 1.0) for t in [parsed.get("target")] if t] + [(t, 0.7) for t in parsed.get("synonyms") or [] if t]
+        if terms:
+            s += max(w * (2.0 * _tok_match(t, d.get("name") or "") + 1.0 * _tok_match(t, d["text"])) for t, w in terms)
+        if parsed.get("category"):
+            s += 1.5 * _tok_match(parsed["category"], f"{d.get('kind')} {d.get('subtype')} {d['text']}")
+        if parsed["attribute"] == "location" and d["type"] == "item":
+            s += 0.3
+        if d["type"] == "object" and d.get("support", 1) >= 2:
+            s += 0.2  # seen in several frames: more trustworthy
+        if parsed["attribute"] in ("description", "name", "phone", "hours") and d["type"] == "sighting"                 and re.search(r"Other text on sign|Phone on sign|Hours on sign", d["text"]):
+            s += 0.6  # "what did it say?" -> OCR-verified text beats a visual description of the banner
+        if d.get("weak"):
+            s *= 0.7  # single-frame, short/low-confidence names are often OCR misreads
+        age_min = (now - d["seen_at"]).total_seconds() / 60
+        if age_min > window:
+            s *= 0.5  # soft: wrong time window halves the score, never hides a match
+        scored.append((round(s, 3), d))
+    scored.sort(key=lambda x: -x[0])
+    return [x for x in scored[:k] if x[0] > 0]
+
+
+# --- model calls ---------------------------------------------------------------
+
+def _json_call(system: str, user: str, schema: dict, name: str) -> dict:
+    msgs = [{"role": "system", "content": system}, {"role": "user", "content": user}]
+    try:
+        out = E._call(msgs, {"type": "json_schema", "json_schema": {"name": name, "schema": schema}},
+                      max_tokens=400, temperature=0.0)
+    except E.BadRequestError:
+        out = E._call(msgs, {"type": "json_object"}, max_tokens=400, temperature=0.0)
+    return E._parse_json(out)
+
+
+def parse_question(q: str) -> dict:
+    p = _json_call(PARSE_PROMPT, q, PARSE_SCHEMA, "query")
+    p["attribute"] = p.get("attribute") if p.get("attribute") in ATTRIBUTES else "other"
+    p["time"] = p.get("time") if p.get("time") in TIMES else "any"
+    return p
+
+
+def _ago(now: dt.datetime, t: dt.datetime) -> str:
+    m = int((now - t).total_seconds() // 60)
+    return "just now" if m < 2 else f"{m} minutes ago" if m < 90 else t.strftime("at %H:%M")
+
+
+# --- main entry ----------------------------------------------------------------
+
+def ask(question: str, docs: list[dict], now: dt.datetime, min_score: float = 0.9) -> dict:
+    t0, calls = time.time(), 0
+    parsed = parse_question(question); calls += 1
+    if parsed["attribute"] == "current_location":
+        # "Where am I now?" is about the LATEST memories, not about matching words.
+        recent = [d for d in docs if d["seen_at"] <= now and (now - d["seen_at"]).total_seconds() <= 180]
+        recent.sort(key=lambda d: (d["seen_at"], d["type"] != "object"), reverse=True)
+        floorish = [d for d in recent if re.search(r"floor|level|kat|fl", d["text"], re.I)]
+        pick = (floorish[:3] + [d for d in recent if d not in floorish[:3]])[:5]
+        hits = [(1.0, d) for d in pick]
+        if not hits:
+            hits = []
+    else:
+        hits = search(parsed, docs, now)
+
+    def result(label, answer, used=(), why=""):
+        ev = [{"id": f"E{i + 1}", "text": d["text"], "frame": d["frame"], "source": d["source"],
+               "seen_at": d["seen_at"].strftime("%H:%M:%S"), "score": s} for i, (s, d) in enumerate(hits)]
+        return {"question": question, "label": label, "answer": answer, "parsed": parsed,
+                "evidence_used": list(used), "evidence": ev, "why": why,
+                "calls": calls, "latency_s": round(time.time() - t0, 2)}
+
+    # Gate: nothing relevant enough -> abstain without asking the model.
+    if not hits or (parsed["attribute"] != "current_location" and hits[0][0] < min_score):
+        return result("DONT_KNOW", "I don't remember seeing that.", why="no relevant memory (gate)")
+
+    # Gate: the asked attribute is never stored for the matched thing.
+    if parsed["attribute"] in ("phone", "hours"):
+        top = [d for s, d in hits if s >= min_score]
+        if not any(d.get(parsed["attribute"]) for d in top):
+            name = top[0].get("name") or "it"
+            return result("DONT_KNOW", f"I saw {name}, but I didn't see a {parsed['attribute'] if parsed['attribute'] != 'hours' else 'opening hours'} sign for it.",
+                          why=f"no {parsed['attribute']} in matching memories (gate)")
+
+    # List questions ("which gaming booths did I see?") are answered in code, not by the model:
+    # a sighting counts only if the category appears in ITS OWN type/name/text. This makes
+    # "these are all gaming booths because one sign said GAMERGY" impossible.
+    if parsed["attribute"] == "list" and parsed.get("category"):
+        cat = parsed["category"]
+        matches = [(s, d) for d in docs if d["type"] == "sighting" and not d.get("weak")
+                   for s in [_tok_match(cat, f"{d.get('kind')} {d.get('subtype')} {d.get('name')}")] if s >= 0.5]
+        names = []
+        # Named places (booths, shops) are what the user wants listed; generic scene types
+        # ("gaming event") only if nothing named matches.
+        named = [(sc, d) for sc, d in matches if (d.get("name") or "").strip(" /")]
+        pool = sorted(named or matches, key=lambda x: x[1]["seen_at"])
+        for sc, d in pool:
+            n = (d.get("name") or "").split(" / ")[0].strip() or d.get("subtype")
+            if n and not any(n.lower() in x.lower() or x.lower() in n.lower() for x in names):
+                names.append(n)
+        if not names:
+            return result("DONT_KNOW", f"I don't remember seeing any {cat}.", why="list: no sighting matches category")
+        hits[:] = pool[:5]
+        more = f" and {len(names) - 6} more" if len(names) > 6 else ""
+        return result("SEEN", f"I saw {len(names)}: {', '.join(names[:6])}{more}.",
+                      used=[f"E{i + 1}" for i in range(len(hits))], why="list answered from typed memories (code)")
+
+    ev_block = "\n".join(f"E{i + 1} (seen {_ago(now, d['seen_at'])}): {d['text']}" for i, (s, d) in enumerate(hits))
+    out = _json_call(ANSWER_PROMPT, f"EVIDENCE:\n{ev_block}\n\nQUESTION: {question}", ANSWER_SCHEMA, "answer"); calls += 1
+
+    if out.get("label") != "SEEN":
+        return result("DONT_KNOW", out.get("answer") or "I don't remember seeing that.", why="model abstained")
+
+    # An interpretation is not a memory. Report what was seen and let the user decide.
+    if out.get("support") != "stated" and out.get("observations"):
+        return result("UNSURE", f"I'm not sure. {out['observations']}",
+                      used=out.get("evidence", []), why="answer was inferred, not stated in evidence")
+
+    # Verify: the quote must be inside one of the cited evidence texts.
+    cited = [hits[int(e[1:]) - 1][1]["text"] for e in out.get("evidence", [])
+             if re.fullmatch(r"E\d+", e or "") and int(e[1:]) <= len(hits)]
+    quotes = [q for q in out.get("quotes") or [] if q.strip()]
+    bad_q = [q for q in quotes if not any(E.fuzzy_in(q, c) for c in cited)]
+    if not cited or not quotes or bad_q:
+        return result("DONT_KNOW", "I'm not sure. I can show you the closest thing I saw.",
+                      why=f"verifier rejected quotes {bad_q or quotes!r}")
+    # Every number in the spoken answer must appear in the cited evidence.
+    nums_ev = set(re.findall(r"\d+", " ".join(cited)))
+    bad = [n for n in re.findall(r"\d+", out.get("answer", "")) if n not in nums_ev]
+    if bad:
+        return result("DONT_KNOW", "I'm not sure about the exact number. I can show you the frame.",
+                      why=f"verifier: numbers {bad} not in evidence")
+
+    # Visual facts (objects) have no OCR to check against. Instead Nemotron LOOKS AGAIN at the
+    # stored frame with a narrow yes/no question. Only for answers that rest on an object.
+    used_docs = [hits[int(e[1:]) - 1][1] for e in out.get("evidence", [])
+                 if re.fullmatch(r"E\d+", e or "") and int(e[1:]) <= len(hits)]
+    # Re-check the object the user actually asked about first (QR code, not the banner it is on).
+    terms = [t for t in [parsed.get("target")] + list(parsed.get("synonyms") or []) if t]
+    rel = lambda d: max((_tok_match(t, d["name"]) for t in terms), default=0)
+    obj_docs = sorted([d for d in used_docs if d["type"] in ("object", "depiction")], key=lambda d: (-rel(d), -d.get("support", 1)))
+    text_backed = any(d["type"] not in ("object", "depiction") for d in used_docs)  # OCR-verified sign/directory evidence
+    if obj_docs and not text_backed:
+        notes = []
+        for d in obj_docs[:3]:  # most-supported first; one confirmation is enough
+            ok, note = look_again(d, question); calls += 1
+            notes.append(f"{d['name']}@{d['frame']}: {'yes' if ok else 'no'}")
+            if ok:
+                return result("SEEN", out["answer"], used=out.get("evidence", []),
+                              why=f"verified {len(quotes)} quote(s) + visual re-check ({d['name']}): {note}")
+        d = obj_docs[0]
+        return result("DONT_KNOW", f"I noted a {d['name']} earlier, but looking at the photos again I'm not sure. I can show you the frames.",
+                      why=f"visual re-check failed on {len(notes)} frame(s): {'; '.join(notes)}")
+    return result("SEEN", out["answer"], used=out.get("evidence", []), why=f"verified {len(quotes)} quote(s)")
+
+
+LOOK_SCHEMA = {
+    "type": "object",
+    "properties": {"present": {"type": "boolean"}, "where": {"type": "string"}},
+    "required": ["present", "where"],
+}
+
+
+def look_again(doc: dict, question: str) -> tuple[bool, str]:
+    """Second look at the stored frame: is the object really there? Returns (present, where)."""
+    path = os.path.join(doc.get("frame_dir") or "", doc.get("frame") or "")
+    if not doc.get("frame_dir") or not os.path.exists(path):
+        return True, "frame not available, trusted memory"
+    jpeg = open(path, "rb").read()
+    if doc["type"] == "depiction":
+        ask_txt = (f'Look carefully. Is there a {doc.get("medium") or "banner or screen"} in this photo that shows a picture of: '
+                   f'"{doc.get("content")}"? Do not guess. If yes, say briefly where that picture is. '
+                   f'Return JSON {{"present": true/false, "where": "..."}}.')
+    else:
+        ask_txt = (f'Look carefully. Is there a real "{doc["name"]}" physically present in this photo '
+                   f'(not just shown in a picture on a banner or screen)? Do not guess. If yes, say briefly where it is '
+                   f'relative to other things. Return JSON {{"present": true/false, "where": "..."}}.')
+    msgs = [{"role": "user", "content": [E._image_part(E.downscale(jpeg)), {"type": "text", "text": ask_txt}]}]
+    try:
+        r = E._parse_json(E._call(msgs, {"type": "json_schema", "json_schema": {"name": "look", "schema": LOOK_SCHEMA}},
+                                  max_tokens=200, temperature=0.0))
+    except Exception as ex:
+        return True, f"re-check unavailable ({type(ex).__name__})"
+    return bool(r.get("present")), (r.get("where") or "")[:160]
+
+
+if __name__ == "__main__":
+    import sys
+    docs = load_memory()
+    now = max(d["seen_at"] for d in docs) + dt.timedelta(minutes=5)
+    print(json.dumps(ask(" ".join(sys.argv[1:]), docs, now), indent=1, ensure_ascii=False, default=str))

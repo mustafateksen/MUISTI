@@ -1,0 +1,521 @@
+"""MUISTI - Nemotron extraction step (v2).
+
+Frame (blurred JPEG) + OCR lines  ->  structured memory record (JSON).
+
+v2 changes vs v1 (extract_v1.py):
+- OCR lines get IDs (L01, L02, ...). Every field must cite the line it came from.
+- Code verifies EVERY cited field against its line, not only phone/hours.
+  List items (e.g. "7TH FLOOR" -> "SAUNA AND POOL") must have label and value on the
+  SAME line, which blocks wrong pairings when OCR loses the layout.
+- kind is a fixed enum; detail goes to subtype.
+- Prompt forbids describing text the model cannot read (no "Thai text", no invented names).
+"""
+import base64
+import io
+import json
+import os
+import random
+import re
+import time
+from difflib import SequenceMatcher
+
+from openai import (APIConnectionError, BadRequestError, InternalServerError,
+                    OpenAI, RateLimitError)
+from PIL import Image  # pip install openai pillow
+
+
+def _load_dotenv(path: str = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")) -> None:
+    if os.path.exists(path):
+        for line in open(path, encoding="utf-8"):
+            if "=" in line and not line.lstrip().startswith("#"):
+                k, v = line.strip().split("=", 1)
+                os.environ.setdefault(k, v)
+
+
+_load_dotenv()
+
+# Hackathon endpoint (Verda/DataCrunch vLLM container). Falls back to NVIDIA's public API.
+BASE_URL = os.environ.get("LLM_BASE_URL", "https://integrate.api.nvidia.com/v1")
+MODEL = os.environ.get("LLM_MODEL", "nvidia/nemotron-3.5-super-vl-120b-a12b")
+API_KEY = os.environ.get("VERDA_INFERENCE_KEY") or os.environ["NVIDIA_API_KEY"]
+
+client = OpenAI(base_url=BASE_URL, api_key=API_KEY, max_retries=0, timeout=120)
+
+# Extraction knobs (ablations in eval/ablation.py change these).
+EXTRACT_TEMPERATURE = 0.2
+EXTRACT_THINKING = False
+
+KINDS = ["booth", "shop", "restaurant", "health", "service", "directory",
+         "event", "transport", "notice", "street", "indoor_space", "other"]
+
+# Things a person may want to find again later. Not exhaustive; guides the model.
+OBJECT_CATEGORIES = ["navigation", "seating", "waste_smoking", "food_drink", "power_tech",
+                     "sign_screen", "furniture", "vehicle", "nature", "building", "safety", "other"]
+
+_NULLABLE_STR = {"type": ["string", "null"]}
+_LINE = {"type": ["string", "null"], "description": "OCR line id like L03"}
+
+RECORD_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "useful": {"type": "boolean"},
+        "kind": {"type": ["string", "null"], "enum": KINDS + [None]},
+        "subtype": _NULLABLE_STR,
+        "name": _NULLABLE_STR, "name_line": _LINE,
+        "phone": _NULLABLE_STR, "phone_line": _LINE,
+        "hours": _NULLABLE_STR, "hours_line": _LINE,
+        "items": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {"label": {"type": "string"}, "value": {"type": "string"},
+                               "line": {"type": "string"}},
+                "required": ["label", "value", "line"],
+            },
+        },
+        "other_text": _NULLABLE_STR,
+        "scene": {
+            "type": "object",
+            "properties": {"place_type": {"type": "string"}, "indoor": {"type": "boolean"},
+                           "lighting": {"type": "string"}},
+            "required": ["place_type", "indoor", "lighting"],
+        },
+        "objects": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "category": {"type": "string", "enum": OBJECT_CATEGORIES},
+                    "position": {"type": "string", "enum": ["left", "center", "right"]},
+                    "distance": {"type": "string", "enum": ["near", "mid", "far"]},
+                    "details": {"type": "string"},
+                    "count": {"type": "integer"},
+                },
+                "required": ["name", "category", "position", "distance", "details", "count"],
+            },
+        },
+        "relations": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {"subject": {"type": "string"}, "relation": {"type": "string"},
+                               "object": {"type": "string"}},
+                "required": ["subject", "relation", "object"],
+            },
+        },
+        "depictions": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "medium": {"type": "string", "enum": ["banner", "poster", "screen", "sign", "billboard", "painting", "other"]},
+                    "on": {"type": "string"},
+                    "content": {"type": "string"},
+                    "depicted": {"type": "array", "items": {"type": "string"}},
+                },
+                "required": ["medium", "on", "content", "depicted"],
+            },
+        },
+        "caption": {"type": "string"},
+        "confidence": {"type": "number"},
+    },
+    "required": ["useful", "kind", "subtype", "name", "name_line", "phone", "phone_line",
+                 "hours", "hours_line", "items", "other_text", "scene", "objects", "relations",
+                 "depictions", "caption", "confidence"],
+}
+
+# Used when Nemotron stands in for Apple Vision (offline tests). Same-row rule keeps
+# "7TH FLOOR   SAUNA AND POOL" together so pairs survive.
+OCR_PROMPT = """Transcribe the readable English text in this image, one visual row per line.
+- If a label and its value sit side by side on the same row (e.g. a floor number and a room name), keep them on ONE line.
+- Copy exactly as written. Do not translate, correct, complete or guess words.
+- Skip text that is too small, blurry or in a language you cannot read with certainty.
+If there is no readable text, reply with exactly: NO_TEXT"""
+
+SYSTEM_PROMPT = f"""You turn photos from smart glasses into memory records, so the wearer can later ask
+"where did I see X?" about ANYTHING useful they walked past, not only text.
+
+You get the image and OCR_LINES: text read by a separate OCR engine, one line per row, each with an id (L01, L02, ...). OCR may contain small errors. OCR_LINES may be "(none)".
+
+TEXT rules (strict):
+- name, phone, hours, items, other_text must come from OCR_LINES. Put the id of the line where a value starts in the matching *_line field (or "line" for items). A name may continue over the next 1-2 lines; phone, hours and items must be on one line.
+- If OCR_LINES does not contain it, use null. Do NOT read text from the image that is missing from OCR_LINES.
+- other_text: remaining useful text from OCR_LINES (slogan, website, address, date, price), joined with " / ".
+- items: label -> value pairs (directory floors, menu prices) ONLY when both are on the SAME line.
+
+VISUAL rules:
+- objects: list every clearly visible thing a person might want to find again: stairs, escalators, elevators, doors, exits, toilets, ashtrays, trash/recycling bins, benches, sofas, chairs, tables, water fountains, coffee machines, vending machines, charging stations, ATMs, bike racks, scooters, bus stops, trees, plants, screens, posters, QR codes, basketball hoops, stages, counters, etc.
+  For each: name (simple English noun, singular), category, position in the frame (left/center/right), distance (near/mid/far),
+  details (colour, material, state, what is on it), count (how many of this thing are visible in THIS frame; usually 1).
+  Numbers on plaques, indicators and screens: say in details what the number MEANS only if it is clear
+  (e.g. "elevator position indicator showing 4", "room number 204", "floor label 5TH FLOOR at top of directory").
+  If you cannot tell what a number means, write "unlabeled number 4". Never decide which floor the viewer is on.
+  Only list things you can actually see. If unsure, leave it out. Max 15 objects, most useful first.
+- relations: spatial facts between visible things that help someone find them, e.g. "stairs" "behind" "directory screen", "ashtray" "next to" "entrance door", "elevator" "right of" "directory screen". Use simple relations: behind, in front of, left of, right of, next to, above, below, on, inside.
+- scene: place_type (e.g. event hall, corridor, elevator lobby, street, cafe, entrance), indoor true/false, lighting (bright/dim/dark/colored).
+- Never describe real people in the scene, their faces, clothing, body or license plates. People are not objects.
+
+PICTURES (depictions) - keep them apart from the real scene:
+- Banners, posters, screens, billboards and signs often SHOW pictures: a photo of a man at a desk, a car, a beach, a game, a product.
+  Things inside a picture are NOT physically there. Never put them in objects or relations.
+- For each picture you can make out, add one depictions item:
+  medium (banner/poster/screen/sign/billboard/painting/other), on (which real object or booth it is on, e.g. "Cloudinary banner", "large screen at stage"),
+  content (one sentence: what the picture shows, e.g. "photo of a man working on a laptop at a desk"),
+  depicted (simple nouns of what is in the picture, e.g. ["man", "laptop", "desk"]).
+- People INSIDE pictures may be described generically (a man, a woman, a team, a child; what they are doing). Never guess who they are.
+- The banner/screen itself still goes in objects; only its picture content goes in depictions. Text on it stays in the TEXT fields.
+
+OTHER:
+- kind must be one of: {", ".join(KINDS)}. Use street / indoor_space when there is no business or sign. Specific type goes in subtype.
+- caption: 1-2 sentences describing the place and the most useful things in it. Never mention languages or text you cannot read.
+- useful=false only if the frame shows nothing worth remembering (blurred, floor, ceiling, a close-up of a person).
+
+Return ONLY one JSON object with keys: useful, kind, subtype, name, name_line, phone, phone_line, hours, hours_line, items, other_text, scene, objects, relations, depictions, caption, confidence."""
+
+FEW_SHOTS = [
+    ("""OCR_LINES:
+L01 DENTAL CLINIC
+L02 Bright Smile Dental
+L03 Tel. 040 123 4567
+L04 Mon-Fri 8-18
+L05 Gentle care for
+L06 the whole family""",
+     {"useful": True, "kind": "health", "subtype": "dentist",
+      "name": "Bright Smile Dental", "name_line": "L02",
+      "phone": "040 123 4567", "phone_line": "L03",
+      "hours": "Mon-Fri 8-18", "hours_line": "L04",
+      "items": [], "other_text": "DENTAL CLINIC / Gentle care for the whole family",
+      "scene": {"place_type": "street", "indoor": False, "lighting": "bright"},
+      "objects": [
+          {"name": "sign", "category": "sign_screen", "position": "center", "distance": "near", "details": "white dentist sign with blue text", "count": 1},
+          {"name": "door", "category": "navigation", "position": "left", "distance": "near", "details": "glass entrance door of the clinic", "count": 1},
+          {"name": "ashtray", "category": "waste_smoking", "position": "right", "distance": "near", "details": "standing metal ashtray bin", "count": 1},
+          {"name": "poster", "category": "sign_screen", "position": "left", "distance": "near", "details": "poster in the clinic window", "count": 1}],
+      "relations": [{"subject": "sign", "relation": "above", "object": "door"},
+                    {"subject": "ashtray", "relation": "right of", "object": "door"}],
+      "depictions": [{"medium": "poster", "on": "window poster of Bright Smile Dental",
+                      "content": "photo of a smiling woman sitting in a dentist chair",
+                      "depicted": ["woman", "dentist chair"]}],
+      "caption": "A dentist street entrance with a sign above a glass door and a standing ashtray to the right.",
+      "confidence": 0.9}),
+    ("""OCR_LINES:
+L01 3RD FLOOR
+L02 4TH FLOOR CAFE & LOUNGE
+L03 3RD FLOOR WORKSHOP ROOM
+L04 2ND FLOOR
+L05 RECEPTION
+L06 CITYHUB""",
+     {"useful": True, "kind": "directory", "subtype": "floor directory",
+      "name": "CITYHUB", "name_line": "L06",
+      "phone": None, "phone_line": None, "hours": None, "hours_line": None,
+      "items": [{"label": "4TH FLOOR", "value": "CAFE & LOUNGE", "line": "L02"},
+                {"label": "3RD FLOOR", "value": "WORKSHOP ROOM", "line": "L03"}],
+      "other_text": None,
+      "scene": {"place_type": "elevator lobby", "indoor": True, "lighting": "bright"},
+      "objects": [
+          {"name": "directory screen", "category": "sign_screen", "position": "left", "distance": "near", "details": "vertical digital screen listing floors", "count": 1},
+          {"name": "elevator", "category": "navigation", "position": "right", "distance": "near", "details": "steel elevator doors, closed", "count": 1},
+          {"name": "stairs", "category": "navigation", "position": "center", "distance": "mid", "details": "staircase going up, partly hidden", "count": 1}],
+      "relations": [{"subject": "elevator", "relation": "right of", "object": "directory screen"},
+                    {"subject": "stairs", "relation": "behind", "object": "directory screen"}],
+      "depictions": [],
+      "caption": "An elevator lobby with a floor directory screen, elevator doors to its right and stairs behind it.",
+      "confidence": 0.8}),
+    ("""OCR_LINES:
+(none)""",
+     {"useful": True, "kind": "street", "subtype": "sidewalk",
+      "name": None, "name_line": None, "phone": None, "phone_line": None, "hours": None, "hours_line": None,
+      "items": [], "other_text": None,
+      "scene": {"place_type": "street", "indoor": False, "lighting": "dim"},
+      "objects": [
+          {"name": "bench", "category": "seating", "position": "left", "distance": "mid", "details": "wooden park bench", "count": 1},
+          {"name": "trash bin", "category": "waste_smoking", "position": "left", "distance": "mid", "details": "green public bin", "count": 1},
+          {"name": "bike rack", "category": "vehicle", "position": "right", "distance": "far", "details": "metal rack with two bikes", "count": 1},
+          {"name": "billboard", "category": "sign_screen", "position": "center", "distance": "far", "details": "lit advertising billboard", "count": 1}],
+      "relations": [{"subject": "trash bin", "relation": "next to", "object": "bench"}],
+      "depictions": [{"medium": "billboard", "on": "billboard above the bench",
+                      "content": "advertisement photo of a red sports car on a coastal road",
+                      "depicted": ["sports car", "road", "sea"]}],
+      "caption": "A sidewalk at dusk with a wooden bench and a green bin on the left and a bike rack further right.",
+      "confidence": 0.8}),
+]
+
+
+# --- helpers -------------------------------------------------------------------
+
+def _image_part(jpeg_bytes: bytes) -> dict:
+    b64 = base64.b64encode(jpeg_bytes).decode()
+    return {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}}
+
+
+def _parse_json(text: str) -> dict:
+    match = re.search(r"\{.*\}", text, re.DOTALL)
+    if not match:
+        raise ValueError(f"no JSON in model output: {text[:200]}")
+    return json.loads(match.group(0))
+
+
+def downscale(jpeg_bytes: bytes, long_side: int = 1536) -> bytes:
+    """12 MP photos are wasteful: model tiles images into 512x512 (256 tokens each)."""
+    img = Image.open(io.BytesIO(jpeg_bytes)).convert("RGB")
+    img.thumbnail((long_side, long_side))
+    out = io.BytesIO()
+    img.save(out, format="JPEG", quality=85)
+    return out.getvalue()
+
+
+def number_lines(ocr: str | list[str]) -> dict[str, str]:
+    lines = ocr.splitlines() if isinstance(ocr, str) else ocr
+    lines = [l.strip() for l in lines if l.strip()]
+    return {f"L{i + 1:02d}": l for i, l in enumerate(lines)}
+
+
+# --- verification: the evidence rule lives here, not in the prompt -------------
+
+_OCR_FIX = str.maketrans({"O": "0", "o": "0", "l": "1", "I": "1", "S": "5", "B": "8"})
+
+
+def _digits(s: str) -> str:
+    return re.sub(r"\D", "", s.translate(_OCR_FIX))
+
+
+def _norm(s: str) -> str:
+    return re.sub(r"[^A-Z0-9]+", " ", s.upper()).strip()
+
+
+def fuzzy_in(value: str, line: str, threshold: float = 0.8) -> bool:
+    """value appears in line, tolerating small OCR errors (e.g. 'Smi1e' vs 'Smile')."""
+    v, l = _norm(value), _norm(line)
+    if not v:
+        return False
+    # Numbers are never fuzzy: '5TH FLOOR' must not match '7TH FLOOR'.
+    line_nums = re.findall(r"\d+", l)
+    if any(n not in line_nums for n in re.findall(r"\d+", v)):
+        return False
+    if v in l:
+        return True
+    n = len(v)
+    if n > len(l) + 2:
+        return False
+    best = max((SequenceMatcher(None, v, l[i:i + n]).ratio() for i in range(max(1, len(l) - n + 1))),
+               default=0)
+    return best >= threshold
+
+
+def phone_supported(phone: str | None, line: str) -> bool:
+    if not phone:
+        return False
+    want = _digits(phone)
+    return len(want) >= 6 and want in _digits(line)
+
+
+def _windows(lines: dict[str, str], lid: str, span: int = 3) -> list[str]:
+    """The cited line plus contiguous windows around it: sign names often wrap
+    over 2-3 OCR lines ('ARDUINO' / 'HARDWARE LAB')."""
+    keys = list(lines)
+    if lid not in lines:
+        return []
+    i = keys.index(lid)
+    out = []
+    for start in range(max(0, i - span + 1), i + 1):
+        for end in range(i + 1, min(len(keys), start + span) + 1):
+            out.append(" ".join(lines[k] for k in keys[start:end]))
+    return out
+
+
+def verify(record: dict, lines: dict[str, str]) -> dict:
+    """Null out every value that its cited OCR line does not support. Keep a reject log."""
+    rejected = []
+
+    def check(field: str, ok_fn, multiline: bool = False):
+        val, lid = record.get(field), record.get(f"{field}_line")
+        if not val:
+            return
+        line = lines.get(lid or "", "")
+        texts = _windows(lines, lid) if multiline else [line]
+        if not line or not any(ok_fn(val, t) for t in texts):
+            rejected.append({"field": field, "value": val, "line": lid, "line_text": line})
+            record[field] = None
+            record[f"{field}_line"] = None
+
+    check("name", fuzzy_in, multiline=True)  # names may wrap; items/phones may not
+    check("phone", phone_supported)
+    check("hours", fuzzy_in)
+
+    # other_text may span many lines: each ' / ' part must appear somewhere in the OCR text.
+    if record.get("other_text"):
+        full = " ".join(lines.values())
+        parts = [p.strip() for p in record["other_text"].split("/") if p.strip()]
+        kept = [p for p in parts if fuzzy_in(p, full)]
+        for p in parts:
+            if p not in kept:
+                rejected.append({"field": "other_text", "value": p, "line": None, "line_text": ""})
+        record["other_text"] = " / ".join(kept) or None
+
+    good_items = []
+    for it in record.get("items") or []:
+        line = lines.get(it.get("line", ""), "")
+        if line and fuzzy_in(it.get("label", ""), line) and fuzzy_in(it.get("value", ""), line):
+            good_items.append(it)
+        else:
+            rejected.append({"field": "item", "value": f"{it.get('label')} -> {it.get('value')}",
+                             "line": it.get("line"), "line_text": line})
+    record["items"] = good_items
+
+    if record.get("kind") not in KINDS:
+        record["kind"] = "other" if record.get("useful") else None
+
+    _clean_visual(record, rejected)
+    record["rejected"] = rejected
+    # Not useful if no text evidence survived AND nothing worth finding is visible.
+    if record.get("useful") and not any(record.get(f) for f in ("name", "phone", "hours", "other_text")) \
+            and not record["items"] and not record["objects"] and not record["depictions"]:
+        record["useful"] = False
+    return record
+
+
+_PEOPLE = re.compile(r"\b(person|people|man|men|woman|women|child|children|kid|boy|girl|crowd|face|"
+                     r"attendee|visitor|staff|guy|lady|hand|head)s?\b", re.I)
+
+
+_KEEP_PLURAL = {"stairs", "glasses", "scissors", "steps", "headphones", "pants", "news", "series"}
+
+
+def _singular(name: str) -> str:
+    """'chairs' -> 'chair', 'boxes' -> 'box', 'stairs' stays (last word only)."""
+    *head, last = name.split()
+    if last in _KEEP_PLURAL or len(last) <= 3 or not last.endswith("s") or last.endswith("ss"):
+        return name
+    if last.endswith(("xes", "ches", "shes")):
+        last = last[:-2]
+    elif last.endswith("ies"):
+        last = last[:-3] + "y"
+    else:
+        last = last[:-1]
+    return " ".join(head + [last])
+
+
+def _clean_visual(record: dict, rejected: list) -> None:
+    """Visual facts cannot be checked against OCR, so enforce what code CAN check:
+    no people as objects, no duplicates, and relations must connect listed objects."""
+    seen, objs = set(), []
+    for o in record.get("objects") or []:
+        name = (o.get("name") or "").strip().lower()
+        if not name or _PEOPLE.search(name):
+            if name:
+                rejected.append({"field": "object", "value": name, "line": None, "line_text": "person/empty"})
+            continue
+        name = _singular(name)
+        if name in seen:
+            continue
+        seen.add(name)
+        try:
+            cnt = max(1, min(50, int(o.get("count") or 1)))
+        except (TypeError, ValueError):
+            cnt = 1
+        objs.append({**o, "name": name, "count": cnt})
+    record["objects"] = objs[:15]
+
+    def known(x: str) -> bool:
+        x = (x or "").strip().lower()
+        return bool(x) and any(x == n or x in n or n in x for n in seen)
+
+    rels = []
+    for r in record.get("relations") or []:
+        subj, obj = _singular((r.get("subject") or "").lower().strip() or "x"), _singular((r.get("object") or "").lower().strip() or "x")
+        if known(subj) and known(obj) and subj != obj:
+            rels.append({"subject": subj, "relation": (r.get("relation") or "").strip().lower(), "object": obj})
+        else:
+            rejected.append({"field": "relation", "value": f"{subj} {r.get('relation')} {obj}",
+                             "line": None, "line_text": "refers to an object not listed"})
+    record["relations"] = rels
+    # Pictures: keep only ones with content; drop real-scene objects that are only in a picture.
+    deps = []
+    for d in record.get("depictions") or []:
+        content = (d.get("content") or "").strip()
+        if not content:
+            continue
+        depicted = [_singular(x.strip().lower()) for x in d.get("depicted") or [] if x and x.strip()]
+        deps.append({"medium": d.get("medium") or "other", "on": (d.get("on") or "").strip(),
+                     "content": content, "depicted": depicted[:12]})
+    record["depictions"] = deps[:6]
+    sc = record.get("scene") or {}
+    record["scene"] = {"place_type": sc.get("place_type") or "unknown", "indoor": bool(sc.get("indoor", True)),
+                       "lighting": sc.get("lighting") or "unknown"}
+
+
+# --- model call ----------------------------------------------------------------
+
+def _call(messages: list, response_format: dict, max_tokens: int = 800, temperature: float = 0.2,
+          thinking: bool = False) -> str:
+    """One request with backoff on 429/5xx."""
+    for attempt in range(5):
+        try:
+            resp = client.chat.completions.create(
+                model=MODEL,
+                messages=messages,
+                temperature=temperature,
+                top_p=0.95,
+                max_tokens=max_tokens,
+                response_format=response_format,
+                # Reasoning is ON by default and shares max_tokens -> empty content. Turn it off.
+                extra_body={"chat_template_kwargs": {"enable_thinking": thinking}},
+            )
+            choice = resp.choices[0]
+            if not choice.message.content:
+                raise ValueError(f"empty content, finish_reason={choice.finish_reason}")
+            return choice.message.content
+        except (RateLimitError, InternalServerError, APIConnectionError):
+            time.sleep(min(30, 2 ** attempt) + random.random())
+    raise RuntimeError("Nemotron unavailable after retries")
+
+
+def ocr(jpeg_bytes: bytes) -> list[str]:
+    """Temporary OCR via Nemotron (stand-in for Apple Vision in offline tests)."""
+    text = _call([{"role": "user", "content": [_image_part(downscale(jpeg_bytes)),
+                                               {"type": "text", "text": OCR_PROMPT}]}],
+                 {"type": "text"}, max_tokens=500, temperature=0.0).strip()
+    if text.upper().startswith("NO_TEXT"):
+        return []
+    return [l for l in text.splitlines() if l.strip()]
+
+
+# v6: frames without text are still described (objects, relations). Set False for text-only.
+SCENE_MODE = True
+
+
+def extract(jpeg_bytes: bytes, ocr_lines: str | list[str]) -> dict:
+    lines = number_lines(ocr_lines)
+    if not lines and not SCENE_MODE:
+        return {"useful": False, "kind": None, "items": [], "objects": [], "relations": [],
+                "rejected": [], "caption": "", "skipped": "no OCR text"}
+    ocr_block = "OCR_LINES:\n" + ("\n".join(f"{k} {v}" for k, v in lines.items()) or "(none)")
+
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    for user, answer in FEW_SHOTS:
+        messages += [{"role": "user", "content": user},
+                     {"role": "assistant", "content": json.dumps(answer)}]
+    messages.append({"role": "user", "content": [
+        {"type": "text", "text": ocr_block},  # OCR before image tends to help text-VQA
+        _image_part(downscale(jpeg_bytes)),
+    ]})
+    try:
+        content = _call(messages, {"type": "json_schema",
+                                   "json_schema": {"name": "memory", "schema": RECORD_SCHEMA}},
+                        max_tokens=6000 if EXTRACT_THINKING else 1600,
+                        temperature=EXTRACT_TEMPERATURE, thinking=EXTRACT_THINKING)
+    except BadRequestError:
+        content = _call(messages, {"type": "json_object"}, max_tokens=6000 if EXTRACT_THINKING else 1600,
+                        temperature=EXTRACT_TEMPERATURE, thinking=EXTRACT_THINKING)
+    record = verify(_parse_json(content), lines)
+    record["ocr_lines"] = lines
+    return record
+
+
+if __name__ == "__main__":
+    import sys
+
+    img_path, ocr_path = sys.argv[1], sys.argv[2]
+    with open(img_path, "rb") as f, open(ocr_path, encoding="utf-8") as g:
+        print(json.dumps(extract(f.read(), g.read()), ensure_ascii=False, indent=2))
