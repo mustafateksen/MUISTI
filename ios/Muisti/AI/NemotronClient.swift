@@ -31,7 +31,7 @@ actor NemotronClient {
         }
         var chatModel: String { self == .verda ? "nemotron-3.5-super-vl" : "nvidia/nemotron-3.5-super-vl-120b-a12b" }
         /// Verda serves only the VL model (no /embeddings).
-        var embedModel: String { self == .verda ? "" : "nvidia/nemotron-3.5-embed-1b" }
+        var embedModel: String { self == .verda ? "" : "nvidia/nemotron-3-embed-1b" }   // 3.5 hosted: 500 on batches, cold starts
     }
 
     enum NemotronError: Error, LocalizedError {
