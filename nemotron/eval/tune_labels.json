@@ -1,5 +1,5 @@
 {
- "notes": "Hand labels for object recognition tuning. Frames come from 4 public walk-through videos (Shibuya crossing, Times Square, Istanbul Emaar Square Mall, Ankara Kizilay at night), 640x360; frames are NOT in the repo (results/tune/frames). must = salient things a good extractor should list (recall). ok = other things really visible (not a hallucination if listed). pictures = frame shows a picture on a banner/poster/screen (null = unsure, not scored). People are never objects; a costumed street performer is a person.",
+ "notes": "Hand labels for object recognition tuning. Frames come from 4 public walk-through videos (Shibuya crossing, Times Square, Istanbul Emaar Square Mall, Ankara Kizilay at night), 640x360; frames are NOT in the repo (results/tune/frames). must = salient things a good extractor should list (recall). ok = other things really visible (not a hallucination if listed). pictures = frame shows a picture on a banner/poster/screen (null = unsure, not scored). People are never objects; a costumed street performer is a person. gl_* = MUISTI glasses frames (stairwell/exit walk 2026-11-14 01:57) + a night street photo; absent = things that are NOT there but are tempting (counted as hard hallucinations); facts = regexes that must appear somewhere in the record (wayfinding / floor labels).",
  "frames": {
   "vp_00": {
    "must": [
@@ -1145,6 +1145,400 @@
     "bin"
    ],
    "pictures": false
+  },
+  "gl_00": {
+   "must": [
+    "sign",
+    "street lamp",
+    "taxi",
+    "tree",
+    "building"
+   ],
+   "ok": [
+    "car",
+    "traffic sign",
+    "road sign",
+    "pole",
+    "crosswalk sign",
+    "yield sign",
+    "roundabout sign",
+    "no entry sign",
+    "wall",
+    "fence",
+    "road",
+    "bag",
+    "headlight",
+    "traffic light",
+    "parking sign",
+    "metro sign",
+    "lamp",
+    "light",
+    "direction sign",
+    "advertisement",
+    "billboard",
+    "window",
+    "sidewalk",
+    "barrier",
+    "poster"
+   ],
+   "absent": [
+    "metro station",
+    "ashtray",
+    "elevator"
+   ],
+   "facts": [
+    "metro[^,;.]{0,12}\\bleft\\b"
+   ],
+   "pictures": null,
+   "note": "Night street in Espoo (photo). Direction sign: P + Metro and Kiviruukki to the LEFT; Espoonlahden keskus to the left; right turn arrow below. Fact = 'METRO ... left' in the same clause (arrow for P+METRO points left)."
+  },
+  "gl_01": {
+   "must": [
+    "screen",
+    "railing",
+    "sign"
+   ],
+   "ok": [
+    "recycling sign",
+    "stairs",
+    "wall",
+    "light",
+    "lamp",
+    "wall light",
+    "ceiling",
+    "landing",
+    "handrail",
+    "floor label",
+    "floor",
+    "step",
+    "ceiling light"
+   ],
+   "absent": [
+    "elevator",
+    "ashtray"
+   ],
+   "facts": [
+    "\\bb5\\b"
+   ],
+   "pictures": true
+  },
+  "gl_02": {
+   "must": [
+    "screen",
+    "railing",
+    "sign"
+   ],
+   "ok": [
+    "recycling sign",
+    "stairs",
+    "wall",
+    "light",
+    "lamp",
+    "wall light",
+    "ceiling",
+    "landing",
+    "handrail",
+    "floor label",
+    "floor",
+    "step",
+    "ceiling light"
+   ],
+   "absent": [
+    "elevator",
+    "ashtray"
+   ],
+   "facts": [
+    "\\b0?5\\b|5th"
+   ],
+   "pictures": true
+  },
+  "gl_03": {
+   "must": [
+    "stairs",
+    "railing"
+   ],
+   "ok": [
+    "wall",
+    "light",
+    "lamp",
+    "wall light",
+    "ceiling",
+    "landing",
+    "handrail",
+    "floor label",
+    "floor",
+    "step",
+    "ceiling light"
+   ],
+   "absent": [
+    "elevator",
+    "ashtray"
+   ],
+   "pictures": false
+  },
+  "gl_04": {
+   "must": [
+    "stairs",
+    "railing"
+   ],
+   "ok": [
+    "wall",
+    "light",
+    "lamp",
+    "wall light",
+    "ceiling",
+    "landing",
+    "handrail",
+    "floor label",
+    "floor",
+    "step",
+    "ceiling light"
+   ],
+   "absent": [
+    "elevator",
+    "ashtray"
+   ],
+   "pictures": false
+  },
+  "gl_05": {
+   "must": [
+    "stairs",
+    "railing",
+    "sign"
+   ],
+   "ok": [
+    "wall",
+    "light",
+    "lamp",
+    "wall light",
+    "ceiling",
+    "landing",
+    "handrail",
+    "floor label",
+    "floor",
+    "step",
+    "ceiling light"
+   ],
+   "absent": [
+    "elevator",
+    "ashtray"
+   ],
+   "facts": [
+    "\\bb3\\b"
+   ],
+   "pictures": false
+  },
+  "gl_06": {
+   "must": [
+    "stairs",
+    "railing",
+    "sign"
+   ],
+   "ok": [
+    "wall",
+    "light",
+    "lamp",
+    "wall light",
+    "ceiling",
+    "landing",
+    "handrail",
+    "floor label",
+    "floor",
+    "step",
+    "ceiling light"
+   ],
+   "absent": [
+    "elevator",
+    "ashtray"
+   ],
+   "facts": [
+    "\\bb2\\b"
+   ],
+   "pictures": false
+  },
+  "gl_07": {
+   "must": [
+    "door",
+    "lamp"
+   ],
+   "ok": [
+    "glass door",
+    "sign",
+    "wall",
+    "floor marking",
+    "window",
+    "glass",
+    "patterned wall",
+    "handle",
+    "light",
+    "floor label",
+    "tile",
+    "wallpaper",
+    "floor",
+    "ceiling",
+    "wall light",
+    "frame"
+   ],
+   "absent": [
+    "elevator",
+    "ashtray"
+   ],
+   "facts": [
+    "\\b0?2\\b"
+   ],
+   "pictures": null
+  },
+  "gl_08": {
+   "must": [
+    "window"
+   ],
+   "ok": [
+    "glass",
+    "wall",
+    "floor marking",
+    "tape",
+    "floor",
+    "door",
+    "panel",
+    "vent",
+    "glass wall",
+    "line",
+    "column",
+    "ceiling",
+    "frame",
+    "partition"
+   ],
+   "absent": [
+    "elevator",
+    "ashtray"
+   ],
+   "pictures": false
+  },
+  "gl_09": {
+   "must": [
+    "cooler"
+   ],
+   "ok": [
+    "can",
+    "drink",
+    "window",
+    "glass",
+    "wall",
+    "column",
+    "logo",
+    "sign",
+    "fridge",
+    "freezer",
+    "refrigerator",
+    "display case",
+    "bottle",
+    "glass wall",
+    "panel",
+    "floor",
+    "door"
+   ],
+   "absent": [
+    "ashtray",
+    "elevator",
+    "vending machine",
+    "kiosk"
+   ],
+   "pictures": null
+  },
+  "gl_10": {
+   "must": [
+    "door",
+    "wet floor sign"
+   ],
+   "ok": [
+    "glass door",
+    "sign",
+    "poster",
+    "floor marking",
+    "plant",
+    "lamp",
+    "wall",
+    "window",
+    "paper sign",
+    "floor",
+    "tape",
+    "light",
+    "ceiling light",
+    "tile",
+    "column",
+    "notice",
+    "pillar"
+   ],
+   "absent": [
+    "ashtray",
+    "elevator"
+   ],
+   "pictures": null
+  },
+  "gl_11": {
+   "must": [
+    "exit sign",
+    "door"
+   ],
+   "ok": [
+    "glass door",
+    "poster",
+    "sign",
+    "floor marking",
+    "arrow",
+    "doormat",
+    "mat",
+    "wall",
+    "window",
+    "glass",
+    "light",
+    "handle",
+    "decoration",
+    "floor",
+    "tape",
+    "qr code",
+    "ceiling",
+    "frame",
+    "plant",
+    "lamp"
+   ],
+   "absent": [
+    "ashtray",
+    "elevator"
+   ],
+   "pictures": null
+  },
+  "gl_12": {
+   "must": [
+    "door",
+    "doormat"
+   ],
+   "ok": [
+    "glass door",
+    "mat",
+    "light",
+    "lamp",
+    "wall",
+    "window",
+    "glass",
+    "sign",
+    "decoration",
+    "plant",
+    "floor marking",
+    "ceiling light",
+    "tile",
+    "floor",
+    "handle",
+    "pillar",
+    "column",
+    "frame",
+    "logo"
+   ],
+   "absent": [
+    "ashtray",
+    "elevator"
+   ],
+   "pictures": null
   }
  }
 }

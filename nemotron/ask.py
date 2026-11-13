@@ -101,7 +101,7 @@ def _video_start(path: str) -> dt.datetime:
     return dt.datetime.fromisoformat(d).replace(hour=h, minute=int(mi), second=int(s)) - dt.timedelta(seconds=90)
 
 
-def load_memory(pattern: str = "results/*/v9/results.json") -> list[dict]:
+def load_memory(pattern: str = "results/*/v11/results.json") -> list[dict]:
     """Offline mode: build memory from process_video result files."""
     sightings = []
     for path in sorted(glob.glob(pattern)):
@@ -144,7 +144,10 @@ def docs_from_sightings(sightings: list[dict]) -> list[dict]:
                              "text": f"{it['value']} -> {it['label']} (on the {s.get('name') or ''} {s.get('subtype') or 'sign'})"})
             # One doc per visible thing, with the spatial relations that mention it.
             for o in s.get("objects") or []:
-                rels = [f"{r['subject']} {r['relation']} {r['object']}" for r in s.get("relations") or []
+                # Most-seen relations first, with counts: "screen left of elevator (5 frames)" must win
+                # over a one-off "sign right of screen (1 frame)".
+                rels = [f"{r['subject']} {r['relation']} {r['object']} (seen in {r.get('support', 1)} frames)"
+                        for r in sorted(s.get("relations") or [], key=lambda r: -r.get("support", 1))
                         if o["name"] in (r["subject"], r["object"])]
                 docs.append({**base, "type": "object", "name": o["name"], "kind": o.get("category"),
                              "frame": o.get("frame") or base["frame"], "support": o.get("support", 1),
@@ -154,12 +157,31 @@ def docs_from_sightings(sightings: list[dict]) -> list[dict]:
                                      + f" (Noticed in {o.get('support', 1)} video frame(s); this is NOT a count of objects.)"})
             # Pictures shown ON banners/screens: not real objects, and the text says so.
             for dp in s.get("depictions") or []:
-                docs.append({**base, "type": "depiction", "name": " ".join(dp.get("depicted") or []),
+                # name = what the picture shows, so "photo of people at laptops" matches by name, not only by text
+                docs.append({**base, "type": "depiction",
+                             "name": f"{dp.get('content') or ''} {' '.join(dp.get('depicted') or [])}{_picture_hints(dp)}",
                              "kind": f"picture on {dp.get('medium')}", "frame": dp.get("frame") or base["frame"],
                              "support": dp.get("support", 1), "content": dp.get("content"), "medium": dp.get("medium"),
                              "text": f"PICTURE (not a real object): {dp.get('content')}. Shown on: {dp.get('on') or dp.get('medium')} "
-                                     f"({dp.get('medium')}), in a {where}. Things in the picture: {', '.join(dp.get('depicted') or [])}."})
+                                     f"({dp.get('medium')}), in a {where}. Things in the picture: {', '.join(dp.get('depicted') or [])}."
+                                     + _picture_hints(dp)})
     return docs
+
+
+_PEOPLE_WORDS = {"man", "woman", "men", "women", "person", "people", "child", "children", "boy", "girl", "team", "crowd", "worker"}
+_SCREEN_WORDS = {"laptop", "computer", "monitor", "phone", "tablet", "screen", "display"}
+
+
+def _picture_hints(dp: dict) -> str:
+    """Word search cannot know that 'a man at a laptop' answers 'people working on screens'.
+    Until semantic (embedding) search is merged, add the obvious umbrella words."""
+    words = set(re.findall(r"[a-z]+", (dp.get("content") or "").lower() + " " + " ".join(dp.get("depicted") or []).lower()))
+    hints = []
+    if words & _PEOPLE_WORDS:
+        hints.append("people")
+    if words & _SCREEN_WORDS:
+        hints.append("computer screens")
+    return f" Also: {', '.join(hints)}." if hints else ""
 
 
 # --- search --------------------------------------------------------------------
@@ -375,7 +397,8 @@ def ask(question: str, docs: list[dict], now: dt.datetime, min_score: float = 0.
                 return result("SEEN", out["answer"], used=out.get("evidence", []),
                               why=f"verified {len(quotes)} quote(s) + visual re-check ({d['name']}): {note}")
         d = obj_docs[0]
-        return result("DONT_KNOW", f"I noted a {d['name']} earlier, but looking at the photos again I'm not sure. I can show you the frames.",
+        what = (f"a picture ({d.get('content')}) on a {d.get('medium')}" if d["type"] == "depiction" else f"a {d['name']}")
+        return result("DONT_KNOW", f"I noted {what} earlier, but looking at the photos again I'm not sure. I can show you the frames.",
                       why=f"visual re-check failed on {len(notes)} frame(s): {'; '.join(notes)}")
     guarded = _medium_guard(question, out["answer"], used_docs)
     if guarded:

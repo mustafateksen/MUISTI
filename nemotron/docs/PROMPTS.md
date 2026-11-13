@@ -2,7 +2,7 @@
 
 Kaynak: `nemotron/extract.py` ve `nemotron/ask.py`. Bu dosya koddan otomatik çıkarıldı, metinler **birebir** aynı.
 Makine tarafından okunabilir hali: `docs/prompts.json`.
-Sürüm: **v12** (eval/tune.py ile 40 etiketli karede seçildi, bkz. eval/ITERATIONS.md). Nesne tanıma test seti (görülmemiş 20 kare): kapsam %93, doğruluk %91. Gözlük soru-cevap testi: 30–31/31, uydurma yok.
+Sürüm: **v14** (v13c + directory-screen ismi; eval/tune.py ile 53 etiketli karede seçildi: YouTube + gözlük + gece fotoğrafı). Test (27 kare): kapsam %86–89, doğruluk %90–92, olmayan nesne yazma 0–1. Gözlük soru-cevap: 29–30/31, uydurma ve yanlış cevap 0.
 
 ## iOS'a taşırken mutlaka bilinmesi gerekenler
 
@@ -18,7 +18,7 @@ Prompt tek başına yetmiyor. Test sırasında model "OCR'da yoksa yazma" kural�
   - geçici OCR: 0
 - `response_format`: `{"type": "json_schema", "json_schema": {"name": "...", "schema": <aşağıdaki şema>}}`. Reddedilirse `{"type": "json_object"}` kullanın.
 - `max_tokens`:
-  - extraction: 2500 (nesneler ve resimler yüzünden 800 yetmiyor). Bozuk JSON gelirse bir kez temperature 0 ile tekrar dene.
+  - extraction: 2500 (nesneler ve resimler yüzünden 800 yetmiyor). Bozuk JSON gelirse bir kez temperature 0 ile tekrar dene; yine bozuksa son tam nesneden kesip parantezleri kapat (JSON onarımı).
   - soru ayrıştırma ve cevap: 400
   - tekrar bakma: 200
 - Görüntü: uzun kenarı 1536 px'e küçültülmüş JPEG, `image_url` olarak data URL.
@@ -37,6 +37,8 @@ L03 5TH FLOOR  ARDUINO HARDWARE LAB
 - Yazı yoksa: `OCR_LINES:
 (none)`.
 
+**Few-shot uyarısı:** Örneklerdeki nesneler modeli yönlendiriyor (eski örnekteki asansör ve küllük gerçek karelerde uydurulmaya başlamıştı). Örnekleri değiştirirken bunu ölçün.
+
 **Kod tarafı kontroller** (`extract.py` içindeki `verify` ve `_clean_visual` fonksiyonları), cevap modelden döndükten sonra:
 1. `name`, `phone` ve `hours` alanları, kendi `*_line` ID'sindeki OCR satırında geçmeli.
    - `name` en fazla 3 ardışık satıra yayılabilir.
@@ -47,6 +49,7 @@ L03 5TH FLOOR  ARDUINO HARDWARE LAB
    - İnsan içeren isimler atılır.
    - Ayrıntısında neon/ışıklı tabela/logo geçen "screen" → "sign" olur (video/görüntü geçmiyorsa).
    - Ayrıntısında kostüm/sanatçı/maskot geçen statue/mannequin atılır (o bir insandır).
+   - İsim kendi ayrıntısında geçmiyorsa ve ayrıntının başı bilinen başka bir nesneyi söylüyorsa ayrıntı kazanır: "ashtray | yellow wet floor sign" → wet floor sign, "car | silver taxi" → taxi, "vending machine | drink cooler" → drink cooler.
    - Çoğullar tekile çevrilir.
    - En fazla 15 tane tutulur.
    - `count` 1–50 arasına sıkıştırılır.
@@ -108,6 +111,15 @@ VISUAL rules:
   Every shop front you can see counts as a store (put what it sells in details). A small street booth selling
   snacks, drinks or newspapers is a kiosk. Name the goods on stalls and in windows (fish, flowers, hats, shoes).
   A QR code on a banner, poster, screen or sign is its own object: list it as "qr code" (details: what it is on).
+  Direction / wayfinding signs: name it "direction sign" and put every destination WITH its arrow direction in details
+  (e.g. "arrows: P + METRO left, CENTRE straight ahead"). A direction sign is not the place it points to: do not use
+  its destinations as kind, subtype or name.
+  Large numbers or codes painted on walls or pillars (B2, 05, L3) are floor labels: name "sign", details "floor label B2".
+  Elevator only if you clearly see elevator doors AND call buttons or a floor indicator; a plain wall or door is not one.
+  Use these names when they fit: drink cooler (glass-front fridge with drinks), wet floor sign (yellow warning stand),
+  traffic sign (yield, no entry, crossing, roundabout), traffic light, doormat.
+  count: repeated things are counted (8 street lamps = one object with count 8).
+  In dark or night scenes still list what you can see: lit lamps, lit signs, windows, vehicles with lights, silhouettes.
   Rare or striking things (aquarium, fountain, statue, slide, stage) only if you are certain: a blue wall, tiles
   or a screen showing water is not an aquarium.
 - relations (max 6): spatial facts between visible things that help someone find them, e.g. "stairs" "behind" "directory screen", "ashtray" "next to" "entrance door", "elevator" "right of" "directory screen". Use simple relations: behind, in front of, left of, right of, next to, above, below, on, inside.
@@ -130,6 +142,9 @@ OTHER:
 - useful=false only if the frame shows nothing worth remembering (blurred, floor, ceiling, a close-up of a person).
 
 Return ONLY one JSON object with keys: useful, kind, subtype, name, name_line, phone, phone_line, hours, hours_line, items, other_text, scene, objects, relations, depictions, caption, confidence.
+
+The examples only show the JSON format. They are different places: never add an object because it appeared in an
+example. Describe only what is in THIS photo.
 ```
 
 ## 2. Extraction: few-shot örnekleri
@@ -182,17 +197,9 @@ L06 the whole family
       "count": 1
     },
     {
-      "name": "ashtray",
-      "category": "waste_smoking",
-      "position": "right",
-      "distance": "near",
-      "details": "standing metal ashtray bin",
-      "count": 1
-    },
-    {
       "name": "poster",
       "category": "sign_screen",
-      "position": "left",
+      "position": "right",
       "distance": "near",
       "details": "poster in the clinic window",
       "count": 1
@@ -205,7 +212,7 @@ L06 the whole family
       "object": "door"
     },
     {
-      "subject": "ashtray",
+      "subject": "poster",
       "relation": "right of",
       "object": "door"
     }
@@ -214,14 +221,14 @@ L06 the whole family
     {
       "medium": "poster",
       "on": "window poster of Bright Smile Dental",
-      "content": "photo of a smiling woman sitting in a dentist chair",
+      "content": "photo of a smiling woman in a dentist chair",
       "depicted": [
         "woman",
         "dentist chair"
       ]
     }
   ],
-  "caption": "A dentist street entrance with a sign above a glass door and a standing ashtray to the right.",
+  "caption": "A dentist entrance with a sign above a glass door and a poster in the window.",
   "confidence": 0.9
 }
 ```
@@ -261,7 +268,7 @@ L06 CITYHUB
   ],
   "other_text": null,
   "scene": {
-    "place_type": "elevator lobby",
+    "place_type": "corridor",
     "indoor": true,
     "lighting": "bright"
   },
@@ -271,54 +278,50 @@ L06 CITYHUB
       "category": "sign_screen",
       "position": "left",
       "distance": "near",
-      "details": "vertical digital screen listing floors",
+      "details": "vertical digital directory screen listing floors",
       "count": 1
     },
     {
-      "name": "elevator",
-      "category": "navigation",
+      "name": "sign",
+      "category": "sign_screen",
       "position": "right",
       "distance": "near",
-      "details": "steel elevator doors, closed",
+      "details": "floor label 3 painted large on the wall",
       "count": 1
     },
     {
-      "name": "stairs",
+      "name": "door",
       "category": "navigation",
-      "position": "center",
+      "position": "right",
       "distance": "mid",
-      "details": "staircase going up, partly hidden",
+      "details": "grey corridor door, closed",
       "count": 1
     }
   ],
   "relations": [
     {
-      "subject": "elevator",
-      "relation": "right of",
-      "object": "directory screen"
-    },
-    {
-      "subject": "stairs",
-      "relation": "behind",
-      "object": "directory screen"
+      "subject": "directory screen",
+      "relation": "left of",
+      "object": "door"
     }
   ],
   "depictions": [],
-  "caption": "An elevator lobby with a floor directory screen, elevator doors to its right and stairs behind it.",
+  "caption": "A corridor with a floor directory screen, a large floor label 3 on the wall and a closed door.",
   "confidence": 0.8
 }
 ```
 **Örnek 3: user mesajı**
 ```
 OCR_LINES:
-(none)
+L01 CITY CENTRE
+L02 P + METRO
 ```
 **Örnek 3: assistant cevabı**
 ```json
 {
   "useful": true,
   "kind": "street",
-  "subtype": "sidewalk",
+  "subtype": "road junction",
   "name": null,
   "name_line": null,
   "phone": null,
@@ -326,66 +329,55 @@ OCR_LINES:
   "hours": null,
   "hours_line": null,
   "items": [],
-  "other_text": null,
+  "other_text": "CITY CENTRE / P + METRO",
   "scene": {
     "place_type": "street",
     "indoor": false,
-    "lighting": "dim"
+    "lighting": "dark"
   },
   "objects": [
     {
-      "name": "bench",
-      "category": "seating",
-      "position": "left",
+      "name": "direction sign",
+      "category": "navigation",
+      "position": "center",
       "distance": "mid",
-      "details": "wooden park bench",
+      "details": "arrows: CITY CENTRE straight ahead, P + METRO right",
       "count": 1
     },
     {
-      "name": "trash bin",
-      "category": "waste_smoking",
-      "position": "left",
+      "name": "street lamp",
+      "category": "furniture",
+      "position": "center",
       "distance": "mid",
-      "details": "green public bin",
+      "details": "lit lamp posts along the road",
+      "count": 4
+    },
+    {
+      "name": "crosswalk",
+      "category": "navigation",
+      "position": "left",
+      "distance": "near",
+      "details": "white striped crossing",
       "count": 1
     },
     {
-      "name": "bike rack",
+      "name": "bus",
       "category": "vehicle",
       "position": "right",
       "distance": "far",
-      "details": "metal rack with two bikes",
-      "count": 1
-    },
-    {
-      "name": "billboard",
-      "category": "sign_screen",
-      "position": "center",
-      "distance": "far",
-      "details": "lit advertising billboard",
+      "details": "city bus with lit windows",
       "count": 1
     }
   ],
   "relations": [
     {
-      "subject": "trash bin",
-      "relation": "next to",
-      "object": "bench"
+      "subject": "direction sign",
+      "relation": "above",
+      "object": "crosswalk"
     }
   ],
-  "depictions": [
-    {
-      "medium": "billboard",
-      "on": "billboard above the bench",
-      "content": "advertisement photo of a red sports car on a coastal road",
-      "depicted": [
-        "sports car",
-        "road",
-        "sea"
-      ]
-    }
-  ],
-  "caption": "A sidewalk at dusk with a wooden bench and a green bin on the left and a bike rack further right.",
+  "depictions": [],
+  "caption": "A dark road junction with a direction sign (city centre ahead, parking and metro to the right), four lit street lamps and a crossing.",
   "confidence": 0.8
 }
 ```

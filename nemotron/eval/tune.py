@@ -76,6 +76,12 @@ SYN = {
     "fish": ["seafood"],
     "lamp": ["lantern", "wall lamp", "light", "street lamp", "lamp post"],
     "tree": ["bare tree", "trees"],
+    "cooler": ["fridge", "refrigerator", "drink cooler", "freezer", "display fridge", "beverage cooler", "chest cooler"],
+    "wet floor sign": ["caution sign", "warning sign", "wet floor", "floor sign", "caution board", "a-frame sign", "sandwich board"],
+    "exit sign": ["emergency exit sign", "exit"],
+    "doormat": ["mat", "floor mat", "entrance mat", "rug"],
+    "window": ["glass wall", "glass panel", "window panel", "glazing", "glass facade"],
+    "door": ["glass door", "entrance", "doorway", "double door"],
 }
 PEOPLE = re.compile(r"\b(person|people|man|men|woman|women|child|children|kid|boy|girl|crowd|face|"
                     r"attendee|visitor|staff|guy|lady|hand|head|pedestrian|tourist|performer)s?\b", re.I)
@@ -133,7 +139,8 @@ def run_variant(name: str, frames: list[str], workers: int = 8) -> dict:
 
 
 def score(out: dict) -> dict:
-    must_hit = must_all = listed = ok_listed = people = 0
+    must_hit = must_all = listed = ok_listed = people = absent_hits = fact_hit = fact_all = 0
+    absent_list = []
     pic_tp = pic_fn = pic_fp = pic_tn = errors = 0
     suspects, missed = [], []
     lat = []
@@ -150,6 +157,19 @@ def score(out: dict) -> dict:
                 must_hit += 1
             else:
                 missed.append(f"{f}:{m}")
+        for a in lab.get("absent") or []:
+            if any(norm(o) == norm(a) or matches(o, a) and norm(a) in norm(o) for o in objs) or (
+                    a == "metro station" and re.search(r"metro station", f"{rec.get('subtype')} {rec.get('kind')}", re.I)):
+                absent_hits += 1
+                absent_list.append(f"{f}:{a}")
+        blob = " ".join([json.dumps(rec.get("objects")), json.dumps(rec.get("relations")), json.dumps(rec.get("items")),
+                         str(rec.get("other_text")), str(rec.get("caption"))]).lower()
+        for rx in lab.get("facts") or []:
+            fact_all += 1
+            if re.search(rx, blob, re.I):
+                fact_hit += 1
+            else:
+                missed.append(f"{f}:FACT /{rx}/")
         for o in objs:
             listed += 1
             if any(matches(o, x) for x in lab["must"] + lab["ok"]):
@@ -168,9 +188,11 @@ def score(out: dict) -> dict:
         "precision_est": f"{ok_listed}/{listed} ({100 * ok_listed / max(1, listed):.0f}%)",
         "objects_per_frame": round(listed / max(1, len(out)), 1),
         "people_as_objects": people,
+        "absent_listed": absent_hits,
+        "facts": f"{fact_hit}/{fact_all}",
         "pictures": f"found {pic_tp}/{pic_tp + pic_fn}, false {pic_fp}/{pic_fp + pic_tn}",
         "avg_latency_s": round(sum(lat) / max(1, len(lat)), 2),
-        "_suspects": suspects, "_missed": missed,
+        "_suspects": suspects, "_missed": missed, "_absent": absent_list,
     }
 
 
@@ -194,3 +216,4 @@ if __name__ == "__main__":
         print(f"== {name} [{split}]", json.dumps({k: v for k, v in s.items() if not k.startswith("_")}, ensure_ascii=False))
         print("   suspects:", ", ".join(s["_suspects"][:60]))
         print("   missed:  ", ", ".join(s["_missed"][:60]))
+        print("   ABSENT LISTED:", ", ".join(s["_absent"]))

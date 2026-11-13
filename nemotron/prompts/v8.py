@@ -6,7 +6,9 @@ one frame returned truncated JSON (very long picture descriptions on Times Squar
 """
 import extract as E
 
-_OBJECTS_V7 = E.SYSTEM_PROMPT[E.SYSTEM_PROMPT.index("- objects:"):E.SYSTEM_PROMPT.index("- relations:")]
+# Historical: written against the v7 prompt. After later versions were adopted into extract.py this
+# rebuilds only an approximation; it must still import.
+_OBJECTS_V7 = E.SYSTEM_PROMPT[E.SYSTEM_PROMPT.index("- objects:"):E.SYSTEM_PROMPT.index("- relations")]
 
 _OBJECTS_V8 = """- objects: describe the scene so that ANY clearly visible thing can be found again later. List 8-15 objects.
   Go through these groups and include what is clearly visible from each (largest / most useful first):

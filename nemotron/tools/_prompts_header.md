@@ -2,7 +2,7 @@
 
 Kaynak: `nemotron/extract.py` ve `nemotron/ask.py`. Bu dosya koddan otomatik çıkarıldı, metinler **birebir** aynı.
 Makine tarafından okunabilir hali: `docs/prompts.json`.
-Sürüm: **v12** (eval/tune.py ile 40 etiketli karede seçildi, bkz. eval/ITERATIONS.md). Nesne tanıma test seti (görülmemiş 20 kare): kapsam %93, doğruluk %91. Gözlük soru-cevap testi: 30–31/31, uydurma yok.
+Sürüm: **v14** (v13c + directory-screen ismi; eval/tune.py ile 53 etiketli karede seçildi: YouTube + gözlük + gece fotoğrafı). Test (27 kare): kapsam %86–89, doğruluk %90–92, olmayan nesne yazma 0–1. Gözlük soru-cevap: 29–30/31, uydurma ve yanlış cevap 0.
 
 ## iOS'a taşırken mutlaka bilinmesi gerekenler
 
@@ -18,7 +18,7 @@ Prompt tek başına yetmiyor. Test sırasında model "OCR'da yoksa yazma" kural�
   - geçici OCR: 0
 - `response_format`: `{"type": "json_schema", "json_schema": {"name": "...", "schema": <aşağıdaki şema>}}`. Reddedilirse `{"type": "json_object"}` kullanın.
 - `max_tokens`:
-  - extraction: 2500 (nesneler ve resimler yüzünden 800 yetmiyor). Bozuk JSON gelirse bir kez temperature 0 ile tekrar dene.
+  - extraction: 2500 (nesneler ve resimler yüzünden 800 yetmiyor). Bozuk JSON gelirse bir kez temperature 0 ile tekrar dene; yine bozuksa son tam nesneden kesip parantezleri kapat (JSON onarımı).
   - soru ayrıştırma ve cevap: 400
   - tekrar bakma: 200
 - Görüntü: uzun kenarı 1536 px'e küçültülmüş JPEG, `image_url` olarak data URL.
@@ -37,6 +37,8 @@ L03 5TH FLOOR  ARDUINO HARDWARE LAB
 - Yazı yoksa: `OCR_LINES:
 (none)`.
 
+**Few-shot uyarısı:** Örneklerdeki nesneler modeli yönlendiriyor (eski örnekteki asansör ve küllük gerçek karelerde uydurulmaya başlamıştı). Örnekleri değiştirirken bunu ölçün.
+
 **Kod tarafı kontroller** (`extract.py` içindeki `verify` ve `_clean_visual` fonksiyonları), cevap modelden döndükten sonra:
 1. `name`, `phone` ve `hours` alanları, kendi `*_line` ID'sindeki OCR satırında geçmeli.
    - `name` en fazla 3 ardışık satıra yayılabilir.
@@ -47,6 +49,7 @@ L03 5TH FLOOR  ARDUINO HARDWARE LAB
    - İnsan içeren isimler atılır.
    - Ayrıntısında neon/ışıklı tabela/logo geçen "screen" → "sign" olur (video/görüntü geçmiyorsa).
    - Ayrıntısında kostüm/sanatçı/maskot geçen statue/mannequin atılır (o bir insandır).
+   - İsim kendi ayrıntısında geçmiyorsa ve ayrıntının başı bilinen başka bir nesneyi söylüyorsa ayrıntı kazanır: "ashtray | yellow wet floor sign" → wet floor sign, "car | silver taxi" → taxi, "vending machine | drink cooler" → drink cooler.
    - Çoğullar tekile çevrilir.
    - En fazla 15 tane tutulur.
    - `count` 1–50 arasına sıkıştırılır.

@@ -284,6 +284,55 @@ What broke with v11, and the fix for each:
 
 Remaining glasses miss (1 of 2 runs): the harbour question answered UNSURE with the correct content. Cautious, not wrong.
 
+## v13: glasses frames, few-shot priming, wayfinding (2026-11-14)
+
+**New data.** A new glasses video (stairwell B5→B2, glass doors, drink cooler, exit) and a night street photo in Espoo exposed errors that the YouTube frames never showed. 13 of these frames were added to the tuning set, which now has 53 frames (26 train / 27 test). Two new metrics:
+- `absent`: tempting things that are NOT there (elevator, ashtray, "vending machine" for a drink cooler, "metro station" for a road sign). Counted as hard hallucinations.
+- `facts`: wayfinding and floor-label facts that must appear in the record (B5, 05, B3, B2, 02, "P + METRO left").
+
+**Root cause found: few-shot priming.** The v12 examples paired *floor directory → elevator + stairs* and *entrance door → ashtray*. On the glasses frames, the model added exactly these:
+- an elevator next to a directory screen, in 3 frames
+- `ashtray | details: "yellow wet floor sign"`
+
+The examples inform the model, and they also suggest objects that are not there.
+
+| Variant | Change | Train recall / prec / absent | Test recall / prec / absent (runs) |
+|---|---|---|---|
+| v12 | baseline on the extended set | 86% / 91% / 2 | 88% / 91% / **3** |
+| v13a | neutral few-shots + "examples are format only" | 90% / 92% / 2 | – |
+| v13b | + wayfinding (arrows per destination; a direction sign is not a place), elevator only with doors + buttons, cooler / wet-floor / traffic-sign names, counts, dark scenes | 93% / 94% / 0 | 87–89% / 91% / 1, 1 |
+| **v13c** | + **code:** if the name is not in its own details, the details' head noun wins (ashtray→wet floor sign, car→taxi, vending machine→drink cooler) | 89% / 94% / 0 | **89% / 91–92% / 0, 0** |
+| v13d | + "one arrow per panel" rule | – | no change on the Espoo sign (3/3 identical); dropped |
+| v14 | production = v13c + directory-screen name restored in shot 2 | 89% / 91% / 1 | 86–88% / 90–92% / 1, 0, 1 |
+
+Pictures invented on picture-free frames went from 1/5 to 0/5 in every v13c/v14 run.
+
+**The Espoo night photo, before and after:**
+- **v12:** `kind=transport, subtype=metro station, name=KIVIRUUKKI / STENBRUKET`; "street lamp ×1"; "white road sign with black text and arrows".
+- **v14:** `kind=street, subtype=road junction, name=null`; "lamp ×6"; "taxi … trunk open"; `direction sign | arrows: KIVIRUUKKI STENBRUKET left, P • METRO straight ahead, ESPOONLAHDEN … right`.
+- **Known limitation:** the arrow directions are partly wrong. One left-turn arrow (↰) on the panel covers both KIVIRUUKKI and P + METRO, and a prompt rule (v13d) did not change the reading. This is a visual limit of the model on this arrow style, so the answer shows the sign photo as evidence.
+
+**The remaining "elevator" (gl_08):** black panels in metal frames at night (a dark glass wall), with no buttons or indicator. It is honestly ambiguous, and appears in 2 of 3 runs.
+
+### Glasses Q&A regression and the fixes it needed (answer side)
+Re-extracting the glasses videos with v13c/v14 changed *how* things are worded, which hurt word-based search:
+- **Pictures are now found by what they show.** "photo of a man at a laptop" did not match "photos of people working on screens". Fixes:
+  - Picture docs now carry the picture description in their name.
+  - Umbrella words are added: "people" when a man/woman/team is shown, "computer screens" for laptops and monitors.
+- **Relations are listed most-seen first, with counts.** "screen left of elevator (5 frames)" was being out-voted by a one-off "sign right of screen (1 frame)".
+- **The directory screen name is restored in the few-shot.** The neutral shot had renamed it "screen", and "floor directory screen" questions stopped matching.
+
+| Glasses Q&A (31 questions) | runs | hallucinated | wrong |
+|---|---|---|---|
+| v12 memory | 30, 31, 31, 31 | 0 | 0 |
+| v14 memory, final | 30, 29, 30 | 0 | 0 |
+
+Every remaining miss is an honest "I don't know":
+- The Arduino-lab floor, where stand-in OCR read "ANDROID", which is Emir's OCR domain.
+- A picture re-check that once failed to confirm.
+
+**Trade-off:** v14 is about 1 question lower on recall but makes fewer hallucinations on the extended set (3 → 0–1). For a memory aid we prefer this direction.
+
 ## Next ideas to try
 - Apple Vision OCR with bounding boxes instead of the Nemotron stand-in, which would also remove the OCR-stage "Astronomy".
 - Temperature 0 vs 0.2 vs 0.6.
