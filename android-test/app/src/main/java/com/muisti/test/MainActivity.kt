@@ -223,9 +223,43 @@ class MainActivity : ComponentActivity() {
             .filter { ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED }
         if (need.isEmpty()) startCamera() else permissions.launch(need.toTypedArray())
         pollStats()
+        watchNetwork()
+    }
+
+    private var netCallback: android.net.ConnectivityManager.NetworkCallback? = null
+    private var drainJob: Job? = null
+
+    /** Offline state from the system (validated internet), and the queue drained when it comes back. */
+    private fun watchNetwork() {
+        val cm = getSystemService(android.net.ConnectivityManager::class.java) ?: return
+        fun hasNet() = cm.getNetworkCapabilities(cm.activeNetwork)?.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true
+        state.network = hasNet()
+        val cb = object : android.net.ConnectivityManager.NetworkCallback() {
+            override fun onCapabilitiesChanged(n: android.net.Network, c: android.net.NetworkCapabilities) {
+                val ok = c.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+                runOnUiThread { if (ok && !state.network) android.util.Log.i("MuistiRate", "network back: ${engine.pending.size()} queued"); state.network = ok }
+            }
+            override fun onLost(n: android.net.Network) { runOnUiThread { state.network = hasNet() } }
+        }
+        netCallback = cb
+        cm.registerDefaultNetworkCallback(cb)
+        drainJob = lifecycleScope.launch(Dispatchers.IO) {
+            val drainer = com.muisti.capture.Drainer(engine.pending)
+            while (isActive) {
+                state.queued = engine.pending.size()
+                if (state.network && state.queued > 0) {
+                    val n = drainer.drain({ state.network }, engine::ingestPending, maxFrames = 20)
+                    if (n > 0) { android.util.Log.i("MuistiRate", "queue: $n frame(s) ingested after reconnect, ${engine.pending.size()} left")
+                        state.memories = engine.store.sightings().size }
+                }
+                delay(5000)
+            }
+        }
     }
 
     override fun onDestroy() {
+        netCallback?.let { runCatching { getSystemService(android.net.ConnectivityManager::class.java)?.unregisterNetworkCallback(it) } }
+        drainJob?.cancel()
         statsJob?.cancel(); analysisExec.shutdown(); glassesExec.shutdown(); glasses.disconnect(); location.stop()
         speech?.destroy(); tts?.shutdown(); recognizer.close()
         super.onDestroy()
@@ -724,9 +758,18 @@ class MainActivity : ComponentActivity() {
         val safe = withContext(Dispatchers.Default) { blurrer.process(bmp, plates) }
         if (safe == null) { state.lastFrame = "Skipped · privacy check failed"; return }
         state.facesBlurred += safe.faceCount
-        val stored = withContext(Dispatchers.IO) {
-            val jpeg = ByteArrayOutputStream().also { safe.image.compress(Bitmap.CompressFormat.JPEG, 85, it) }.toByteArray()
-            engine.ingest(jpeg, obs, seenAt, dhash, fix)
+        val jpeg = withContext(Dispatchers.Default) { ByteArrayOutputStream().also { safe.image.compress(Bitmap.CompressFormat.JPEG, 85, it) }.toByteArray() }
+        // offline (or Nemotron unreachable after its retries): the redacted frame waits on disk, nothing is lost
+        fun queue(): Unit {
+            engine.pending.add(com.muisti.capture.PendingFrame(java.util.UUID.randomUUID().toString().take(8), jpeg, obs, seenAt, dhash, fix?.lat, fix?.lon, fix?.street))
+            state.queued = engine.pending.size(); state.lastFrame = "Offline · frame queued (${state.queued})"
+        }
+        if (!state.network) { withContext(Dispatchers.IO) { queue() }; return }
+        val stored = try {
+            withContext(Dispatchers.IO) { engine.ingest(jpeg, obs, seenAt, dhash, fix) }
+        } catch (e: Exception) {
+            if (e is com.muisti.engine.Unreachable || e is java.io.IOException) { withContext(Dispatchers.IO) { queue() }; return }
+            throw e
         }
         state.online = true
         state.framesSent++
@@ -795,7 +838,8 @@ class MainActivity : ComponentActivity() {
             while (isActive) {
                 runCatching { state.memories = withContext(Dispatchers.IO) { engine.store.sightings().size } }
                 if (location.running) location.fresh(60_000)?.street?.let { state.street = it }
-                android.util.Log.i("MuistiRate", "Nemotron requests in the last minute: ${com.muisti.engine.Llm.perMinute()} " +
+                android.util.Log.i("MuistiRate", "Nemotron requests in the last minute: ${com.muisti.engine.Llm.perMinute()}, " +
+                    "peak concurrent ${com.muisti.engine.Llm.peakConcurrent()}, queued ${state.queued}, network ${state.network} " +
                     "(recording=${state.recording}, source=${if (state.useGlasses) "glasses" else "phone"}, sent frames=${state.framesSent})")
                 delay(6000)
             }

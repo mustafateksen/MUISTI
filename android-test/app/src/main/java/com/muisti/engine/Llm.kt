@@ -91,6 +91,9 @@ class Prompts(private val json: String) {
 
 class BadRequest(msg: String) : Exception(msg)
 
+/** Nemotron could not be reached after all retries (network down, server down): the work can be retried later. */
+class Unreachable(msg: String) : RuntimeException(msg)
+
 /** OpenAI-compatible chat client for Nemotron (extract._call) with the same retry/backoff. */
 class Llm(private val cfg: LlmConfig) {
     private val http = OkHttpClient.Builder()
@@ -123,6 +126,14 @@ class Llm(private val cfg: LlmConfig) {
         private fun mark() { val now = System.currentTimeMillis(); sentAt.addLast(now); while ((sentAt.peekFirst() ?: now) < now - 60_000) sentAt.pollFirst() }
         /** Requests sent to Nemotron in the last 60 s. */
         fun perMinute(): Int { val now = System.currentTimeMillis(); while ((sentAt.peekFirst() ?: now) < now - 60_000) sentAt.pollFirst(); return sentAt.size }
+        private val inFlight = java.util.concurrent.atomic.AtomicInteger()
+        private val peak = java.util.concurrent.atomic.AtomicInteger()
+        /** Most requests open at the same time since the last call (then reset), for the MuistiRate log. */
+        fun peakConcurrent(): Int = peak.getAndSet(inFlight.get())
+        private inline fun <T> counted(block: () -> T): T {
+            val n = inFlight.incrementAndGet(); peak.accumulateAndGet(n, ::maxOf)
+            try { return block() } finally { inFlight.decrementAndGet() }
+        }
     }
 
     /** One request with backoff on 429/5xx/network errors. Reasoning stays OFF (it eats max_tokens). */
@@ -143,7 +154,7 @@ class Llm(private val cfg: LlmConfig) {
                     .header("Authorization", "Bearer " + cfg.key)
                     .post(bodyText.toRequestBody(jsonType)).build()
                 mark()
-                http.newCall(req).execute().use { resp ->
+                counted { http.newCall(req).execute() }.use { resp ->
                     val text = resp.body?.string().orEmpty()
                     if (resp.code == 400) throw BadRequest(text.take(300))
                     if (resp.code == 429 || resp.code >= 500) throw RetryableHttp("HTTP ${resp.code}")
@@ -162,7 +173,7 @@ class Llm(private val cfg: LlmConfig) {
             }
             Thread.sleep((minOf(30.0, Math.pow(2.0, attempt.toDouble())) * 1000 + Math.random() * 1000).toLong())
         }
-        throw RuntimeException("Nemotron unavailable after retries: ${lastErr?.message}")
+        throw Unreachable("Nemotron unavailable after retries: ${lastErr?.message}")
     }
 
     /**
@@ -183,7 +194,7 @@ class Llm(private val cfg: LlmConfig) {
                 val req = Request.Builder().url(cfg.baseUrl.trimEnd('/') + "/chat/completions")
                     .header("Authorization", "Bearer " + cfg.key).post(text.toRequestBody(jsonType)).build()
                 mark()
-                http.newCall(req).execute().use { resp ->
+                counted { http.newCall(req).execute() }.use { resp ->
                     val out = resp.body?.string().orEmpty()
                     if (resp.code == 429 || resp.code >= 500) throw RetryableHttp("HTTP ${resp.code}")
                     if (!resp.isSuccessful) throw RuntimeException("HTTP ${resp.code}: ${out.take(300)}")
@@ -192,7 +203,7 @@ class Llm(private val cfg: LlmConfig) {
             } catch (e: RetryableHttp) { lastErr = e } catch (e: java.io.IOException) { lastErr = e }
             Thread.sleep((minOf(20.0, Math.pow(2.0, attempt.toDouble())) * 1000 + Math.random() * 500).toLong())
         }
-        throw RuntimeException("Nemotron unavailable after retries: ${lastErr?.message}")
+        throw Unreachable("Nemotron unavailable after retries: ${lastErr?.message}")
     }
 
     /** ask._json_call: schema output, falling back to json_object if the server rejects the schema. */

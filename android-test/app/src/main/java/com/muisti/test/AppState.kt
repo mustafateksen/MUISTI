@@ -38,7 +38,9 @@ class AppState {
     var serverUrl by mutableStateOf("")
     var cameraReady by mutableStateOf(false)
     var recording by mutableStateOf(false)
-    var online by mutableStateOf(false)
+    var online by mutableStateOf(false)          // calls can be authorised (dev key or paired proxy)
+    var network by mutableStateOf(true)          // the phone has a validated internet connection
+    var queued by mutableIntStateOf(0)           // frames waiting for the network
     var memories by mutableIntStateOf(0)
     var framesSent by mutableIntStateOf(0)
     var lastFrame by mutableStateOf("")

@@ -62,8 +62,25 @@ class PhoneEngine(ctx: Context) {
     val store = MemoryStore(File(ctx.filesDir, "memory"))
     private val recentWords = HashMap<String, Int>()   // like the server's _RECENT_WORDS, for ocr_repair
 
+    /** Frames that could not go out while offline (redacted JPEG + OCR), retried after reconnect. */
+    val pending = com.muisti.capture.PendingQueue(File(ctx.filesDir, "pending"))
+    /** At most 3 frame requests at once, live uploads and queue retries together (questions are not limited). */
+    private val ingestSlots = java.util.concurrent.Semaphore(3)
+
+    /** A queued frame tried again: through the same ingest (so through the privacy gate again). */
+    fun ingestPending(f: com.muisti.capture.PendingFrame): com.muisti.capture.Outcome = try {
+        val fix = f.lat?.let { Fix(it, f.lon!!, 0f, f.seenAt, f.street) }
+        if (ingest(f.jpeg, f.obs, f.seenAt, f.dhash, fix)) com.muisti.capture.Outcome.SENT else com.muisti.capture.Outcome.DROPPED
+    } catch (e: com.muisti.engine.Unreachable) { com.muisti.capture.Outcome.RETRY_LATER
+    } catch (e: java.io.IOException) { com.muisti.capture.Outcome.RETRY_LATER }
+
     /** /ingest: lines from the phone's OCR boxes -> repair -> Nemotron -> verify -> store if useful. */
     fun ingest(jpeg: ByteArray, obs: List<Obs>, seenAtMs: Long, dhash: Long?, fix: Fix? = null): Boolean {
+        ingestSlots.acquire()
+        try { return ingestLimited(jpeg, obs, seenAtMs, dhash, fix) } finally { ingestSlots.release() }
+    }
+
+    private fun ingestLimited(jpeg: ByteArray, obs: List<Obs>, seenAtMs: Long, dhash: Long?, fix: Fix?): Boolean {
         var lines = TextLines.visionToLines(obs)
         if (lines.isNotEmpty()) {
             synchronized(recentWords) {
@@ -126,7 +143,7 @@ class PhoneEngine(ctx: Context) {
         val tEmbed = System.currentTimeMillis() - t1
         val hist = synchronized(history) { history.toList() }
         val answer = try {
-            agent.run(question, hist, docs, now, liveFrame, onForget = { m -> store.forget(now - m * 60_000L) },
+            agent.run(question, hist, docs, now, liveFrame, onForget = { m -> pending.forgetSince(now - m * 60_000L); store.forget(now - m * 60_000L) },
                 onCalendar = { ev -> addToCalendar(ev) }, heard = heard)
         } catch (e: Exception) {
             classic(question, docs, now, liveFrame)
@@ -173,6 +190,7 @@ class PhoneEngine(ctx: Context) {
         return when (r.label) {
             "FORGET" -> {
                 val minutes = (r.parsed.num("minutes").takeIf { it > 0 } ?: 10.0).toInt()
+                pending.forgetSince(now - minutes * 60_000L)
                 store.forget(now - minutes * 60_000L)
                 Answer(question, "FORGOT", "Okay, I forgot everything from the last $minutes minutes.", emptyList(), emptyList(),
                     "forget $minutes min", r.calls, r.latencyS, r.parsed)

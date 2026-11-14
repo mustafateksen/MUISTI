@@ -214,8 +214,9 @@ private fun Header(s: AppState, t: Tones, onSettings: () -> Unit) {
             Text(greeting(), color = t.text, fontSize = 30.sp, fontWeight = FontWeight.Bold, letterSpacing = (-0.6).sp)
         }
         val (label, color) = when {
+            !s.network -> (if (s.queued > 0) "Offline · ${s.queued} queued" else "Offline") to Amber
             s.recording -> "Remembering" to Rose
-            !s.online -> "No API key" to Amber
+            !s.online -> "Not connected to Nemotron" to Amber
             else -> "Ready" to Color(0xFF34C759)
         }
         Row(Modifier.clip(CircleShape).background(t.card.copy(alpha = 0.85f)).border(0.5.dp, t.hair, CircleShape)
