@@ -12,6 +12,8 @@ final class WearablesController {
     private(set) var deviceIds: [DeviceIdentifier] = []
     private(set) var deviceNames: [DeviceIdentifier: String] = [:]
     private(set) var cameraPermission: PermissionStatus?
+    /// Glasses microphone (on-glasses transcription for hands-free questions).
+    private(set) var microphonePermission: PermissionStatus?
     private(set) var requiresFirmwareUpdate = false
 
     /// Last user-facing problem from registration / permission / navigation.
@@ -42,6 +44,7 @@ final class WearablesController {
                 if state == .registered {
                     self.metaAIMissing = false
                     await self.refreshCameraPermission()
+                    await self.refreshMicrophonePermission()
                 }
             }
         }
@@ -127,6 +130,35 @@ final class WearablesController {
             let status = try await wearables.requestPermission(.camera)
             cameraPermission = status
             if status != .granted { lastError = "Camera access wasn't granted. You can switch to the iPhone camera." }
+            return status == .granted
+        } catch {
+            if error == .metaAINotInstalled { metaAIMissing = true }
+            lastError = error.localizedDescription
+            return false
+        }
+    }
+
+    // MARK: Microphone permission
+
+    @discardableResult
+    func refreshMicrophonePermission() async -> PermissionStatus? {
+        do {
+            let status = try await wearables.checkPermissionStatus(.microphone)
+            microphonePermission = status
+            return status
+        } catch {
+            microphonePermission = nil
+            return nil
+        }
+    }
+
+    /// Switches to Meta AI once to allow the glasses microphone.
+    func requestMicrophonePermission() async -> Bool {
+        lastError = nil
+        do {
+            let status = try await wearables.requestPermission(.microphone)
+            microphonePermission = status
+            if status != .granted { lastError = "Glasses microphone wasn't allowed. You can still ask with the phone." }
             return status == .granted
         } catch {
             if error == .metaAINotInstalled { metaAIMissing = true }

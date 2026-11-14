@@ -163,6 +163,36 @@ enum SafetyEval {
         await monitor.tick(now: now)
         check("9 stove unattended", spoken.lines.count == 1, spoken.lines.joined())
 
+        // 10. No rules at all: the model flags an iron left on by itself → warning on leaving.
+        func iron(_ active: Bool) -> SafetyObservation {
+            SafetyObservation(room: "bedroom", hands_visible: false, hazards: [
+                .init(object: "iron", state: active ? "on" : "off", active: active, immediate: false,
+                      location_hint: "on the ironing board", evidence: "power light lit")])
+        }
+        await reset([])
+        await monitor.apply(iron(true), at: t(-15), frameFile: nil)
+        said = await monitor.trigger(contextEvent: "left_home", source: .user_voice, at: now, speak: false)
+        check("10a hazard, one reading, leave", said.isEmpty, said.joined())
+        await reset([])
+        await monitor.apply(iron(true), at: t(-15), frameFile: nil)
+        await monitor.apply(iron(true), at: t(-14.9), frameFile: nil)
+        said = await monitor.trigger(contextEvent: "left_home", source: .user_voice, at: now, speak: false)
+        check("10b hazard on, leave (no rule)", said.count == 1 && said[0].contains("iron"), said.joined())
+        await reset([])
+        await monitor.apply(iron(true), at: t(-15), frameFile: nil)
+        await monitor.apply(iron(true), at: t(-14.9), frameFile: nil)
+        await monitor.apply(iron(false), at: t(-5), frameFile: nil)
+        said = await monitor.trigger(contextEvent: "left_home", source: .user_voice, at: now, speak: false)
+        check("10c hazard turned off, leave", said.isEmpty, said.joined())
+
+        // 11. Smoke now: said as soon as it is confirmed.
+        await reset([])
+        let smoke = SafetyObservation(room: "kitchen", hands_visible: false, hazards: [
+            .init(object: "pan", state: "smoking", active: true, immediate: true, location_hint: "on the stove", evidence: "smoke rising")])
+        await monitor.apply(smoke, at: t(-0.2), frameFile: nil)
+        await monitor.apply(smoke, at: now, frameFile: nil)
+        check("11 smoking pan, immediate", spoken.lines.count == 1 && spoken.lines[0].contains("pan"), spoken.lines.joined())
+
         log("A SUMMARY \(passed)/\(total)")
         await store.deleteAll()
         for r in await store.rules() { await store.deleteRule(r.id) }
@@ -197,7 +227,7 @@ enum SafetyEval {
                 obs = try await controller.ai.chatJSON(SafetyObservation.self, system: SafetyPrompts.observeSystem,
                                                        user: SafetyPrompts.observeUser(watched: watched, allergens: allergens, ocr: copy.ocr),
                                                        image: .init(jpeg: copy.jpeg), jsonSchema: SafetyPrompts.observeSchema,
-                                                       schemaName: "observation", maxTokens: 500, temperature: 0.2)
+                                                       schemaName: "observation", maxTokens: 600, temperature: 0)
             } catch {
                 log("B \(c.file): model error \(error)")
                 continue
@@ -277,6 +307,16 @@ enum SafetyEval {
         _ = await say("Yes.")
         log("C rules at end: \(safety.rules.map(\.summary))")
         _ = await say("What did I forget to buy?")
+
+        // Follow-ups in one conversation, and plain chat.
+        _ = await say("Hey, what's up?")
+        _ = await say("Where was the hair dressing parlor?")
+        _ = await say("What was its phone number?")
+        _ = await say("What did I see right after it?")
+        _ = await say("Which pharmacy was open 24 hours?")
+        _ = await say("Are you sure? What else was on that street?")
+        _ = await say("Thanks!")
+        _ = await say("What is an Arduino?")
     }
 }
 #endif

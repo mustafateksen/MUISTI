@@ -24,6 +24,9 @@ struct ExtractedRecord: Codable, Sendable {
         var distance: String?
         var details: String?
         var count: Int?
+        /// "clear" | "partial" | "unsure"; code also marks late or far list entries unsure.
+        var visibility: String?
+        var isUnsure: Bool { visibility == "unsure" }
     }
     struct Relation: Codable, Sendable { var subject: String; var relation: String; var object: String }
     struct Depiction: Codable, Sendable {
@@ -103,6 +106,7 @@ struct ExtractedRecord: Codable, Sendable {
                 if !meta.isEmpty { s += " (\(meta.joined(separator: ", ")))" }
                 if let count = o.count, count > 1 { s += " ×\(count)" }
                 if let details = o.details, !details.isEmpty { s += ": \(details)" }
+                if o.isUnsure { s += " [unsure]" }
                 return s
             }.joined(separator: "; "))
         }
@@ -145,9 +149,15 @@ enum ExtractionCheck {
             guard let line = item.line, let i = index(line), rows.indices.contains(i) else { return false }
             return matches(item.label, rows[i]) && matches(item.value, rows[i])
         }
-        r.objects = Array(r.objects.prefix(15)).map { o in
+        // Uncertain objects (Ömer's measured rule, v18): the model's own "unsure", or late in
+        // the list (9th+), or 5th+ and far away. Kept, but marked: the answer model treats them
+        // as "may have been there". Precision 84.5% → 87–89% on his 53-frame set.
+        r.objects = Array(r.objects.prefix(15)).enumerated().map { i, o in
             var o = o
             o.count = min(50, max(1, o.count ?? 1))
+            o.visibility = o.visibility?.lowercased()
+            if let v = o.visibility, v != "clear", v != "partial" { o.visibility = "unsure" }
+            if i >= 8 || (i >= 4 && o.distance == "far") { o.visibility = "unsure" }
             return o
         }
         let names = Set(r.objects.map { EvidenceRule.words($0.name) })
@@ -246,7 +256,10 @@ extension MemoryPrompts {
     fabric/vinyl.
       For each: name (simple English noun, singular), category, position in the frame \
     (left/center/right), distance (near/mid/far), details (at most 12 words: colour, material, \
-    kind, state, what is on it), count (how many of this thing are visible in THIS frame).
+    kind, state, what is on it), count (how many of this thing are visible in THIS frame), \
+    visibility ("clear": plainly visible and surely this thing; "partial": cut off or partly \
+    hidden but surely this thing; "unsure": you are not sure what it is or whether it is there). \
+    List the clearest things first.
       Numbers on plaques, indicators and screens: say in details what the number MEANS only if \
     it is clear (e.g. "elevator position indicator showing 4", "floor label 5TH FLOOR at top of \
     directory"). If you cannot tell what a number means, write "unlabeled number 4". Never \
@@ -312,7 +325,7 @@ extension MemoryPrompts {
       "items":{"type":"array","maxItems":20,"items":{"type":"object","properties":{"label":{"type":"string"},"value":{"type":"string"},"line":{"type":"string"}},"required":["label","value","line"]}},
       "other_text":{"type":["string","null"]},
       "scene":{"type":"object","properties":{"place_type":{"type":"string"},"indoor":{"type":"boolean"},"lighting":{"type":"string"}},"required":["place_type","indoor","lighting"]},
-      "objects":{"type":"array","maxItems":15,"items":{"type":"object","properties":{"name":{"type":"string"},"category":{"type":"string","enum":["navigation","seating","waste_smoking","food_drink","power_tech","sign_screen","furniture","vehicle","nature","building","safety","other"]},"position":{"type":"string","enum":["left","center","right"]},"distance":{"type":"string","enum":["near","mid","far"]},"details":{"type":"string"},"count":{"type":"integer"}},"required":["name","category","position","distance","details","count"]}},
+      "objects":{"type":"array","maxItems":15,"items":{"type":"object","properties":{"name":{"type":"string"},"category":{"type":"string","enum":["navigation","seating","waste_smoking","food_drink","power_tech","sign_screen","furniture","vehicle","nature","building","safety","other"]},"position":{"type":"string","enum":["left","center","right"]},"distance":{"type":"string","enum":["near","mid","far"]},"details":{"type":"string"},"count":{"type":"integer"},"visibility":{"type":"string","enum":["clear","partial","unsure"]}},"required":["name","category","position","distance","details","count","visibility"]}},
       "relations":{"type":"array","maxItems":6,"items":{"type":"object","properties":{"subject":{"type":"string"},"relation":{"type":"string"},"object":{"type":"string"}},"required":["subject","relation","object"]}},
       "depictions":{"type":"array","maxItems":4,"items":{"type":"object","properties":{"medium":{"type":"string","enum":["banner","poster","screen","sign","billboard","painting","other"]},"on":{"type":"string"},"content":{"type":"string"},"depicted":{"type":"array","items":{"type":"string"}}},"required":["medium","on","content","depicted"]}},
       "caption":{"type":"string"},

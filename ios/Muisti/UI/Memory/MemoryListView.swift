@@ -16,20 +16,20 @@ struct MemoryListView: View {
         return trimmed.isEmpty ? records : records.filter { $0.matches(trimmed) }
     }
 
+    private var summary: MemorySummary {
+        MemorySummary(
+            total: controller.memoryCount,
+            pending: controller.pendingCount,
+            retentionDays: controller.config.retentionDays,
+            visible: !records.isEmpty && query.isEmpty
+        )
+    }
+
     var body: some View {
         NavigationStack {
             List {
-                if !records.isEmpty, query.isEmpty {
-                    // A bare row with zero insets: its edges line up with the search field and
-                    // the episode cards below.
-                    MemorySummaryHeader(
-                        total: controller.memoryCount,
-                        pending: controller.pendingCount,
-                        retentionDays: controller.config.retentionDays
-                    )
-                    .listRowInsets(EdgeInsets(top: Theme.Spacing.xs, leading: 0, bottom: 0, trailing: 0))
-                    .listRowBackground(Color.clear)
-                    .listRowSeparator(.hidden)
+                if #unavailable(iOS 26), !records.isEmpty, query.isEmpty {
+                    MemorySummaryRow(summary: summary)
                 }
 
                 if query.isEmpty {
@@ -71,6 +71,7 @@ struct MemoryListView: View {
             }
             .searchable(text: $query, prompt: "Name, number, street, text…")
             .navigationTitle("Memory")
+            .memorySummary(total: summary.total, pending: summary.pending, retentionDays: summary.retentionDays, visible: summary.visible)
             .navigationDestination(for: MemoryRecord.self) { record in
                 MemoryDetailView(record: record, controller: controller)
             }

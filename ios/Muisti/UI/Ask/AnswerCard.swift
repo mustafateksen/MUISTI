@@ -12,18 +12,9 @@ struct AnswerCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.m) {
-            HStack(alignment: .firstTextBaseline) {
-                // Backed by evidence → "Seen". Otherwise no verdict chip: a yellow warning that
-                // what follows is the most relevant result, not a confirmed answer.
-                if result.isCommand {
-                    // A rule, a warning, "noted": not a claim about something seen.
-                    Label("Muisti", systemImage: "shield.lefthalf.filled")
-                        .font(.subheadline.bold())
-                        .foregroundStyle(Color.accentColor)
-                        .padding(.horizontal, Theme.Spacing.s)
-                        .padding(.vertical, Theme.Spacing.xxs)
-                        .background(Color.accentColor.opacity(0.14), in: Capsule())
-                } else {
+            // Verdict chip only for answers about something seen; chat and commands have none.
+            // Share / copy live in the long-press menu (no empty header row).
+            if !result.isCommand {
                 Label {
                     Text(seen ? "Seen" : "Showing the closest match")
                         .foregroundStyle(seen ? Color.success : Color.primary)
@@ -31,17 +22,10 @@ struct AnswerCard: View {
                     Image(systemName: seen ? "checkmark.seal.fill" : "exclamationmark.triangle.fill")
                         .foregroundStyle(seen ? Color.success : Color.attention)
                 }
-                    .font(.subheadline.bold())
-                    .padding(.horizontal, Theme.Spacing.s)
-                    .padding(.vertical, Theme.Spacing.xxs)
-                    .background((seen ? Color.success : .attention).opacity(seen ? 0.16 : 0.22), in: Capsule())
-                }
-                Spacer()
-                ShareLink(item: result.answer) {
-                    Label("Share", systemImage: "square.and.arrow.up")
-                        .labelStyle(.iconOnly)
-                        .frame(width: 44, height: 44)
-                }
+                .font(.subheadline.bold())
+                .padding(.horizontal, Theme.Spacing.s)
+                .padding(.vertical, Theme.Spacing.xxs)
+                .background((seen ? Color.success : .attention).opacity(seen ? 0.16 : 0.22), in: Capsule())
             }
 
             if showsQuestion {
@@ -76,6 +60,20 @@ struct AnswerCard: View {
                 EvidenceCarousel(hits: result.evidence, store: store)
             }
 
+            // The live view the answer looked at (faces masked).
+            if let live = result.liveFrame, let image = UIImage(data: live) {
+                VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
+                    Label("Live view", systemImage: "eye")
+                        .font(.subheadline.bold())
+                    Image(uiImage: image)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(maxHeight: 260)
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                        .accessibilityLabel("What the glasses saw for this answer")
+                }
+            }
+
             // Safety log frames the answer or warning relies on (blurred, on the phone).
             if !result.safetyFrames.isEmpty {
                 ScrollView(.horizontal) {
@@ -89,6 +87,10 @@ struct AnswerCard: View {
             }
         }
         .card()
+        .contextMenu {
+            ShareLink(item: result.answer) { Label("Share", systemImage: "square.and.arrow.up") }
+            Button("Copy", systemImage: "doc.on.doc") { UIPasteboard.general.string = result.answer }
+        }
     }
 }
 

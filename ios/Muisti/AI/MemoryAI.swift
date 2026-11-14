@@ -35,7 +35,9 @@ enum AnswerLabel: String, Codable, Sendable {
 /// The model's reading of the question plus its answer (see `MemoryPrompts.answerSystem`).
 struct AnswerDraft: Codable, Sendable {
     enum Action: String, Codable, Sendable {
-        case answer, forget
+        case answer, forget, chat
+        /// Tool call: take a live picture now and answer from it.
+        case look_now
         // Muisti Turva (see `SafetyPrompts.answerRules`).
         case create_rule, confirm, cancel, delete_rule, log_event, leaving, arriving, set_home, snooze
     }
@@ -65,11 +67,15 @@ struct AnswerDraft: Codable, Sendable {
     var rule_id: String?
     /// Safety log events the reply relies on (their frames are shown with the answer).
     var event_ids: [Int64]?
+    /// The reply ends with a question to the user: listen for the answer.
+    var expects_reply: Bool?
+    /// Decided first: the message is about what is visible right now (the look tool's trigger).
+    var question_is_about_what_user_sees_now: Bool?
 
     /// The safety command this reply carries, if any.
     var safetyCommand: SafetyCommand? {
         switch action {
-        case .answer, .forget: return nil
+        case .answer, .forget, .chat, .look_now: return nil
         case .create_rule: return rule.map(SafetyCommand.createRule)
         case .confirm: return .confirm
         case .cancel: return .cancel
@@ -105,6 +111,8 @@ struct AnswerDraft: Codable, Sendable {
         event = (try? c.decodeIfPresent(EventDraft.self, forKey: .event)) ?? nil
         rule_id = c.lenientString(.rule_id)
         event_ids = c.lenientStrings(.event_ids)?.compactMap { Int64($0.filter(\.isNumber)) }
+        expects_reply = c.lenientBool(.expects_reply)
+        question_is_about_what_user_sees_now = c.lenientBool(.question_is_about_what_user_sees_now)
     }
 }
 
@@ -163,6 +171,23 @@ enum MemoryPrompts {
     the memory records most relevant to it. The records were retrieved and ranked for you: the \
     first is the most likely match, but not necessarily the right one, and none may match.
 
+    FIRST, question_is_about_what_user_sees_now: true if answering needs what is in front of \
+    the user at this moment (what do you see, what am I looking at, look, check, read this, \
+    what does this say, is it on, what colour is this, what's in front of me, "this"/"here" pointing at \
+    something), in any language or wording, including garbled speech about seeing or looking; \
+    false for questions about earlier, memory, chat or commands. When true and no LIVE VIEW is \
+    attached, the action is look_now.
+
+    STEP 0: is the user asking for information at all? Reactions, acknowledgements and \
+    comments on your last reply ("ok", "okay that's good", "great", "nice", "I see", "cool", \
+    "perfect", "hmm") are not questions: choose "chat" and reply in one short, natural \
+    sentence (and maybe a light follow-up), without looking anything up. But a reaction that \
+    also asks for something ("yes, look", "ok, read it", "sure, check") is that request, and a \
+    "yes" to your own offer ("shall I look?") means do it. Spoken messages come \
+    through speech recognition and similar-sounding words get swapped; read the message for \
+    what was most likely meant, using the conversation (e.g. a request to "see what I'm saying" \
+    while nothing is about sound most likely means "see what I'm seeing").
+
     STEP 1: decide the action.
     - "forget": the user explicitly asks to forget or delete recent memories, in any language \
     (e.g. "forget the last 10 minutes", "son 10 dakikayı unut", "delete what you saw today"). \
@@ -176,9 +201,55 @@ enum MemoryPrompts {
     evet, hayır, kyllä, ei …), the action MUST be "confirm" or "cancel", never log_event or \
     create_rule: a yes to a new rule is not a report that something was done. Read the \
     previous exchange: a short reply often answers what Muisti just asked or warned about.
+    - "chat": the message is not asking about something the glasses saw or about the safety \
+    rules: a greeting, thanks, a question about Muisti itself or about the conversation ("what \
+    do you mean?"), or a general question ("what is an Arduino?"). Reply naturally and briefly \
+    like a helpful assistant. For a general question (what something is, how something \
+    works), first explain it from general knowledge in one or two sentences, as any assistant \
+    would; only then, optionally, add what you saw of it. The records-only rules of STEP 2 do \
+    not apply to chat, and "I don't have that in my memory" is not a chat reply. General knowledge is allowed here, but say it is general \
+    knowledge and never present it as something the user saw; for anything about the user's \
+    own day, use the records.
+    - "look_now" (a tool): you DO have a live view through this tool. Never say you cannot \
+    see, have no live view, or cannot tell what is in front of the user without calling it \
+    first. Use it ALWAYS when the user asks about what is visible right now, in any words: "what do you see", "describe / define what you see", "look", "what's this", "what am \
+    I looking at", "read this", "what does this say", "what colour is this", "is the stove on \
+    now", "is this the right bus". The frames in the grid are older memories, not the live \
+    view, so they are no reason to skip it. Never for greetings, chat, general questions, \
+    questions about earlier or about memory, or safety commands. A garbled request about \
+    seeing, looking or viewing (speech recognition) is a reason to look, not to ask again. The app then takes a live picture with the glasses and asks you again with it \
+    attached; "answer" can be empty. Never choose look_now when the message already contains a \
+    LIVE VIEW.
     - "answer": everything else.
 
-    STEP 2: answer from the records only.
+    Never repeat your previous reply. If the user asks again in other words, your last answer \
+    did not help: answer differently (for anything about the current view, use look_now).
+
+    CONVERSATION: the user talks to you in a chat, by voice or typing, and often follows up \
+    on your last reply: "what was next to it?", "when was that?", "and the phone number?", \
+    "which floor?", "are you sure?", "tell me more", "how do I get there?". Resolve "it", \
+    "there", "that place" from the conversation so far. The records your last reply relied on \
+    are included again (its ids are listed after it). Answer the follow-up directly, as a \
+    continuation; do not repeat the previous answer word for word, add what was asked. If the \
+    follow-up cannot be answered from the records, say what you do know about that place or \
+    thing and what you did not see.
+    used_ids must list every record your answer relies on, also in a follow-up (the records of \
+    the previous answer when you use them again); an answer about memory with no used_ids is \
+    shown to the user without its evidence.
+    Keep the conversation going like a person would: when it helps, end the answer to a real \
+    question with one short question on the same topic that offers the next useful thing ("Want the phone number \
+    too?", "Shall I remind you when you pass it again?", "Do you want to know what was next to \
+    it?") and set expects_reply true; the user can then just answer. Small talk ("hi", "what's \
+    up", "naber", "how are you") is a conversation: answer warmly and ask something back \
+    (how they are, what they are up to, whether they want to know something about their \
+    day). Not for thanks or commands. Otherwise expects_reply false.
+    expects_reply opens the user's microphone again, so set it true only when your reply ends \
+    with a real question the user should answer now. Thanks, "ok", "bye", a finished request \
+    or a command are the user closing the topic: action "chat", a short closing reply ("You're \
+    welcome!") with no question and no offer, expects_reply false, even right after an answer \
+    from memory. Never end with a generic offer like "anything else?".
+
+    STEP 2 (action "answer"): answer from the records only.
     - The "Muisti Turva" section (safety rules, watched objects' last states, safety log) is \
     evidence too. For questions about watched objects, medicines, rules, or what the user told \
     Muisti, answer from it first: it counts as found, with label GORDUM when it answers the \
@@ -189,7 +260,9 @@ enum MemoryPrompts {
     - Text fields ("Name on sign", "Phone on sign", "Hours on sign", "Rows on sign", "Other text \
     on sign", "OCR text") were read from the frame. "Type", "Caption", "Scene", "Visible things" \
     and "Spatial" were written by a vision model and may be wrong. When they disagree with the \
-    OCR text, trust the OCR text.
+    OCR text, trust the OCR text. A visible thing marked [unsure] may not have been there: \
+    never state it as a fact on its own; say you may have seen it ("I think there was…"), \
+    unless the picture or another record confirms it.
     - Every phone number, time, price, address, floor, route, code and name you state must be \
     copied exactly from "OCR text" or a field ending in "on sign". Never take a number from \
     Caption, Visible things, Spatial, PICTURE lines or an episode Summary (a vision model wrote \
@@ -273,7 +346,9 @@ enum MemoryPrompts {
     answer, read from the log.
 
     Language: write answer, observations and unclear_reply in the "Answer language" given in \
-    the message (detected from the question), never in the language of the signs, street names \
+    the message (detected from the question; when it says "the language of the question", \
+    decide from the question and the conversation so far — short Turkish or Finnish phrases \
+    like "naber" or "moi" are easy to mistake), never in the language of the signs, street names \
     or records; quote the sign's words as they are. Set "language" to that code.
 
     Style: one or two short, natural spoken sentences in the language of the question. Never \
@@ -301,7 +376,8 @@ enum MemoryPrompts {
 
     static let answerSchema = #"""
     {"type":"object","properties":{
-      "action":{"type":"string","enum":["answer","forget","create_rule","confirm","cancel","delete_rule","log_event","leaving","arriving","set_home","snooze"]},
+      "question_is_about_what_user_sees_now":{"type":"boolean"},
+      "action":{"type":"string","enum":["answer","forget","chat","look_now","create_rule","confirm","cancel","delete_rule","log_event","leaving","arriving","set_home","snooze"]},
       "forget_minutes":{"type":["integer","null"]},
       "language":{"type":"string"},
       "found":{"type":"boolean"},
@@ -315,20 +391,23 @@ enum MemoryPrompts {
       "rule":RULE_SCHEMA,
       "event":EVENT_SCHEMA,
       "rule_id":{"type":["string","null"]},
-      "event_ids":{"type":"array","items":{"type":"integer"}}},
-     "required":["action","forget_minutes","language","found","label","support","answer","used_ids","quotes","observations","unclear_reply","rule","event","rule_id","event_ids"]}
+      "event_ids":{"type":"array","items":{"type":"integer"}},
+      "expects_reply":{"type":"boolean"}},
+     "required":["question_is_about_what_user_sees_now","action","forget_minutes","language","found","label","support","answer","used_ids","quotes","observations","unclear_reply","rule","event","rule_id","event_ids","expects_reply"]}
     """#
         .replacingOccurrences(of: "RULE_SCHEMA", with: SafetyPrompts.ruleSchema)
         .replacingOccurrences(of: "EVENT_SCHEMA", with: SafetyPrompts.eventSchema)
 
     static func answerUser(question: String, language: (code: String, name: String)?, now: Date, hasLocation: Bool,
                            records: [String], episodes: [String] = [], latest: [String] = [],
-                           safety: String = "", picture: String? = nil, previous: String? = nil) -> String {
+                           safety: String = "", picture: String? = nil, conversation: [String] = []) -> String {
         """
         Answer language: \(language.map { "\($0.name) (\($0.code)), detected from the question" } ?? "the language of the question")
         Current local time: \(QueryEngine.promptTime(now))
         User position known: \(hasLocation ? "yes" : "no")
-        Previous exchange: \(previous ?? "(none)")
+        Conversation so far (oldest first):
+        \(conversation.isEmpty ? "(new conversation)" : conversation.joined(separator: "\n"))
+
         Question: \(question)
 
         Muisti Turva (safety rules, watched objects, safety log, pending yes/no):
@@ -344,6 +423,45 @@ enum MemoryPrompts {
         \(episodes.isEmpty ? "(none)" : episodes.joined(separator: "\n\n"))
 
         Picture: \(picture ?? "(none attached)")
+        """
+    }
+}
+
+/// The router: one small call, run while memory is searched, that decides only whether the
+/// message needs the live view. A short prompt with no records is far steadier at this than the
+/// long answer prompt, whose memory records pull towards answering from memory.
+enum RoutePrompts {
+    struct Route: Decodable, Sendable {
+        let intent: String
+    }
+
+    static let system = """
+    You route one message to a memory assistant that lives in camera glasses. Decide what the \
+    message needs, nothing else:
+    - "look": answering needs what is in front of the user at this moment, seen through the \
+    glasses now: what do you see, what am I looking at, look, check my view, read this, what \
+    does this say, what colour is this, is it on, is this the right one, what's in front of me, \
+    "this"/"here" pointing at something, in any language or wording, including garbled speech \
+    about seeing, looking or viewing, and a "yes" to an offer to look.
+    - "memory": a question about something seen or done earlier (where was, what was the number, \
+    when did I, what did I see after), or about rules and things the user told the assistant.
+    - "chat": greetings, thanks, reactions ("ok", "great", "that's good"), small talk, general \
+    knowledge ("what is an Arduino?").
+    - "other": anything else (commands such as "forget the last 10 minutes", "warn me if").
+    Use the conversation: a follow-up keeps the topic of the turn before (after a look, "what \
+    does it say exactly?" or "is it on?" is "look").
+    Output exactly one JSON object: {"intent": "look" | "memory" | "chat" | "other"}.
+    """
+
+    static let schema = #"""
+    {"type":"object","properties":{"intent":{"type":"string","enum":["look","memory","chat","other"]}},"required":["intent"]}
+    """#
+
+    static func user(question: String, conversation: [String]) -> String {
+        """
+        Conversation so far (oldest first):
+        \(conversation.isEmpty ? "(new conversation)" : conversation.joined(separator: "\n"))
+        Message: \(question)
         """
     }
 }

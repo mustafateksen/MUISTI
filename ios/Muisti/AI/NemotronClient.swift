@@ -75,9 +75,67 @@ actor NemotronClient {
 
     private var settings: Settings
     private let session: URLSession
-    private var lastRequestAt: [String: ContinuousClock.Instant] = [:]
-    /// ≥ 1.6 s between calls keeps a single key under ~40/min.
+    /// Next free send slot per host, for paced (background, NVIDIA free tier) requests.
+    private var nextSlot: [String: ContinuousClock.Instant] = [:]
+    /// ≥ 1.6 s between background calls keeps a single NVIDIA key under ~40/min, with room left
+    /// for questions (which are never paced). The team's own Verda container has no such limit.
     private let minSpacing: Duration = .milliseconds(1600)
+
+    // MARK: Route latency
+
+    /// How long chat calls took on each host lately (seconds, smoothed). The shared Verda
+    /// container went from ~0.5 s to 6–14 s per call when it was busy (probe, 14 Nov) while the
+    /// same model on NVIDIA build answered in ~0.8 s; calls follow the host that is fast now.
+    private var routeLatency: [Route: (seconds: Double, at: ContinuousClock.Instant)] = [:]
+    /// A measurement older than this says nothing: the host is tried again.
+    private static let latencyMemory: Duration = .seconds(90)
+    /// Above this the configured host counts as slow.
+    private static let slowSeconds = 2.5
+
+    private func recentLatency(_ route: Route) -> Double? {
+        guard let entry = routeLatency[route], ContinuousClock.now - entry.at < Self.latencyMemory else { return nil }
+        return entry.seconds
+    }
+
+    /// `completed` false = the call was cancelled or failed after `seconds`: the host is at least that slow.
+    private func noteLatency(_ route: Route, seconds: Double, completed: Bool) {
+        let known = recentLatency(route)
+        if completed {
+            routeLatency[route] = (known.map { $0 * 0.5 + seconds * 0.5 } ?? seconds, .now)
+        } else if seconds > (known ?? 0) {
+            routeLatency[route] = (seconds, .now)
+        }
+    }
+
+    /// The host a call goes to when the caller does not say: the configured one unless it is
+    /// slow right now and the other is not.
+    private func preferredRoute() -> Route {
+        guard fallbackAvailable, let primary = recentLatency(.primary), primary > Self.slowSeconds,
+              (recentLatency(.fallback) ?? 0) < primary else { return .primary }
+        return .fallback
+    }
+
+    /// Order for a question call that races both hosts: the first starts now, the second after
+    /// `hedgeAfter` seconds if the first has not answered.
+    struct QuestionPlan: Sendable {
+        var first: Route
+        var second: Route?
+        var hedgeAfter: Double
+    }
+
+    func questionPlan() -> QuestionPlan {
+        guard fallbackAvailable else { return QuestionPlan(first: .primary, second: nil, hedgeAfter: 0) }
+        let primary = recentLatency(.primary)
+        if preferredRoute() == .fallback { return QuestionPlan(first: .fallback, second: .primary, hedgeAfter: 1.5) }
+        return QuestionPlan(first: .primary, second: .fallback, hedgeAfter: min(2.0, max(0.8, (primary ?? 0.8) * 1.6)))
+    }
+
+    /// For the trace: "verda 0.6 s · nvidia 0.8 s".
+    var latencySummary: String {
+        [Route.primary, .fallback].compactMap { route in
+            recentLatency(route).map { "\(route == .primary ? "primary" : "fallback") \(String(format: "%.1f", $0)) s" }
+        }.joined(separator: " · ")
+    }
 
     init(settings: Settings) {
         self.settings = settings
@@ -153,7 +211,8 @@ actor NemotronClient {
     func chat(system: String, user: String, image: ImagePart? = nil, examples: [(user: String, assistant: String)] = [],
               jsonSchema: String? = nil, schemaName: String = "record",
               maxTokens: Int = 700, temperature: Double = 0,
-              route: Route = .primary, background: Bool = false) async throws -> String {
+              route requested: Route? = nil, background: Bool = false) async throws -> String {
+        let route = requested ?? preferredRoute()
         let baseURL = route == .primary ? settings.baseURL : Provider.nvidia.baseURL
         let model = route == .primary ? settings.chatModel : Provider.nvidia.chatModel
         let key = route == .primary ? settings.apiKey : settings.effectiveRerankKey
@@ -181,6 +240,9 @@ actor NemotronClient {
         ]
         let host = baseURL.host ?? ""
         let url = baseURL.appendingPathComponent("chat/completions")
+        let sent = ContinuousClock.now
+        var completed = false
+        defer { noteLatency(route, seconds: (ContinuousClock.now - sent).seconds, completed: completed) }
         var data: Data
         if let jsonSchema, !schemaUnsupportedHosts.contains(host),
            let schema = try? JSONSerialization.jsonObject(with: Data(jsonSchema.utf8)) {
@@ -197,6 +259,7 @@ actor NemotronClient {
             if jsonSchema != nil { body["response_format"] = ["type": "json_object"] }
             data = try await post(url, json: body, key: key, background: background)
         }
+        completed = true
         guard
             let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
             let choices = root["choices"] as? [[String: Any]],
@@ -210,7 +273,7 @@ actor NemotronClient {
     func chatJSON<T: Decodable>(_ type: T.Type, system: String, user: String, image: ImagePart? = nil,
                                 examples: [(user: String, assistant: String)] = [], jsonSchema: String? = nil,
                                 schemaName: String = "record", maxTokens: Int = 700, temperature: Double = 0,
-                                route: Route = .primary, background: Bool = false) async throws -> T {
+                                route: Route? = nil, background: Bool = false) async throws -> T {
         let text = try await chat(system: system, user: user, image: image, examples: examples, jsonSchema: jsonSchema,
                                   schemaName: schemaName, maxTokens: maxTokens, temperature: temperature,
                                   route: route, background: background)
@@ -245,7 +308,8 @@ actor NemotronClient {
         }
         let data: Data
         do {
-            data = try await post(settings.effectiveEmbedURL.appendingPathComponent("embeddings"), json: body, key: settings.effectiveEmbedKey)
+            data = try await post(settings.effectiveEmbedURL.appendingPathComponent("embeddings"), json: body, key: settings.effectiveEmbedKey,
+                                  paced: kind == .passage)
         } catch NemotronError.http(let status, let message) where status == 404 || status == 400 || status == 422 {
             embeddingsUnavailable = true
             Log.net.info("embeddings unavailable on this host (\(status)); keyword search only")
@@ -262,12 +326,12 @@ actor NemotronClient {
     // MARK: Reranking
 
     /// Cross-encoder relevance of each passage to the query: one logit per passage, same order.
-    func rerank(query: String, passages: [String]) async throws -> [Double] {
+    func rerank(query: String, passages: [String], paced: Bool = false) async throws -> [Double] {
         guard rerankEnabled else { throw NemotronError.badResponse("reranking off") }
         guard !passages.isEmpty else { return [] }
         let model = rerankModelName
         do {
-            return try await rerank(query: query, passages: passages, model: model)
+            return try await rerank(query: query, passages: passages, model: model, paced: paced)
         } catch NemotronError.http(let status, let message) where status == 404 || status == 410 {
             guard model != Self.fallbackRerankModel else {
                 rerankUnavailable = true
@@ -275,18 +339,18 @@ actor NemotronClient {
             }
             Log.net.info("reranker \(model, privacy: .public) gone (\(status)); using \(Self.fallbackRerankModel, privacy: .public)")
             rerankOverride = Self.fallbackRerankModel
-            return try await rerank(query: query, passages: passages, model: Self.fallbackRerankModel)
+            return try await rerank(query: query, passages: passages, model: Self.fallbackRerankModel, paced: paced)
         }
     }
 
-    private func rerank(query: String, passages: [String], model: String) async throws -> [Double] {
+    private func rerank(query: String, passages: [String], model: String, paced: Bool) async throws -> [Double] {
         let body: [String: Any] = [
             "model": model,
             "query": ["text": String(query.prefix(500))],
             "passages": passages.map { ["text": String($0.prefix(1200))] },
             "truncate": "END",
         ]
-        let data = try await post(Self.rerankURL(model), json: body, key: settings.effectiveRerankKey, maxAttempts: 2)
+        let data = try await post(Self.rerankURL(model), json: body, key: settings.effectiveRerankKey, maxAttempts: 2, paced: paced)
         guard
             let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
             let rankings = root["rankings"] as? [[String: Any]]
@@ -307,13 +371,14 @@ actor NemotronClient {
 
     // MARK: Transport
 
-    private func post(_ url: URL, json: [String: Any], key: String, maxAttempts: Int = 4, background: Bool = false) async throws -> Data {
+    private func post(_ url: URL, json: [String: Any], key: String, maxAttempts: Int = 4, background: Bool = false,
+                      paced: Bool = false) async throws -> Data {
         guard !key.isEmpty else { throw NemotronError.missingKey }
         let payload = try JSONSerialization.data(withJSONObject: json)
         var attempt = 0
         while true {
             attempt += 1
-            await pace(host: url.host ?? "")
+            if background || paced { await pace(host: url.host ?? "") }
             var request = URLRequest(url: url)
             request.httpMethod = "POST"
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -342,7 +407,8 @@ actor NemotronClient {
                 let status = (response as? HTTPURLResponse)?.statusCode ?? 0
                 if (200..<300).contains(status) { return data }
                 let error = NemotronError.http(status, String(decoding: data, as: UTF8.self))
-                guard error.isRetryable, attempt < maxAttempts else { throw error }
+                // A question never sits out a rate limit: the caller has the other host.
+                guard error.isRetryable, attempt < maxAttempts, background || paced || status != 429 else { throw error }
                 let wait = status == 429 ? 6.0 * Double(attempt) : 1.5 * Double(attempt)
                 Log.net.info("nemotron \(status), retry \(attempt) in \(wait) s")
                 try await Task.sleep(for: .seconds(wait))
@@ -354,13 +420,14 @@ actor NemotronClient {
         }
     }
 
-    /// Spacing per host, so embeddings on another host never wait behind chat calls.
+    /// Spacing per host for background work on NVIDIA's rate-limited hosts. The slot is taken
+    /// before sleeping, so calls that arrive together still leave one after another.
     private func pace(host: String) async {
-        if let last = lastRequestAt[host] {
-            let elapsed = ContinuousClock.now - last
-            if elapsed < minSpacing { try? await Task.sleep(for: minSpacing - elapsed) }
-        }
-        lastRequestAt[host] = .now
+        guard host.hasSuffix("nvidia.com") else { return }
+        let now = ContinuousClock.now
+        let slot = max(now, nextSlot[host] ?? now)
+        nextSlot[host] = slot + minSpacing
+        if slot > now { try? await Task.sleep(until: slot, clock: .continuous) }
     }
 
     /// First balanced `{...}` in the text (ignores ``` fences and stray prose).
@@ -393,6 +460,50 @@ struct TimeoutError: Error, LocalizedError {
     var errorDescription: String? { "No response within \(Int(seconds)) s" }
 }
 
+/// A question call raced over both hosts (`NemotronClient.questionPlan`): the first host starts
+/// now, the second joins if the first is still silent after the plan's delay; the first success
+/// wins and the other request is cancelled. All failed or `seconds` passed: the last error.
+func hedged<T: Sendable>(_ ai: NemotronClient, seconds: Double,
+                         _ operation: @escaping @Sendable (NemotronClient.Route) async throws -> T) async -> (result: Result<T, Error>, route: NemotronClient.Route?) {
+    let plan = await ai.questionPlan()
+    typealias Outcome = (route: NemotronClient.Route?, result: Result<T, Error>)
+    return await withTaskGroup(of: Outcome.self) { group in
+        group.addTask {
+            do { return (plan.first, .success(try await operation(plan.first))) } catch { return (plan.first, .failure(error)) }
+        }
+        var racing = 1
+        if let second = plan.second {
+            racing = 2
+            group.addTask {
+                do {
+                    try await Task.sleep(for: .seconds(plan.hedgeAfter))
+                    return (second, .success(try await operation(second)))
+                } catch { return (second, .failure(error)) }
+            }
+        }
+        group.addTask {
+            try? await Task.sleep(for: .seconds(seconds))
+            return (nil, .failure(TimeoutError(seconds: seconds)))
+        }
+        var last: Outcome = (nil, .failure(TimeoutError(seconds: seconds)))
+        for await outcome in group {
+            if case .success = outcome.result {
+                group.cancelAll()
+                return (outcome.result, outcome.route)
+            }
+            guard outcome.route != nil else {
+                group.cancelAll()
+                return (outcome.result, nil)
+            }
+            last = outcome
+            racing -= 1
+            if racing == 0 { break }
+        }
+        group.cancelAll()
+        return (last.result, last.route)
+    }
+}
+
 /// Like `withTimeout`, but keeps the error (shown in the answer note and logged).
 func withTimeoutResult<T: Sendable>(seconds: Double, _ operation: @escaping @Sendable () async throws -> T) async -> Result<T, Error> {
     await withTaskGroup(of: Result<T, Error>?.self) { group in
@@ -422,4 +533,8 @@ func withTimeout<T: Sendable>(seconds: Double, _ operation: @escaping @Sendable 
         group.cancelAll()
         return first
     }
+}
+
+extension Duration {
+    var seconds: Double { Double(components.seconds) + Double(components.attoseconds) / 1e18 }
 }

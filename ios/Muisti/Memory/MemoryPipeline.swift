@@ -21,6 +21,11 @@ actor MemoryPipeline {
     private var streamEveryN = 5
     private var streamCounter = 0
     private(set) var stats = PipelineStats()
+    /// A frame with text was just kept (id, text read on it, blurred keyframe): the safety
+    /// rules look at the text right away, before the slower image enrichment.
+    private var onTextStored: (@Sendable (Int64, String, Data) async -> Void)?
+
+    func setOnTextStored(_ handler: @escaping @Sendable (Int64, String, Data) async -> Void) { onTextStored = handler }
 
     init(recorder: SessionRecorder, store: MemoryStore, worker: EnrichmentWorker) {
         self.recorder = recorder
@@ -59,6 +64,10 @@ actor MemoryPipeline {
                 stats.kept += 1
             }
             await worker.signal()
+            if let onTextStored, memory.ocrText.contains(where: \.isLetter) {
+                let text = memory.ocrText, jpeg = memory.frameJPEG
+                Task { await onTextStored(id, text, jpeg) }
+            }
             return id
         }
     }

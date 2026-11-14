@@ -16,10 +16,14 @@ struct AssistantView: View {
     @State private var showSettings = false
     @State private var showDeveloper = false
     @State private var confirmPermission = false
+    /// A typed question waiting for its answer: it stays in the chat with a typing indicator
+    /// (no jump to the full-screen orb in the middle of a conversation).
+    @State private var pendingTyped: String?
 
     private var voice: VoiceAssistant { controller.voice }
     private var voiceMode: Bool {
-        voice.phase == .listening || voice.phase == .thinking || voice.history.isEmpty
+        if pendingTyped != nil { return false }
+        return voice.phase == .listening || voice.phase == .thinking || voice.history.isEmpty
     }
 
     var body: some View {
@@ -57,6 +61,8 @@ struct AssistantView: View {
                 if voice.phase == .speaking {
                     SpeakingBar(voice: voice)
                         .transition(.move(edge: .bottom).combined(with: .opacity))
+                } else if pendingTyped != nil {
+                    ChatComposer(text: $typed, focus: $typing, isBusy: true, onSend: send, onVoice: {})
                 } else if voice.isBusy {
                     VoiceControls(phase: voice.phase, onCancel: voice.cancel)
                 } else {
@@ -88,13 +94,20 @@ struct AssistantView: View {
     private var transcript: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                ChatTranscript(voice: voice, store: controller.store)
+                ChatTranscript(voice: voice, store: controller.store, pending: pendingTyped)
                     .padding(.horizontal, Theme.Spacing.l)
                     .padding(.top, Theme.Spacing.s)
                     .padding(.bottom, Theme.Spacing.l)
             }
             .scrollDismissesKeyboard(.interactively)
             .defaultScrollAnchor(.bottom)
+            .onChange(of: pendingTyped) { _, pending in
+                if pending != nil { withAnimation(Theme.Motion.standard) { proxy.scrollTo("pending", anchor: .bottom) } }
+            }
+            .onChange(of: voice.history.first?.id) { _, id in
+                // The answer arrived: show it from its question.
+                if let id { withAnimation(Theme.Motion.standard) { proxy.scrollTo(id, anchor: .top) } }
+            }
             .onAppear {
                 // Back from voice mode: start the newest answer at its question.
                 if let id = voice.history.first?.id { proxy.scrollTo(id, anchor: .top) }
@@ -139,6 +152,10 @@ struct AssistantView: View {
         guard !question.isEmpty, !voice.isBusy else { return }
         typed = ""
         typing = false
-        ask(question)
+        pendingTyped = question
+        Task {
+            await voice.ask(question)
+            pendingTyped = nil
+        }
     }
 }

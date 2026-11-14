@@ -58,21 +58,21 @@ enum StillQuality: String, Codable, Sendable, CaseIterable, Identifiable {
 
 /// Tunables for the adaptive scheduler. Distances in metres, times in seconds.
 struct AdaptiveTuning: Codable, Sendable, Equatable {
-    var minInterval: Double = 2            // never faster than this (transfer + battery)
-    var maxPerMinute: Int = 30
+    var minInterval: Double = 1            // never faster than this (stream frames arrive at once)
+    var maxPerMinute: Int = 60
     var walkingDistance: Double = 8        // new still every ~8 m walked
-    var walkingMaxInterval: Double = 3     // ...or every 3 s while walking
+    var walkingMaxInterval: Double = 1.5   // ...or every 1.5 s while walking
     var fastDistance: Double = 25          // cycling / vehicle
-    var fastMaxInterval: Double = 3
+    var fastMaxInterval: Double = 1.5
     var headingChange: Double = 35         // degrees; GPS course or phone yaw
     var viewChange: Double = 25            // degrees the head (glasses IMU) turned since the last still
     var lookSettle: Double = 0.6           // ...and has held still this long: looking at something new
     var headSteadyRate: Double = 0.35      // rad/s; below this the head counts as still
     var headWalkingEnergy: Double = 0.06   // g RMS of head acceleration; above this = walking
     var dwellSeconds: Double = 1.2         // stopped this long after moving → one still
-    var stationaryRefresh: Double = 5      // standing still: a refresh this often
+    var stationaryRefresh: Double = 3      // standing still: a refresh this often
     var stationaryMaxStills: Int = 12      // ...then 2.5× slower until the view or place changes
-    var unknownActivityInterval: Double = 4 // no motion data at all: plain timer
+    var unknownActivityInterval: Double = 2 // no motion data at all: plain timer
     var blurGateMaxWait: Double = 1.2      // wait at most this long for a steady moment
     var blurAccelThreshold: Double = 0.18  // g, user acceleration magnitude
     var blurRotationThreshold: Double = 1.2 // rad/s (phone); the head uses half of it
@@ -141,6 +141,13 @@ final class AppConfig {
     var autoReconnect: Bool { didSet { save("autoReconnect", autoReconnect) } }
     /// Start capturing by itself as soon as the glasses connect (no Start button).
     var autoStart: Bool { didSet { save("autoStart", autoStart) } }
+    /// Ask by voice through the glasses mic, with a wake word, while capturing.
+    var handsFree: Bool { didSet { save("handsFree", handsFree) } }
+    var wakeWord: String { didSet { save("wakeWord", wakeWord); if wakeWord != oldValue { wakeAliases = [] } } }
+    /// How the glasses spell the wake word, learned in Settings.
+    var wakeAliases: [String] { didSet { save("wakeAliases", wakeAliases) } }
+    /// Muisti Turva flags hazards on its own (stove left on, smoke …), without any rule.
+    var safetyAuto: Bool { didSet { save("safetyAuto", safetyAuto) } }
     var backgroundCapture: Bool { didSet { save("backgroundCapture", backgroundCapture) } }
     var glassesPhotoRotation: Int { didSet { save("glassesPhotoRotation", glassesPhotoRotation) } }
     var tuning: AdaptiveTuning {
@@ -168,7 +175,8 @@ final class AppConfig {
         // 12 MP stills crawl over the Bluetooth link (10–18 s each, field 14 Nov) and the
         // keyframe is cut to 1536 px anyway: default to a smaller, faster still.
         // Capture intervals were shortened (real-time stream frames): drop stored tuning once.
-        if !defaults.bool(forKey: "migratedTuning3") {
+        if !defaults.bool(forKey: "migratedTuning4") {
+            defaults.set(true, forKey: "migratedTuning4")
             defaults.set(true, forKey: "migratedTuning3")
             defaults.removeObject(forKey: "tuning")
         }
@@ -200,6 +208,16 @@ final class AppConfig {
         apiKey = KeychainStore.read("nvidia-api-key") ?? ""
         autoReconnect = defaults.object(forKey: "autoReconnect") as? Bool ?? true
         autoStart = defaults.object(forKey: "autoStart") as? Bool ?? true
+        // Always-on listening is off for now (double triggers, video quality): push-to-talk on
+        // the glasses' capture button instead. Turned off once for existing installs.
+        if !defaults.bool(forKey: "migratedHandsFreeOff") {
+            defaults.set(true, forKey: "migratedHandsFreeOff")
+            defaults.set(false, forKey: "handsFree")
+        }
+        handsFree = defaults.object(forKey: "handsFree") as? Bool ?? false
+        wakeWord = defaults.string(forKey: "wakeWord") ?? "Muisti"
+        wakeAliases = defaults.stringArray(forKey: "wakeAliases") ?? []
+        safetyAuto = defaults.object(forKey: "safetyAuto") as? Bool ?? true
         backgroundCapture = defaults.object(forKey: "backgroundCapture") as? Bool ?? true
         glassesPhotoRotation = defaults.object(forKey: "glassesPhotoRotation") as? Int ?? 90
         if let data = defaults.data(forKey: "tuning"),

@@ -70,11 +70,13 @@ final class CaptureController {
     @ObservationIgnored private let worker: EnrichmentWorker
     @ObservationIgnored let queryEngine: QueryEngine
     let voice: VoiceAssistant
+    @ObservationIgnored let mediaKeys = MediaKeyTrigger()
     /// Muisti Turva: the user's own safety rules over what the glasses see.
     let safety: SafetyMonitor
     @ObservationIgnored private let pipeline: MemoryPipeline
     @ObservationIgnored private let pipelineInput: AsyncStream<PipelineItem>.Continuation
     @ObservationIgnored private var tasks: [Task<Void, Never>] = []
+    @ObservationIgnored private var recognizerVocabulary: [String] = []
 
     init(config: AppConfig, wearables: WearablesController) {
         self.config = config
@@ -87,6 +89,7 @@ final class CaptureController {
         queryEngine = QueryEngine(store: store, ai: ai)
         voice = VoiceAssistant(engine: queryEngine, location: location)
         voice.localeIdentifier = config.voiceLocale
+        glasses.headSpeech.wakeWord = config.wakeWord.isEmpty ? "Muisti" : config.wakeWord
         voice.speakAnswers = config.speakAnswers
         pipeline = MemoryPipeline(recorder: recorder, store: store, worker: worker)
         safety = SafetyMonitor(store: SafetyStore(), ai: ai, location: location)
@@ -96,6 +99,60 @@ final class CaptureController {
             await voice.announce(text, language: language, expectsReply: expectsReply, frame: frame)
         }
         voice.safetyHandler = { command in await safety.handle(command) }
+        safety.autoHazards = { config.safetyAuto }
+        let enrichment = worker
+        let memoryPipeline = pipeline
+        Task {
+            await enrichment.setOnEnriched { id, title, passage, vector, frame in
+                await safety.checkEnriched(recordID: id, title: title, passage: passage, vector: vector, frame: frame)
+            }
+            await memoryPipeline.setOnTextStored { id, text, frame in
+                await safety.checkText(recordID: id, text: text, frame: frame)
+            }
+        }
+        // Hands-free questions through the glasses mic (on-glasses transcription).
+        let headSpeech = glasses.headSpeech
+        headSpeech.onQuestion = { question in Task { await voice.askFromGlasses(question) } }
+        headSpeech.isBusy = { voice.isBusy }
+        headSpeech.onWake = { voice.acknowledge() }
+        // Push-to-talk: a tap on the glasses' touchpad, reported by the SDK or as a media key.
+        let mediaKeys = mediaKeys
+        mediaKeys.onTap = { Task { await voice.pushToTalk() } }
+        glasses.buttons.onPress = {
+            guard !mediaKeys.recentlyTapped else { return }
+            mediaKeys.noteTap()
+            Log.glasses.info("double tap on the side (glasses inputs): ask")
+            Task { await voice.pushToTalk() }
+        }
+        voice.glassesListening = { headSpeech.isListening }
+        voice.expectGlassesReply = { headSpeech.expectReply() }
+        glasses.wantsSpeech = { [weak wearables] in
+            config.handsFree && wearables?.microphonePermission == .granted
+        }
+        glasses.wantsStreamAudio = { [weak wearables] in
+            GlassesCaptureSource.usesWiFiTransport && wearables?.microphonePermission == .granted
+        }
+        voice.glassesMic = glasses.micTap
+        glasses.prepareSpeech = { [weak wearables] in
+            guard let wearables, config.handsFree || GlassesCaptureSource.usesWiFiTransport else { return }
+            // The phone recogniser (wake listening on the glasses audio) needs Speech access.
+            _ = await VoiceAssistant.requestSpeechAuthorization()
+            let status = await wearables.refreshMicrophonePermission()
+            // Not allowed yet: ask once by itself (Meta AI opens, shows the prompt, comes back).
+            // After a "no", only the Settings button asks again.
+            let key = "askedGlassesMicrophone"
+            if status != .granted, !UserDefaults.standard.bool(forKey: key) {
+                UserDefaults.standard.set(true, forKey: key)
+                Log.glasses.info("asking for the glasses microphone permission")
+                _ = await wearables.requestMicrophonePermission()
+            }
+        }
+        let memoryStore = store
+        voice.vocabulary = {
+            let seen = await memoryStore.vocabulary(limit: 90)
+            let watched = safety.watched.map { $0.split(separator: ":").last.map(String.init) ?? $0 }
+            return Array(Set(watched)) + seen
+        }
         let safetyStore = safety.store
         let bridge = SafetyBridge(
             context: { await safety.promptContext() },
@@ -158,6 +215,31 @@ final class CaptureController {
                 await self?.autoStartIfReady()
             }
         })
+        glasses.wakeStrings = { [weak self] in
+            let wake = config.wakeWord.isEmpty ? "Muisti" : config.wakeWord
+            return [wake, "Hey \(wake)"] + config.wakeAliases + (self?.recognizerVocabulary ?? [])
+        }
+        // Names seen (signs, booths, streets) for the phone recogniser on the glasses audio, so
+        // "Arduino" is not heard as "audio"; refreshed every minute as memory grows.
+        tasks.append(Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self else { return }
+                let seen = await self.store.vocabulary(limit: 90)
+                let watched = self.safety.watched.map { $0.split(separator: ":").last.map(String.init) ?? $0 }
+                self.recognizerVocabulary = Array(Set(watched)) + seen
+                self.glasses.audioWake.updateStrings(self.glasses.wakeStrings())
+                try? await Task.sleep(for: .seconds(60))
+            }
+        })
+        // Tool for the answer model: what the glasses see right now (faces masked), also kept.
+        let engineForLive = queryEngine
+        Task { [weak self] in
+            await engineForLive.setLiveView { [weak self] in
+                await self?.liveView()
+            }
+        }
+        // Short press of the glasses' capture button (Meta takes its photo): keep this moment.
+        glasses.buttons.onCapture = { [weak self] in Task { await self?.captureNow() } }
         Task.detached(priority: .utility) { PerceptionEngine.warmUpModels() }
     }
 
@@ -209,6 +291,10 @@ final class CaptureController {
         }
         location.start()
         if config.mode.usesScheduler { motion.start() }
+        if config.sourceKind == .glasses {
+            AudioKeepAlive.start()   // lets push-to-talk use the microphone while the phone is locked
+            mediaKeys.activate()
+        }
 
         let other: any CaptureSource = config.sourceKind == .glasses ? phone : glasses
         if other.state != .idle { await other.stop() }
@@ -232,6 +318,8 @@ final class CaptureController {
         await phone.stop()
         location.stop()
         motion.stop()
+        mediaKeys.deactivate()
+        AudioKeepAlive.stop()
         await recorder.finish()
         recordingFolder = nil
         schedulerText = "—"
@@ -246,11 +334,15 @@ final class CaptureController {
         scheduler.tuning = config.tuning
         voice.localeIdentifier = config.voiceLocale
         voice.speakAnswers = config.speakAnswers
-        // While the glasses camera streams, the glasses mic (Bluetooth HFP) would share the
-        // radio and stall the camera: listen with the phone's mic then.
+        glasses.headSpeech.wakeWord = config.wakeWord.isEmpty ? "Muisti" : config.wakeWord
+        glasses.headSpeech.aliases = config.wakeAliases
+        glasses.refreshSpeech()
+        // Talking to Muisti uses the glasses mic (Bluetooth HFP). Only when the camera itself
+        // runs over Bluetooth Classic would HFP share the radio and stall it: phone mic then.
+        // Over Wi-Fi (the default now) the camera has its own link.
         voice.prefersGlassesMic = { [weak self] in
             guard let self else { return true }
-            return !(self.isRunning && self.config.sourceKind == .glasses)
+            return !(self.isRunning && self.config.sourceKind == .glasses && !GlassesCaptureSource.usesWiFiTransport)
         }
         await worker.signal()
     }
@@ -284,6 +376,38 @@ final class CaptureController {
         frame.trigger = .manual
         if config.mode.usesScheduler { scheduler.didCapture(.manual, input: makeInputs()) }
         ingest(frame)
+    }
+
+    /// The newest frame from the active camera, faces masked, with its OCR (answer tool).
+    /// The frame is also remembered like a manual capture.
+    func liveView() async -> (jpeg: Data, ocr: String, at: Date)? {
+        var live = isRunning ? await activeSource.captureStill(trigger: .manual) : nil
+        if live == nil, isRunning, config.sourceKind == .glasses {
+            // Nothing decoded (the phone is locked and iOS gives no video decoder there): ask
+            // the glasses for a photo through the running stream. The user asked to look, so
+            // the capture sound is fine here.
+            live = await activeSource.requestHighResPhoto()
+            Trace.note("live view: stream photo \(live == nil ? "failed" : "ok")")
+        }
+        if var frame = live {
+            frame.trigger = .manual
+            ingest(frame)
+            let jpeg = frame.jpeg
+            if let copy = await Task.detached(priority: .userInitiated, operation: { SafetyFrame.prepare(jpeg, maxPixel: 1536) }).value {
+                return (copy.jpeg, copy.ocr, frame.capturedAt)
+            }
+            Log.pipeline.info("live view: privacy copy failed")
+        } else {
+            Log.pipeline.info("live view: no live frame (running \(self.isRunning), source \(String(describing: self.activeSource.state), privacy: .public))")
+        }
+        // No live frame (stream paused, phone in a pocket): the newest kept frame, if recent.
+        // Its time goes to the model, so it is not presented as "right now".
+        // Only a few seconds old: an older frame passed off as the live view showed the user the
+        // last picture from before the phone was locked (field 14 Nov).
+        guard let newest = await store.recent(limit: 1).first, Date().timeIntervalSince(newest.seenAt) < 15,
+              let jpeg = try? Data(contentsOf: store.frameURL(newest)) else { return nil }
+        Log.pipeline.info("live view: using the newest kept frame (\(Int(Date().timeIntervalSince(newest.seenAt))) s old)")
+        return (jpeg, newest.ocrText, newest.seenAt)
     }
 
     func requestHighRes() async {
@@ -418,6 +542,10 @@ final class CaptureController {
     private func pipelineDidProcess(kept: Bool, stats: PipelineStats) {
         pipelineStats = stats
         if kept {
+            glasses.noteKeptFrame()
+            if Trace.inBackground { Trace.note("kept a memory while locked") }
+        }
+        if kept {
             keptCount += 1
             memoryCount += 1
             pendingCount += 1
@@ -461,7 +589,7 @@ final class CaptureController {
         case .wait(let why), .hold(let why):
             schedulerText = why
         case .capture(let trigger):
-            guard !glasses.recordingInBackground else {
+            guard !glasses.recordingInBackground || glasses.decodesLive else {
                 schedulerText = "Recording in background (glasses stream saved to file)"
                 return
             }
@@ -476,7 +604,9 @@ final class CaptureController {
         defer { isCapturing = false }
         guard let frame = await activeSource.captureStill(trigger: trigger) else {
             failedStills += 1
-            let pause = min(16, pow(2, Double(failedStills - 1)))
+            // A stream that hiccups recovers in seconds: in stream-frame mode never wait long.
+            let cap: Double = config.mode.picksStreamFrames ? 2 : 16
+            let pause = min(cap, pow(2, Double(failedStills - 1)))
             retryNotBefore = Date().addingTimeInterval(pause)
             schedulerText = "No frame (\(failedStills)); retrying in \(Int(pause)) s"
             return

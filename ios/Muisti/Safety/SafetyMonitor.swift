@@ -29,7 +29,7 @@ final class SafetyMonitor {
     struct Tuning: Sendable {
         var homeHandsEvery: TimeInterval = 5      // at home, hands in view
         var homeEvery: TimeInterval = 30          // at home, hands not in view
-        var labelEvery: TimeInterval = 8          // allergen rules: frames with a lot of text
+        var labelEvery: TimeInterval = 6          // allergen rules: a package check this often
         var awayEvery: TimeInterval = 20          // event rules away from home
         var maxPerMinute = 20
         var onReadingsNeeded = 2
@@ -38,6 +38,13 @@ final class SafetyMonitor {
         var leaveDebounce: TimeInterval = 30 * 60
         var snooze: TimeInterval = 30 * 60
         var confirmWindowMinutes = 120           // a medicine seen in hand this long around its time
+        var productCooldownMinutes = 3.0          // the same product warns again after this
+        // Enriched record ↔ rule (see checkEnriched for the calibration).
+        var ruleDirectLogit = -2.85               // rerank at or above, and …
+        var ruleDirectCosine = 0.20               // … embedding at or above: warn at once
+        var ruleDirectCosineAlone = 0.27          // no reranker: embedding alone to warn at once
+        var ruleGateLogit = -3.1                  // below both gates: not about the rule
+        var ruleGateCosine = 0.22
     }
 
     private(set) var rules: [SafetyRule] = []
@@ -48,10 +55,14 @@ final class SafetyMonitor {
     private(set) var lastRoom: (room: String, at: Date)?
     private(set) var lastObservationText = "—"
     var tuning = Tuning()
+    @ObservationIgnored private var recentTexts: [(words: Set<String>, at: Date)] = []
+    @ObservationIgnored private var productAlerts: [String: Date] = [:]
 
     let store: SafetyStore
     @ObservationIgnored private let ai: NemotronClient
     @ObservationIgnored private let location: LocationProvider
+    /// Hazards flagged by the frame model on its own, without any rule (setting).
+    @ObservationIgnored var autoHazards: () -> Bool = { true }
     /// Speaks an alert or question through the glasses (set by the controller).
     @ObservationIgnored var announce: (_ text: String, _ language: String?, _ expectsReply: Bool, _ frame: URL?) async -> Void = { _, _, _, _ in }
 
@@ -141,14 +152,17 @@ final class SafetyMonitor {
     /// Called for every captured frame. Cheap gates first; at most one model call at a time.
     func consider(_ frame: CapturedFrame) {
         let watched = self.watched
-        guard !watched.isEmpty || !watchedAllergens.isEmpty, !inFlight else { return }
+        let auto = autoHazards()
+        guard !watched.isEmpty || !watchedAllergens.isEmpty || auto, !inFlight else { return }
         let now = Date()
         sentTimes.removeAll { now.timeIntervalSince($0) > 60 }
         guard sentTimes.count < tuning.maxPerMinute else { return }
         let home = atHome
         let since = lastSent.map { now.timeIntervalSince($0) } ?? .infinity
-        let hasAllergenRules = !watchedAllergens.isEmpty
-        let hasAwayRules = rules.contains { $0.enabled && $0.trigger.type == .event && $0.trigger.object != "label" }
+        // Allergen and "when you see X" rules are checked on enriched memory records (no frame
+        // is sent for them); only rules about an object's state need frames of their own.
+        let hasAllergenRules = false
+        let hasAwayRules = rules.contains { $0.enabled && $0.trigger.type == .event && $0.trigger.state != nil }
         // Fast path decided without any image work.
         if home, since < tuning.homeHandsEvery { return }
         if !home, !hasAllergenRules, !hasAwayRules { return }
@@ -159,21 +173,15 @@ final class SafetyMonitor {
         let allergens = watchedAllergens
         Task {
             defer { self.inFlight = false }
-            let prepared = await Task.detached(priority: .utility) { () -> (SafetyFrame.Prepared?, Bool) in
-                let hands = SafetyFrame.handsVisible(jpeg)
-                // At home without hands, or away: only every so often (cheap check above).
-                return (SafetyFrame.prepare(jpeg), hands)
-            }.value
-            guard let copy = prepared.0 else { return }
-            let hands = prepared.1
-            let due: Bool
-            if home {
-                due = hands ? since >= tuning.homeHandsEvery : since >= tuning.homeEvery
-            } else {
-                let label = hasAllergenRules && copy.lineCount >= 4 && since >= tuning.labelEvery
-                due = label || (hasAwayRules && since >= tuning.awayEvery)
-            }
-            guard due else { return }
+            // Hands first (cheap); the privacy copy (OCR + head masking) only for frames that are due.
+            let hands = await Task.detached(priority: .utility) { SafetyFrame.handsVisible(jpeg) }.value
+            let due = home ? (hands ? since >= tuning.homeHandsEvery : since >= tuning.homeEvery)
+                           : (hasAwayRules && since >= tuning.awayEvery)
+            // Allergen rules: a frame every few seconds, whatever its amount of text (the front
+            // of a package can be a big picture and one word).
+            let labelCheck = hasAllergenRules && since >= tuning.labelEvery
+            guard due || labelCheck else { return }
+            guard let copy = await Task.detached(priority: .utility, operation: { SafetyFrame.prepare(jpeg) }).value else { return }
             self.lastSent = Date()
             self.sentTimes.append(Date())
             await self.observe(copy, frame: frame, watched: watched, allergens: allergens)
@@ -186,7 +194,7 @@ final class SafetyMonitor {
             observation = try await ai.chatJSON(SafetyObservation.self, system: SafetyPrompts.observeSystem,
                                                 user: SafetyPrompts.observeUser(watched: watched, allergens: allergens, ocr: copy.ocr),
                                                 image: .init(jpeg: copy.jpeg), jsonSchema: SafetyPrompts.observeSchema,
-                                                schemaName: "observation", maxTokens: 500, temperature: 0.2, background: true)
+                                                schemaName: "observation", maxTokens: 600, temperature: 0, background: true)
         } catch {
             Log.pipeline.info("safety observe failed: \(String(describing: error), privacy: .public)")
             return
@@ -229,7 +237,10 @@ final class SafetyMonitor {
         for a in obs.actions {
             await action(a.action, on: a.object, at: at, frameFile: frameFile, source: .vision)
         }
-        if let label = obs.label, label.ingredients_visible {
+        for h in obs.hazards {
+            await hazard(h, at: at, frameFile: frameFile)
+        }
+        if let label = obs.label, label.ingredients_visible || !label.allergens_found.isEmpty {
             let found = label.allergens_found.joined(separator: ", ")
             await store.insert(event(.label, "label", found.isEmpty ? "none" : found,
                                      detail: [label.product, label.evidence].compactMap { $0 }.joined(separator: " · ")))
@@ -257,13 +268,16 @@ final class SafetyMonitor {
                 st.pendingOnCount += 1
                 if st.pendingOnCount >= tuning.onReadingsNeeded || source != .vision {
                     st = ObjectState(object: object, state: "on", since: at, lastSeen: at, lastStateSeen: at,
-                                     evidenceFrame: frameFile ?? st.evidenceFrame, pendingOnCount: 0, source: source, place: st.place)
+                                     evidenceFrame: frameFile ?? st.evidenceFrame, pendingOnCount: 0, source: source, place: st.place,
+                                     active: true, hazard: st.hazard)
                     await store.insert(SafetyEvent(at: at, kind: .state, object: object, value: "on", source: source,
                                                    frameFile: frameFile, zone: zone.rawValue))
                 }
             }
         } else {
             st.pendingOnCount = 0
+            // "Off", "I turned it off", locked, closed …: no longer left on.
+            st.active = false
             if st.state != state {
                 st.state = state
                 st.since = at
@@ -295,7 +309,7 @@ final class SafetyMonitor {
         case "locked": await observe(object: object, state: "locked", at: at, frameFile: frameFile, place: nil, source: source)
         case "unlocked": await observe(object: object, state: "unlocked", at: at, frameFile: frameFile, place: nil, source: source)
         case "took":
-            await rescheduleNotifications()
+            Task { await self.rescheduleNotifications() }
         default: break
         }
     }
@@ -340,18 +354,27 @@ final class SafetyMonitor {
         switch command {
         case .createRule(var rule):
             rule.enabled = true
+            // The same rule again while it waits for a yes ("yes, that's right" read as a
+            // request): that is the yes.
+            if case .rule(let waiting) = pending, waiting.trigger == rule.trigger, waiting.condition == rule.condition {
+                return await handle(.confirm, now: now)
+            }
             pending = .rule(rule)
         case .confirm:
             switch pending {
             case .rule(let rule):
                 await store.save(rule)
                 await reload()
-                if rule.trigger.type == .schedule { await requestNotificationPermission() }
-                await rescheduleNotifications()
+                // Never wait on the system prompt: the conversation must go on while it is shown.
+                if rule.trigger.type == .schedule {
+                    Task { await self.requestNotificationPermission(); await self.rescheduleNotifications() }
+                } else {
+                    Task { await self.rescheduleNotifications() }
+                }
             case .deleteRule(let rule):
                 await store.deleteRule(rule.id)
                 await reload()
-                await rescheduleNotifications()
+                Task { await self.rescheduleNotifications() }
             case .action(let object, let action, let frame, let seenAt):
                 await self.action(action, on: object, at: seenAt, frameFile: frame, source: .user_confirmed)
             case nil:
@@ -372,6 +395,12 @@ final class SafetyMonitor {
                 await store.insert(SafetyEvent(at: now, kind: .state, object: object, value: value, source: .user_voice))
             }
             states = await store.states().map(staled)
+            // "I turned it off" answers the open warning about that object.
+            if let last = alerts.first, last.response == nil, now.timeIntervalSince(last.at) < 30 * 60,
+               rules.first(where: { $0.id == last.ruleID })?.watchedObjects.contains(object) == true {
+                await store.respond(alert: last.id, .confirmed)
+                alerts = await store.alerts()
+            }
         case .leaving:
             let spoken = await trigger(contextEvent: "left_home", source: .user_voice, at: now, speak: false)
             return spoken.isEmpty ? nil : spoken.joined(separator: " ")
@@ -383,6 +412,7 @@ final class SafetyMonitor {
             if let rule = lastAlertRule { snoozedUntil[rule] = now.addingTimeInterval(tuning.snooze) }
             if let last = alerts.first { await store.respond(alert: last.id, .snoozed) }
             alerts = await store.alerts()
+            return lastAlertRule == nil ? nil : "Okay, I'll stay quiet about that for 30 minutes."
         }
         return nil
     }
@@ -421,6 +451,15 @@ final class SafetyMonitor {
         for rule in rules where rule.enabled && rule.trigger.type == .context && rule.trigger.event == contextEvent {
             if let text = await fire(rule, at: at, label: nil, speak: speak) { said.append(text) }
         }
+        // Built in: anything the frame model saw left active, unless a user rule just said it.
+        if contextEvent == "left_home", autoHazards() {
+            for st in await store.states().map(staled) where st.active && st.state != "unknown" {
+                guard !said.contains(where: { $0.lowercased().contains(st.object.lowercased()) }) else { continue }
+                let text = "I last saw the \(Self.spoken(st.object)) \(st.state) at \(Self.clock(st.lastStateSeen)) and did not see it turned off."
+                if await fireAuto(id: "auto.left.\(st.object)", text: text, frame: st.evidenceFrame, severity: .high,
+                                  cooldown: 30, at: at, speak: speak) { said.append(text) }
+            }
+        }
         return said
     }
 
@@ -442,6 +481,16 @@ final class SafetyMonitor {
             }
             wasHome = isHome
         }
+        // Built in: an active hazard at home that nobody has looked at for 20 minutes.
+        if autoHazards(), atHome {
+            for st in await store.states().map(staled) where st.active && st.hazard
+                && now.timeIntervalSince(st.lastSeen) >= 20 * 60 && now.timeIntervalSince(st.lastSeen) < 3 * 3600 {
+                let minutes = Int(now.timeIntervalSince(st.lastStateSeen) / 60)
+                await fireAuto(id: "auto.idle.\(st.object)",
+                               text: "The \(Self.spoken(st.object)) may still be \(st.state): I last saw it \(st.state) at \(Self.clock(st.lastStateSeen)), \(minutes) minutes ago.",
+                               frame: st.evidenceFrame, severity: .high, cooldown: 30, at: now, speak: true)
+            }
+        }
         for rule in rules where rule.enabled {
             switch rule.trigger.type {
             case .schedule:
@@ -462,6 +511,196 @@ final class SafetyMonitor {
         }
     }
 
+    // MARK: Enriched memory records → rules
+
+    /// A frame was just understood by the enrichment worker: Nemotron's meaning of it (type,
+    /// name, caption, visible things such as "wrapper with strawberry image", keywords, text).
+    /// Rules about what is seen (allergens, "when you see X") are matched against that meaning:
+    /// when the reranker and the embedding both put the record close to the rule, Muisti warns
+    /// at once; a record in between gets a short text-only check; the rest is ignored. No image
+    /// goes to the model again.
+    ///
+    /// Calibrated on 175 real records (14 Nov): the four strawberry-package frames scored rerank
+    /// −2.57…−2.71 / cosine 0.23…0.32; the closest wrong ones (a phone screen with a strawberry
+    /// chat) −2.97 / 0.21 and −3.26 / 0.23.
+    func checkEnriched(recordID: Int64, title: String?, passage: String, vector: [Float]? = nil, frame: Data?,
+                       rerankGate: Bool = true) async {
+        let now = Date()
+        let candidates = rules.filter { rule in
+            guard rule.enabled, rule.trigger.type == .event, rule.trigger.state == nil else { return false }
+            if rule.condition.allergens?.isEmpty == false { return true }   // cooled down per product, see fire()
+            if let last = alerts.first(where: { $0.ruleID == rule.id }),
+               now.timeIntervalSince(last.at) < Double(rule.cooldown_min) * 60 { return false }
+            return true
+        }
+        guard !candidates.isEmpty else { return }
+        for rule in candidates {
+            let query = Self.ruleQuery(rule)
+            var direct = false
+            if rerankGate {
+                var score: Double?
+                if await ai.rerankEnabled { score = try? await ai.rerank(query: query, passages: [passage], paced: true).first }
+                var cosine: Double?
+                if let vector, let q = await queryVector(query) { cosine = Self.cosine(vector, q) }
+                Log.pipeline.info("safety rule check #\(recordID) [\(rule.id.prefix(8), privacy: .public)] rerank \(score.map { String(format: "%.2f", $0) } ?? "-", privacy: .public) cos \(cosine.map { String(format: "%.3f", $0) } ?? "-", privacy: .public)")
+                let t = tuning
+                switch (score, cosine) {
+                case let (s?, c):
+                    direct = s >= t.ruleDirectLogit && (c ?? 1) >= t.ruleDirectCosine
+                    if !direct, s < t.ruleGateLogit, (c ?? 0) < t.ruleGateCosine { continue }
+                case let (nil, c?):
+                    direct = c >= t.ruleDirectCosineAlone
+                    if !direct, c < t.ruleGateCosine { continue }
+                case (nil, nil):
+                    break   // nothing to measure with: the text check decides
+                }
+            }
+            let label: SafetyObservation.Label
+            if direct {
+                label = SafetyObservation.Label(product: title, ingredients_visible: false, source: "front",
+                                                allergens_found: rule.condition.allergens ?? [], evidence: "close to the rule in meaning")
+            } else {
+                let match: SafetyPrompts.Match
+                do {
+                    match = try await ai.chatJSON(SafetyPrompts.Match.self, system: SafetyPrompts.matchSystem,
+                                                  user: "Rule: \(query)\n\nRecord:\n\(passage.prefix(2500))",
+                                                  jsonSchema: SafetyPrompts.matchSchema, schemaName: "match", maxTokens: 200,
+                                                  temperature: 0, background: true)
+                } catch {
+                    continue
+                }
+                Log.pipeline.info("safety rule check #\(recordID): matches \(match.matches) \(match.found, privacy: .public) · \(match.evidence, privacy: .public)")
+                guard match.matches else { continue }
+                let found = match.found.map { $0.lowercased() }
+                label = SafetyObservation.Label(product: match.product ?? title, ingredients_visible: match.from_ingredients,
+                                                source: match.from_ingredients ? "ingredients" : "front",
+                                                allergens_found: found.isEmpty ? (rule.condition.allergens ?? []) : found,
+                                                evidence: match.evidence)
+            }
+            var file: String?
+            if let frame { file = await store.saveFrame(frame) }
+            await fire(rule, at: Date(), label: label, speak: true, frameFile: file)
+        }
+    }
+
+    @ObservationIgnored private var queryVectors: [String: [Float]] = [:]
+
+    /// The rule's query embedding (cached per query text).
+    private func queryVector(_ query: String) async -> [Float]? {
+        if let cached = queryVectors[query] { return cached }
+        guard await ai.embeddingsEnabled, let v = try? await ai.embed(query, as: .query) else { return nil }
+        queryVectors[query] = v
+        return v
+    }
+
+    static func cosine(_ a: [Float], _ b: [Float]) -> Double? {
+        guard a.count == b.count, !a.isEmpty else { return nil }
+        var dot = 0.0, na = 0.0, nb = 0.0
+        for i in a.indices {
+            dot += Double(a[i]) * Double(b[i]); na += Double(a[i] * a[i]); nb += Double(b[i] * b[i])
+        }
+        return na > 0 && nb > 0 ? dot / (na.squareRoot() * nb.squareRoot()) : nil
+    }
+
+    /// Fast path: a frame was just stored and OCR read text on it (e.g. "MANSIKKA" on a
+    /// package). Checked within seconds, before the image enrichment; the same text seen again
+    /// within a minute is not checked twice.
+    func checkText(recordID: Int64, text: String, frame: Data) async {
+        guard rules.contains(where: { $0.enabled && $0.trigger.type == .event && $0.trigger.state == nil }) else { return }
+        let words = Set(text.lowercased().split(whereSeparator: { !$0.isLetter }).map(String.init).filter { $0.count >= 3 })
+        guard !words.isEmpty else { return }
+        let now = Date()
+        recentTexts.removeAll { now.timeIntervalSince($0.at) > 60 }
+        // The same package read a little differently in the next frame is not new text.
+        if recentTexts.contains(where: { Double($0.words.intersection(words).count) / Double($0.words.union(words).count) >= 0.5 }) { return }
+        recentTexts.append((words, now))
+        // No rerank gate here: raw OCR in another language ("MANSIKKA") scores like any other
+        // text (-3.3), so the short text check decides alone.
+        await checkEnriched(recordID: recordID, title: nil, passage: "Text read on the frame (OCR):\n\(text)",
+                            frame: frame, rerankGate: false)
+    }
+
+    /// The rule as a retrieval query.
+    static func ruleQuery(_ rule: SafetyRule) -> String {
+        if let allergens = rule.condition.allergens, !allergens.isEmpty {
+            return "A food or drink product that contains \(allergens.joined(separator: ", ")) (as an ingredient, in its flavour or name, or shown on the package)"
+        }
+        let object = rule.trigger.object.map(spoken) ?? rule.watch.first.map(spoken) ?? rule.summary
+        return object
+    }
+
+    // MARK: Built-in hazards
+
+    /// One reading of a hazard the model flagged by itself. "Active" needs two readings in a
+    /// row (one wrong reading must not alarm); inactive counts at once. Danger happening now
+    /// (smoke, boiling over) is said as soon as it is confirmed.
+    private func hazard(_ h: SafetyObservation.Hazard, at: Date, frameFile: String?) async {
+        guard autoHazards() || watched.contains(h.object) else { return }
+        var st = await currentState(h.object) ?? ObjectState(object: h.object, state: "unknown", since: at, lastSeen: at,
+                                                              lastStateSeen: at, evidenceFrame: frameFile, source: .vision,
+                                                              place: h.location_hint)
+        st.lastSeen = at
+        st.hazard = true
+        if let place = h.location_hint { st.place = place }
+        if h.active {
+            if st.active {
+                st.state = h.state
+                st.lastStateSeen = at
+                st.evidenceFrame = frameFile ?? st.evidenceFrame
+            } else {
+                st.pendingOnCount += 1
+                if st.pendingOnCount >= tuning.onReadingsNeeded {
+                    st.state = h.state
+                    st.active = true
+                    st.since = at
+                    st.lastStateSeen = at
+                    st.pendingOnCount = 0
+                    st.evidenceFrame = frameFile ?? st.evidenceFrame
+                    await store.insert(SafetyEvent(at: at, kind: .state, object: h.object, value: h.state, source: .vision,
+                                                   frameFile: frameFile, zone: zone.rawValue, detail: "hazard: \(h.evidence)"))
+                }
+            }
+        } else {
+            st.pendingOnCount = 0
+            if st.active || st.state != h.state {
+                await store.insert(SafetyEvent(at: at, kind: .state, object: h.object, value: h.state, source: .vision,
+                                               frameFile: frameFile, zone: zone.rawValue, detail: "hazard: \(h.evidence)"))
+            }
+            st.active = false
+            st.state = h.state
+            st.since = at
+            st.lastStateSeen = at
+            st.evidenceFrame = frameFile ?? st.evidenceFrame
+        }
+        await store.save(st)
+        if h.immediate, st.active {
+            await fireAuto(id: "auto.now.\(h.object)",
+                           text: "Careful: I see the \(Self.spoken(h.object)) \(h.state)" + (st.place.map { ", \($0)" } ?? "") + ".",
+                           frame: frameFile, severity: .high, cooldown: 10, at: at, speak: true)
+        }
+    }
+
+    /// A built-in warning (no user rule): same cooldown, snooze and logging as rule alerts.
+    @discardableResult
+    private func fireAuto(id: String, text: String, frame: String?, severity: SafetyRule.Severity, cooldown: Int,
+                          at: Date, speak: Bool) async -> Bool {
+        if let until = snoozedUntil[id], at < until { return false }
+        if let last = alerts.first(where: { $0.ruleID == id }), at.timeIntervalSince(last.at) < Double(cooldown) * 60 { return false }
+        let alert = SafetyAlert(at: at, ruleID: id, message: text, evidenceFrame: frame, severity: severity)
+        await store.insert(alert)
+        alerts = await store.alerts()
+        lastAlertRule = id
+        Log.pipeline.info("safety auto alert [\(id, privacy: .public)]: \(text, privacy: .public)")
+        if speak { await announce(text, nil, false, frame.map(store.frameURL)) }
+        await notifyIfBackground(text)
+        return true
+    }
+
+    /// "front_door" → "front door".
+    static func spoken(_ object: String) -> String {
+        (object.split(separator: ":").last.map(String.init) ?? object).replacingOccurrences(of: "_", with: " ")
+    }
+
     // MARK: Rule evaluation
 
     /// Condition check + alert. Returns the spoken text if the rule fired.
@@ -469,10 +708,28 @@ final class SafetyMonitor {
     private func fire(_ rule: SafetyRule, at: Date, label: SafetyObservation.Label?, speak: Bool,
                       frameFile: String? = nil, ignoreCooldown: Bool = false) async -> String? {
         if let until = snoozedUntil[rule.id], at < until { return nil }
-        if !ignoreCooldown, let last = alerts.first(where: { $0.ruleID == rule.id }),
-           at.timeIntervalSince(last.at) < Double(rule.cooldown_min) * 60 { return nil }
+        // Allergens: every product is its own warning (a new product warns at once; the same
+        // one again after a few minutes), not one warning per rule per half hour.
+        let productKey = rule.condition.allergens?.isEmpty == false
+            ? label.map { rule.id + "|" + ($0.product ?? "").lowercased().filter(\.isLetter) } : nil
+        if !ignoreCooldown {
+            if let productKey {
+                if let last = productAlerts[productKey], at.timeIntervalSince(last) < tuning.productCooldownMinutes * 60 { return nil }
+                // The same package read slightly differently in the next frames: not again at once.
+                if let last = alerts.first(where: { $0.ruleID == rule.id }), at.timeIntervalSince(last.at) < 45 { return nil }
+            } else if let last = alerts.first(where: { $0.ruleID == rule.id }),
+                      at.timeIntervalSince(last.at) < Double(rule.cooldown_min) * 60 { return nil }
+        }
         guard let filled = await evaluate(rule, at: at, label: label) else { return nil }
-        let text = Self.fill(rule.message, with: filled.values)
+        if let productKey { productAlerts[productKey] = at }
+        var text = Self.fill(rule.message, with: filled.values)
+        // A placeholder with nothing to fill ("… at {place}.") would leave a broken sentence.
+        if Self.hasEmptyPlaceholder(rule.message, values: filled.values) {
+            text = Self.defaultMessage(rule, values: filled.values) ?? text
+        }
+        if let label, label.source == "front", !label.ingredients_visible {
+            text += " I only saw the front of the package; check the ingredients."
+        }
         let alert = SafetyAlert(at: at, ruleID: rule.id, message: text, evidenceFrame: filled.frame ?? frameFile, severity: rule.severity)
         await store.insert(alert)
         await store.setLastFired(rule.id, at)
@@ -538,6 +795,24 @@ final class SafetyMonitor {
     private func confirmedActions(_ action: String, object: String?, since: Date) async -> [SafetyEvent] {
         await store.events(since: since, object: object, kind: .action, value: action)
             .filter { action != "took" || $0.source != .vision }
+    }
+
+    static func hasEmptyPlaceholder(_ template: String, values: [String: String]) -> Bool {
+        var rest = template[...]
+        while let open = rest.firstIndex(of: "{"), let close = rest[open...].firstIndex(of: "}") {
+            let key = String(rest[rest.index(after: open)..<close])
+            if (values[key] ?? "").isEmpty { return true }
+            rest = rest[rest.index(after: close)...]
+        }
+        return false
+    }
+
+    static func defaultMessage(_ rule: SafetyRule, values: [String: String]) -> String? {
+        if let allergens = values["allergens"], !allergens.isEmpty {
+            let product = values["product"].flatMap { $0.isEmpty ? nil : $0 } ?? "This product"
+            return "Careful: \(product) seems to contain \(allergens)."
+        }
+        return nil
     }
 
     static func fill(_ template: String, with values: [String: String]) -> String {
@@ -640,3 +915,4 @@ final class SafetyMonitor {
         await reload()
     }
 }
+

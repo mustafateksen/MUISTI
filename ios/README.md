@@ -127,6 +127,50 @@ Meta SDK `.hvc1` (HEVC) akışını arka planda sürdürür (`.raw` durur; CHANG
 - Öne gelince dosyadan ~2,5 sn'de bir kare alınır, gerçek zamanı ve en yakın GPS'iyle normal hattan geçer (OCR, maskeleme, tekrar, bölümler, Nemotron); dosya silinir. Fotoğraf modu kendiliğinden geri gelir.
 - Simülatörde (sahte gözlük) doğrulandı: 25 sn arka plan → 10 kare → 2 yeni anı. **Gerçek gözlükte denenmedi.** Kapatmak: Geliştirici > "Arka planda da kaydet".
 
+## Gözlük bağlantısı: Wi-Fi
+
+- SDK aktarım yolunu Info.plist'ten seçiyor: `UISupportedExternalAccessoryProtocols` (`com.meta.ar.wearable`) ve `external-accessory` arka plan modu varsa **yalnızca Bluetooth Classic** kullanıyor, Wi-Fi'a hiç geçmiyor (Meta, GitHub #356). Bu iki girdi kaldırıldı; Wi-Fi girdileri (`NSLocalNetworkUsageDescription`, `NSBonjourServices` `_bonjour._tcp`), Bluetooth LE girdileri ve Hotspot Configuration / Wi-Fi Info yetkileri duruyor.
+- Akış başlayınca iOS "Wi-Fi ağına katıl" diye sorar (gözlüğün kendi ağı); "Katıl". Bu ağda internet yok: Nemotron çağrıları hücreselden gider, uygulamaya hücresel veri izni verin.
+- Wi-Fi'da akış 720p, 7 kare/sn; ölçülen kare sıklığı yürürken ~1–1,5 sn'de bir (14 Kasım). Classic'te ses de akarken görüntü 360×640'a düşüyordu.
+- Bilinen sorun: Ray-Ban Gen 2, yazılım 129.x'te bazı cihazlarda katılım başarısız ("Unable to join the network", #354). Olursa iki Classic girdisini geri koyun.
+
+## Konuşma: dokun, sor, devam et
+
+- **Yandan dokunma = soru sor** (gözlük dokunmatik yüzeyi, `MWDATInputs` `select(captouch)`). Gözlük dokunmaları 0,9–2 sn arayla bildirdiği için ilk dokunma tetikler, sonraki 2,5 sn'dekiler aynı hareket sayılır. Çekim butonu Meta'da kalır (kısa basış = foto; Muisti o anı da hafızaya ekler).
+- **Sesler:** dinleme başlarken `listen_start` (ekibin `ilk.wav`'ı), dinleme bitince `listen_end` (`son.wav`), sessizlikleri kesilmiş.
+- **Devam eden sohbet:** sesli sorulan her cevaptan sonra mikrofon kendiliğinden açılır; ~6 sn sessizlik kapatır. Muisti uygun olduğunda topu geri atar ("Telefon numarasını da ister misin?"). Her cevap için yeni ses motoru (ikinci cevabın sessiz kalması buydu).
+- Sürekli dinleme ("Hey Muisti", `GlassesSpeech` / `GlassesAudioRecognizer`) kodda duruyor ama varsayılan kapalı (Ayarlar › Voice): Classic'te ses akışı görüntüyü düşürüyordu ve çift tetikleniyordu.
+
+## Anlık görüntü aracı (look_now) ve yönlendirici
+
+- **Yönlendirici:** her soruda hafıza aramasıyla paralel küçük bir Nemotron çağrısı (`RoutePrompts`) yalnızca şunu seçer: `look` / `memory` / `chat` / `other`. Uzun cevap isteminde hafıza kayıtları modeli "hafızadan cevapla"ya çekiyordu; kısa istem bu kararda çok daha kararlı.
+- `look` → uygulama gözlükten en yeni kareyi alır (son 3 sn; yoksa 2 dk içindeki en yeni hafıza karesi, yaşıyla), yüzleri maskeler, telefonda OCR yapar ve cevap çağrısına yalnızca o kareyi verir. Cevap çağrısının kendi `look_now` aksiyonu ve `question_is_about_what_user_sees_now` alanı yedek tetik.
+- **Takip soruları:** bakıştan sonraki 90 sn içinde aynı kare görünür kalır ("tabelada tam ne yazıyor?", "süt var mı?", "açık mı?"); "tekrar bak" taze kare alır.
+- Ekranda/TV'de/afişte görünen şey gerçek değildir (TV'deki alev = ocak açık değil). Canlı görüntüye dayanan cevapta kanıt olarak o kare gösterilir ("Live view").
+- **Sohbet:** selam, teşekkür, tepkiler ("ok, güzel") ve genel sorular `chat`: kısa doğal cevap, rozet ve kanıt yok. Kısa Türkçe ifadelerde dil tespiti güvenilmez olduğundan konuşmanın dili kullanılır.
+- **Ölçüm** (`ConversationEval`, `--script-only=conveval@0 --conv=<klasör>`; 15 konuşma, 29 tur, anlık görüntü test fotoğraflarıyla): ilk tur 16/22 → yönlendirici ve taşınan kareyle 29/29.
+
+## Muisti Turva (kişisel güvenlik kuralları)
+
+Kullanıcı kuralını sesle koyar, Muisti gördüğüne göre uyarır. Uyarı her zaman gördüğünü ve saatini söyler ("Ocağı en son 18:42'de açık gördüm, kapattığını görmedim"), kanıt karesi telefonda.
+
+- **Kural oluşturma:** "Evden çıkarken ocak açıksa uyar", "Enalapril'i her sabah 8'de hatırlat", "Ürünlerde süt varsa uyar". Cevap çağrısı (`AnswerDraft.action = create_rule`) kuralı JSON'a çevirir, Muisti okuyup "doğru mu?" diye sorar, "evet" ile kaydedilir. Silme, "ilacımı aldım" / "ocağı kapattım" (kaynak: kullanıcının sözü), "çıkıyorum", "burası evim", "şimdi değil" (30 dk erteleme) de aynı çağrıda.
+- **Kare okuma** (`SafetyPrompts.observe…`): yalnızca kurallarda izlenen nesneler sorulur (ocak, anahtar, `medication:<ad>`, alerjenler). Ocakta görünür ısı işareti yoksa "unknown", TV/posterdeki nesne görünmez sayılır, saat göstergesi ısı işareti değildir. Yüzler ve plakalar telefonda maskelenir, gönderilen ve saklanan kare budur.
+- **Yerel kapılar:** evde eller görünürken 5 sn'de bir, değilse 30 sn'de bir; etiket kuralı varsa çok yazılı karelerde 8 sn'de bir; en çok dakikada 20 çağrı. El tespiti (Vision) ucuz, OCR + maskeleme yalnızca sırası gelen karede.
+- **Durum makinesi** (`SafetyMonitor`): "açık" demek için iki ardışık okuma, "kapalı" için bir okuma yeter; 12 saat görülmeyen "açık" bilinmiyora döner.
+- **Tetikler:** evden çıkış (sesli "çıkıyorum", konumun ev dairesinden çıkması, kamerada iç mekândan dışarıya geçiş), saat (uygulama içinde 30 sn'de bir + kapalıyken yerel bildirim), olay (ilaç kutusu elde, ürün etiketi), hareketsizlik (ocak açık, 20 dk mutfağa bakılmadı).
+- **İlaç:** kutu saatinde elde görülürse Muisti "aldın mı?" diye sorar ve mikrofonu açar. Alım yalnızca kullanıcı onaylarsa sayılır. Aynı gün ikinci kez elde görülürse yalnızca kaydı söyler; doz tavsiyesi vermez.
+- **Soru-cevap:** "Ocağı kapattım mı?", "Bugün ilacımı aldım mı?", "Hangi kurallarım var?" sorularında kurallar, son durumlar ve 24 saatlik log cevap çağrısına kanıt olarak gider. Cevapta saatler bu logdan, kare gösterilir.
+- **Saklama:** `memory/safety.sqlite` (kurallar, olaylar, durumlar, uyarılar) + `memory/safety_frames/`, aynı dosya koruması. Olaylar 30 gün, kareler 7 gün; "son N dakikayı unut" bu tabloları da siler. Sunucuya bir şey gitmez.
+- **Arayüz:** "Safety" sekmesi: bekleyen evet/hayır, uyarılar (kare + OK/Later), son görülen durumlar ("senin sözün" ayrımıyla), kurallar (aç/kapat, sil), "burası evim".
+
+**Ölçüm (simülatör, 14 Kasım):** `SafetyEval`, `--script-only=safetyeval@0 --safety=<klasör>`:
+- A. Plandaki senaryolar gerçek `SafetyMonitor` ile (ağ yok): 12/12 (ocak açık + çıkış, tek okuma yetmez, açık-kapalı, hiç görülmedi, "kapattım", ilaç hatırlatma + tekrar yok, onay sorusu + ikinci doz, anahtar masada, TV tuzağı, 20 dk hareketsizlik).
+- B. Kare modeli, 27 açık lisanslı foto (Openverse) + sentetik TV tuzağı: ocak 19/20 (yanlış "açık" 1: fırın saat göstergesi; istem düzeltildi, yeniden ölçülecek), kaçırılan açık 0, TV tuzağı doğru, dış mekân 2/2, etiket alerjenleri 2/2, kare başına p50 ~1,6 sn.
+- C. Sesli konuşma (kural oluştur → evet → durum sor → çıkıyorum → kapattım → ilaç → kuralları listele → sil): son turda kalan hatalar istemle düzeltildi; telefona kurulumdan sonra yeniden ölçülecek.
+
+Sınırlar: ocak bekçisi ya da duman dedektörünün yerine geçmez; kamera bakmıyorsa olay yoktur; tıbbi cihaz değildir. Coğrafi sınır `CLMonitor` yerine kayıt sırasında gelen konumla hesaplanıyor (kayıt kapalıyken çıkış yalnızca sesle ya da kamerayla anlaşılır).
+
 ## Dosyalar
 
 ```

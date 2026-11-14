@@ -179,12 +179,23 @@ actor PerceptionEngine {
         let confidence: Float
     }
 
+    /// Full-frame read, then a second look at small text (Ömer's "zoom on text", v18: his
+    /// glasses Q&A 29 → 30 of 31; far booth names are too few pixels for one 720p read).
     static func recognizeText(_ image: CGImage) -> [TextLine] {
+        let full = read(image, minimumTextHeight: 0.012)
+        let zoomed = zoomReads(image, full: full)
+        return mergeZoomed(full: full, zoomed: zoomed)
+            // Reading order: top to bottom, then left to right.
+            .sorted { abs($0.box.midY - $1.box.midY) > 0.02 ? $0.box.midY > $1.box.midY : $0.box.minX < $1.box.minX }
+    }
+
+    private static func read(_ image: CGImage, minimumTextHeight: Float) -> [TextLine] {
         let request = VNRecognizeTextRequest()
         HeadBlur.prepare(request)
         request.recognitionLevel = .accurate
-        request.usesLanguageCorrection = true
-        request.minimumTextHeight = 0.012
+        // Off: language correction "fixes" phone digits and brand names (Ömer's Vision runs).
+        request.usesLanguageCorrection = false
+        request.minimumTextHeight = minimumTextHeight
         // Signs can be in any script (Finnish, English, Turkish, Chinese, Japanese…): let Vision
         // detect the language per frame; the preferred list only breaks ties.
         request.automaticallyDetectsLanguage = true
@@ -200,8 +211,107 @@ actor PerceptionEngine {
             guard text.count >= 2 else { return nil }
             return TextLine(text: text, box: observation.boundingBox, confidence: best.confidence)
         }
-        // Reading order: top to bottom, then left to right.
-        .sorted { abs($0.box.midY - $1.box.midY) > 0.02 ? $0.box.midY > $1.box.midY : $0.box.minX < $1.box.minX }
+    }
+
+    /// Where text is (the detector finds text it cannot necessarily read), grouped into padded
+    /// blocks; blocks with small text, or text the full read missed, are cropped, enlarged so a
+    /// line is ~48 px (at most 4×) and read again. At most 8 blocks per frame.
+    private static func zoomReads(_ image: CGImage, full: [TextLine]) -> [TextLine] {
+        let detect = VNDetectTextRectanglesRequest()
+        HeadBlur.prepare(detect)
+        do { try VNImageRequestHandler(cgImage: image, options: [:]).perform([detect]) } catch { return [] }
+        let boxes = (detect.results ?? []).map(\.boundingBox).filter { $0.width > 0 && $0.height > 0 }
+        guard !boxes.isEmpty else { return [] }
+        let W = CGFloat(image.width), H = CGFloat(image.height)
+
+        // Pad each box (a word or line is never cut in half), then merge touching ones.
+        struct Block { var rect: CGRect; var lineHeight: CGFloat }
+        var blocks: [Block] = boxes.map { b in
+            Block(rect: b.insetBy(dx: -b.height, dy: -0.5 * b.height).intersection(CGRect(x: 0, y: 0, width: 1, height: 1)),
+                  lineHeight: b.height)
+        }
+        var merged = true
+        while merged {
+            merged = false
+            outer: for i in blocks.indices {
+                for j in blocks.indices where j > i && blocks[i].rect.intersects(blocks[j].rect) {
+                    blocks[i].rect = blocks[i].rect.union(blocks[j].rect)
+                    blocks[i].lineHeight = min(blocks[i].lineHeight, blocks[j].lineHeight)
+                    blocks.remove(at: j)
+                    merged = true
+                    break outer
+                }
+            }
+        }
+
+        func coveredByFull(_ rect: CGRect) -> Bool {
+            full.contains { line in
+                let overlap = line.box.intersection(rect)
+                return !overlap.isNull && overlap.width * overlap.height >= 0.5 * line.box.width * line.box.height
+            }
+        }
+        let candidates = blocks
+            .filter { $0.lineHeight < 0.04 || !coveredByFull($0.rect) }
+            .sorted { $0.lineHeight < $1.lineHeight }
+            .prefix(8)
+
+        var out: [TextLine] = []
+        for block in candidates {
+            let linePx = block.lineHeight * H
+            let scale = min(4, max(1, 48 / max(linePx, 1)))
+            guard scale >= 1.3 || !coveredByFull(block.rect) else { continue }   // nothing to gain
+            // Vision rects: origin bottom-left; CGImage crop: origin top-left.
+            let pixel = CGRect(x: block.rect.minX * W, y: (1 - block.rect.maxY) * H,
+                               width: block.rect.width * W, height: block.rect.height * H).integral
+            guard pixel.width >= 8, pixel.height >= 8, let crop = image.cropping(to: pixel) else { continue }
+            let outW = Int(min(2400, pixel.width * scale)), outH = Int(min(2400, pixel.height * scale))
+            guard let ctx = CGContext(data: nil, width: outW, height: outH, bitsPerComponent: 8, bytesPerRow: 0,
+                                      space: CGColorSpaceCreateDeviceRGB(),
+                                      bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else { continue }
+            ctx.interpolationQuality = .high
+            ctx.draw(crop, in: CGRect(x: 0, y: 0, width: outW, height: outH))
+            guard let big = ctx.makeImage() else { continue }
+            for line in read(big, minimumTextHeight: 0) {
+                // Back to full-frame coordinates (both normalised, origin bottom-left).
+                let b = line.box
+                let mapped = CGRect(x: block.rect.minX + b.minX * block.rect.width,
+                                    y: block.rect.minY + b.minY * block.rect.height,
+                                    width: b.width * block.rect.width, height: b.height * block.rect.height)
+                out.append(TextLine(text: line.text, box: mapped, confidence: line.confidence))
+            }
+        }
+        return out
+    }
+
+    /// A zoomed reading replaces the full-frame readings it covers (≥ 80 % of their box) when
+    /// Vision is more confident of it; a zoomed fragment of a longer full reading is dropped;
+    /// text only the zoom found is added if read with confidence ≥ 0.5 (crops of things that
+    /// only look like text gave junk such as "тизТиа)").
+    static func mergeZoomed(full: [TextLine], zoomed: [TextLine]) -> [TextLine] {
+        guard !zoomed.isEmpty else { return full }
+        func area(_ r: CGRect) -> CGFloat { r.isNull ? 0 : r.width * r.height }
+        var kept = full
+        var added: [TextLine] = []
+        for z in zoomed {
+            let overlapping = kept.filter { area($0.box.intersection(z.box)) > 0 }
+            if overlapping.isEmpty {
+                if z.confidence >= 0.5 { added.append(z) }
+                continue
+            }
+            let covers = overlapping.allSatisfy { area($0.box.intersection(z.box)) >= 0.8 * area($0.box) }
+            guard covers else { continue }   // a fragment of a longer line: keep the full reading
+            // Only a better read replaces ("Floyds" must not become "Floyss").
+            guard z.confidence > (overlapping.map(\.confidence).max() ?? 0) else { continue }
+            kept.removeAll { f in overlapping.contains { $0.box == f.box && $0.text == f.text } }
+            added.append(z)
+        }
+        // Zoomed lines overlapping each other (blocks may touch): keep the longer text.
+        var result = kept
+        for z in added.sorted(by: { $0.text.count > $1.text.count })
+            where !result.contains(where: { area($0.box.intersection(z.box)) >= 0.5 * area(z.box) }) {
+            result.append(z)
+        }
+        return result
     }
 
     /// One string per visual row, top to bottom; boxes on the same row are joined left to right,

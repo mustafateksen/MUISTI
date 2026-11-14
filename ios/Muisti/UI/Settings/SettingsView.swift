@@ -1,3 +1,4 @@
+import AVFoundation
 import SwiftUI
 
 /// End-user settings: camera source, AI key, voice, privacy. Everything technical sits behind
@@ -38,10 +39,41 @@ struct SettingsView: View {
                 Section {
                     LabeledContent("Question language", value: "English")
                     Toggle("Read answers aloud", isOn: $config.speakAnswers)
+                    if config.speakAnswers {
+                        AnswerVoicePicker(controller: controller, language: "en", title: "English voice")
+                        AnswerVoicePicker(controller: controller, language: "tr", title: "Turkish voice")
+                    }
+                    Toggle("Ask through the glasses", isOn: $config.handsFree)
+                    if config.handsFree {
+                        LabeledContent("Wake word") {
+                            TextField("Muisti", text: $config.wakeWord)
+                                .multilineTextAlignment(.trailing)
+                                .autocorrectionDisabled()
+                        }
+                        WakeWordTeacher(controller: controller, config: config)
+                        if wearables.microphonePermission != .granted {
+                            Button("Allow the glasses microphone") {
+                                Task {
+                                    if await wearables.requestMicrophonePermission() { await controller.applySettings() }
+                                }
+                            }
+                        } else {
+                            Label("Glasses microphone allowed", systemImage: "checkmark.circle.fill")
+                                .foregroundStyle(.success)
+                        }
+                    }
                 } header: {
                     Text("Voice")
                 } footer: {
-                    Text("Hands-free: “Hey Siri, Ask Muisti” or Settings > Action Button > Shortcut > Ask Muisti. The answer plays through the glasses speakers.")
+                    Text("While recording, say the wake word and your question to the glasses (“Muisti, where was the Arduino stand?”). The glasses turn speech into text themselves; the answer plays through their speakers. Or: “Hey Siri, Ask Muisti”.")
+                }
+
+                Section {
+                    Toggle("Notice hazards by itself", isOn: $config.safetyAuto)
+                } header: {
+                    Text("Safety")
+                } footer: {
+                    Text("Muisti looks for things like a stove, iron or candle left on, smoke or running water, and warns you when you leave or forget them. Your own rules (Safety tab) work either way.")
                 }
 
                 PrivacySettingsSection(controller: controller, config: config)
@@ -95,5 +127,90 @@ struct SettingsView: View {
 
     private func applySettings() {
         Task { await controller.applySettings() }
+    }
+}
+
+/// The voice answers are read in, per language: by default the iPhone's own Spoken Content
+/// voice (Accessibility settings), or one picked here.
+/// If only basic (robotic) voices are installed, says where to get a natural one; downloading it
+/// is a system setting apps cannot do.
+private struct AnswerVoicePicker: View {
+    let controller: CaptureController
+    let language: String
+    let title: String
+    @State private var selection: String = ""
+    @State private var voices: [AVSpeechSynthesisVoice] = []
+
+    var body: some View {
+        Group {
+            Picker(title, selection: $selection) {
+                Text(autoLabel).tag("")
+                ForEach(voices, id: \.identifier) { voice in
+                    Text("\(voice.name) · \(VoicePicker.qualityLabel(voice))").tag(voice.identifier)
+                }
+            }
+            .onChange(of: selection) { _, id in
+                VoicePicker.choose(voices.first { $0.identifier == id }, for: language)
+            }
+            Button("Play \(title.lowercased())", systemImage: "play.circle") {
+                Task { await controller.voice.previewVoice(language: language) }
+            }
+            if !selection.isEmpty, !VoicePicker.hasNaturalVoice(for: language) {
+                Text("Only a basic voice is installed. For a natural one, download a Premium or Enhanced voice in Settings › Accessibility › Spoken Content › Voices, then come back here.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .onAppear {
+            voices = VoicePicker.voices(for: language)
+            selection = VoicePicker.chosenID(for: language) ?? ""
+        }
+    }
+
+    private var autoLabel: String {
+        "Same as iPhone (Spoken Content)"
+    }
+}
+
+/// Teaches the wake word: the user says it three times through the glasses; the spellings the
+/// glasses' recogniser produces ("music" for "Muisti") then also wake Muisti.
+private struct WakeWordTeacher: View {
+    let controller: CaptureController
+    @Bindable var config: AppConfig
+    @State private var listening = false
+    @State private var hint: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Button(listening ? "Say “\(config.wakeWord)” 3 times…" : "Teach the wake word") {
+                let speech = controller.glasses.headSpeech
+                guard controller.isRunning, controller.config.sourceKind == .glasses else {
+                    hint = "Put on the glasses and wait until recording starts, then try again."
+                    return
+                }
+                hint = nil
+                listening = true
+                speech.learnWakeWord { spellings in
+                    listening = false
+                    config.wakeAliases = spellings
+                    Task { await controller.applySettings() }
+                }
+            }
+            .disabled(listening)
+            if listening {
+                let speech = controller.glasses.headSpeech
+                Text("Heard \(speech.learning?.count ?? 0)/3 · “\(speech.lastHeard)”")
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.secondary)
+            }
+            if let hint {
+                Text(hint).font(.caption).foregroundStyle(.attention)
+            }
+            if !config.wakeAliases.isEmpty {
+                Text("The glasses hear it as: " + config.wakeAliases.joined(separator: ", "))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
     }
 }

@@ -112,7 +112,7 @@ struct GlassesIsland: View {
                     } label: {
                         Label(action.title, systemImage: action.systemImage)
                             .font(.subheadline.weight(.semibold))
-                            .frame(maxWidth: .infinity, minHeight: 40)
+                            .frame(maxWidth: .infinity, minHeight: 44)
                     }
                     .buttonStyle(IslandActionStyle(prominent: action != .stop))
                     .tint(action == .stop ? .danger : .accentColor)
@@ -123,11 +123,9 @@ struct GlassesIsland: View {
                 } label: {
                     Text("Details")
                         .font(.subheadline.weight(.semibold))
-                        .frame(maxWidth: status.action == nil ? .infinity : nil, minHeight: 40)
-                        .padding(.horizontal, Theme.Spacing.s)
+                        .frame(maxWidth: .infinity, minHeight: 44)
                 }
-                .buttonStyle(.bordered)
-                .buttonBorderShape(.capsule)
+                .buttonStyle(IslandActionStyle(prominent: false))
                 .tint(.white)
             }
         }

@@ -48,6 +48,10 @@ struct ObjectState: Sendable, Equatable {
     var pendingOnCount: Int = 0
     var source: SafetySource = .vision
     var place: String?
+    /// In a state that is risky if left that way (on, burning, running, open).
+    var active: Bool = false
+    /// Flagged by the frame model on its own (not from a user rule).
+    var hazard: Bool = false
 }
 
 struct SafetyRule: Codable, Sendable, Identifiable, Equatable {
@@ -183,9 +187,22 @@ struct SafetyObservation: Codable, Sendable, Equatable {
         var object: String
         var action: String
     }
+    /// A household hazard the model noticed by itself (no rule needed).
+    struct Hazard: Codable, Sendable, Equatable {
+        var object: String
+        var state: String
+        /// Risky if it stays like this (left on, burning, running, open).
+        var active: Bool
+        /// Dangerous right now (smoke, fire outside a hob, boiling over, sparks).
+        var immediate: Bool
+        var location_hint: String?
+        var evidence: String
+    }
     struct Label: Codable, Sendable, Equatable {
         var product: String?
         var ingredients_visible: Bool
+        /// "ingredients" (read from the list) or "front" (name, flavour or picture on the front).
+        var source: String?
         var allergens_found: [String]
         var evidence: String
     }
@@ -195,13 +212,16 @@ struct SafetyObservation: Codable, Sendable, Equatable {
     var objects: [Object]
     var actions: [Action]
     var label: Label?
+    var hazards: [Hazard]
 
-    init(room: String, hands_visible: Bool? = nil, objects: [Object] = [], actions: [Action] = [], label: Label? = nil) {
+    init(room: String, hands_visible: Bool? = nil, objects: [Object] = [], actions: [Action] = [], label: Label? = nil,
+         hazards: [Hazard] = []) {
         self.room = room
         self.hands_visible = hands_visible
         self.objects = objects
         self.actions = actions
         self.label = label
+        self.hazards = hazards
     }
 
     init(from decoder: Decoder) throws {
@@ -212,6 +232,12 @@ struct SafetyObservation: Codable, Sendable, Equatable {
         actions = (((try? c.decodeIfPresent([Action].self, forKey: .actions)) ?? nil) ?? [])
             .filter { $0.action != "none" }
         label = (try? c.decodeIfPresent(Label.self, forKey: .label)) ?? nil
+        hazards = (((try? c.decodeIfPresent([Hazard].self, forKey: .hazards)) ?? nil) ?? []).map {
+            var h = $0
+            h.object = h.object.lowercased()
+            h.state = h.state.lowercased()
+            return h
+        }
         objects = objects.map { var o = $0; o.name = o.name.lowercased(); o.state = o.state.lowercased(); return o }
         actions = actions.map { Action(object: $0.object.lowercased(), action: $0.action.lowercased()) }
         if var l = label {

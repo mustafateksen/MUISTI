@@ -6,7 +6,7 @@ enum SafetyPrompts {
 
     static let observeSystem = """
     You check one first-person frame from smart glasses for a short list of watched objects \
-    that the user asked Muisti to keep an eye on. Faces are blurred on purpose.
+    that the user asked Muisti to keep an eye on, and for household hazards. Faces are blurred on purpose.
 
     Report only what is visible in THIS frame. Never guess, never describe people.
     - room: where the wearer is, judged from this frame (kitchen, bathroom, bedroom, \
@@ -33,10 +33,15 @@ enum SafetyPrompts {
     - actions: what the wearer is doing in this frame to a watched object: turned_on, \
     turned_off, took (swallowing or taking a pill out to take it), locked, unlocked, picked_up, \
     put_down. Empty list if nothing is clearly happening.
-    - label: only if allergens are watched and a product's ingredient list is readable in this \
-    frame: product name, whether ingredients are visible, which of the watched allergens the \
-    ingredient text contains (in any language or as a derived ingredient, e.g. whey or casein \
-    is milk), and the words you read as evidence. Otherwise null.
+    - hazards: also look, on your own, for anything in this frame that could hurt someone or damage the home if it is left like that or is happening now, whether or not it is watched: a cooking hob, oven, iron, heater, hair straightener or other heat source switched on, a burning candle or open flame, smoke, a pot boiling over or a smoking pan, water running or overflowing, a door or window left open, an appliance sparking, a knife or medicine within a child's reach, a dangerous action by the wearer. Name each with a short English noun ("stove", "iron", "candle", "tap", "front door"); use the watched name when it is the same thing. state: its state in a word (on, burning, running, open, smoking …). active: true if it is risky should it stay like this. immediate: true only for danger happening now (smoke, fire outside a hob, boiling over, sparks). Same strict cues as for watched objects: a hob, oven or appliance with no visible heat cue (no flame, no glowing zone, no lit power-level digits) is not a hazard, and a clock or timer display is never a heat cue. Things on a screen or poster do not count. When unsure, leave it out. Empty list if none.
+    - label: only if allergens are watched and a food or drink package is in view (null \
+    otherwise). product: its name. If the ingredient list is readable: ingredients_visible \
+    true, source "ingredients", and which watched allergens the ingredient text contains (in \
+    any language or as a derived ingredient: whey or casein is milk, mansikka is strawberry). \
+    If only the front is visible: ingredients_visible false, source "front", and the watched \
+    allergens the front clearly shows (in the product name or flavour, or a picture of the \
+    food itself on the package, e.g. strawberries on a strawberry wafer). evidence: the words or \
+    picture you based it on. Never guess an allergen that nothing in the frame shows.
     """
 
     static let observeSchema = #"""
@@ -54,13 +59,22 @@ enum SafetyPrompts {
         "object":{"type":"string"},
         "action":{"type":"string","enum":["turned_on","turned_off","took","locked","unlocked","picked_up","put_down"]}},
         "required":["object","action"]}},
+      "hazards":{"type":"array","maxItems":6,"items":{"type":"object","properties":{
+        "object":{"type":"string"},
+        "state":{"type":"string"},
+        "active":{"type":"boolean"},
+        "immediate":{"type":"boolean"},
+        "location_hint":{"type":["string","null"]},
+        "evidence":{"type":"string"}},
+        "required":["object","state","active","immediate","location_hint","evidence"]}},
       "label":{"anyOf":[{"type":"null"},{"type":"object","properties":{
         "product":{"type":["string","null"]},
         "ingredients_visible":{"type":"boolean"},
+        "source":{"type":"string","enum":["ingredients","front"]},
         "allergens_found":{"type":"array","maxItems":12,"items":{"type":"string"}},
         "evidence":{"type":"string"}},
-        "required":["product","ingredients_visible","allergens_found","evidence"]}]}},
-     "required":["room","hands_visible","objects","actions","label"]}
+        "required":["product","ingredients_visible","source","allergens_found","evidence"]}]}},
+     "required":["room","hands_visible","objects","actions","hazards","label"]}
     """#
 
     static func observeUser(watched: [String], allergens: [String], ocr: String) -> String {
@@ -70,6 +84,40 @@ enum SafetyPrompts {
         Text read on the phone (OCR, may be partial):
         \(ocr.isEmpty ? "(none)" : String(ocr.prefix(1500)))
         """
+    }
+
+    // MARK: Memory record → rule (text only)
+
+    static let matchSystem = """
+    You check one memory record against one of the user's safety rules. The record is what a \
+    vision model and OCR understood from a frame the user's camera glasses saw (type, name, \
+    caption, visual details, text read on it). Decide whether the record clearly shows what the \
+    rule is about: for an allergen, a food or drink whose ingredient text contains it (in any \
+    language or as a derived ingredient: whey is milk, mansikka is strawberry), or whose \
+    name, flavour or package picture clearly shows it; for another object, that object itself \
+    being there. Something only pictured on a poster, screen or advert is not a product in \
+    front of the user. Never guess: if the record does not clearly show it, matches is false.
+    Output one JSON object: {"matches": boolean, "product": string or null (the product or \
+    thing), "found": [the allergens or objects of the rule it shows], "from_ingredients": true \
+    only if an ingredient list was read, "evidence": short words from the record}.
+    """
+
+    static let matchSchema = #"""
+    {"type":"object","properties":{
+      "matches":{"type":"boolean"},
+      "product":{"type":["string","null"]},
+      "found":{"type":"array","maxItems":8,"items":{"type":"string"}},
+      "from_ingredients":{"type":"boolean"},
+      "evidence":{"type":"string"}},
+     "required":["matches","product","found","from_ingredients","evidence"]}
+    """#
+
+    struct Match: Decodable, Sendable {
+        let matches: Bool
+        let product: String?
+        let found: [String]
+        let from_ingredients: Bool
+        let evidence: String
     }
 
     // MARK: Rules inside the answer call
@@ -86,7 +134,7 @@ enum SafetyPrompts {
     "rule" (below). "answer" is only the rule read back in one sentence in the user's language \
     followed by a short question whether it is right; do not comment on what was or was not \
     seen so far (nothing needs to have been seen to create a rule). Never create a rule from a \
-    question about the past.
+    question about the past. A request to be warned or reminded in the future is create_rule in any language ("warn me if…", "remind me…", "uyar beni…", "hatırlat…", "muistuta…"), even when it mentions things bought or seen ("warn me if the products I buy contain milk").
     - "confirm" / "cancel": the user answers yes / no to the pending item shown in the message \
     (a new rule, deleting a rule, or "did you take your medicine?"). Only when something is \
     pending. "answer" says in a few words that it is done (or dropped); never ask again.
@@ -101,7 +149,7 @@ enum SafetyPrompts {
     set: Muisti then checks the rules itself). "arriving": they are home now. \
     "set_home": this place is their home. "answer" is a short acknowledgement; Muisti adds any \
     warning itself.
-    - "snooze": "not now", "later", "stop warning me for a while", "I know" right after a warning (see "Last warning" and the previous exchange).
+    - "snooze": "not now", "later", "stop warning me for a while", "I know" right after a warning (see "Last warning" and the conversation). "answer" says Muisti will stay quiet about it for 30 minutes.
     - Questions about the rules or about states ("did I turn off the stove?", "did I take my \
     medicine today?", "what rules do I have?") are "answer": use the safety status and log. Say \
     what was SEEN and when ("I last saw the stove on at 18:42 and did not see you turn it \

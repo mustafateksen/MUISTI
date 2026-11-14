@@ -1,29 +1,32 @@
 import SwiftUI
 
-/// One quiet line of chips at the top of the memory list, on the same white surface as the
-/// cards below so it reads as part of the page.
-struct MemorySummaryHeader: View {
+/// "21 memories · 3 processing · Kept 7 days" under the large "Memory" title. On iOS 26 it is
+/// the system navigation subtitle (aligned with the title and the search field by the system);
+/// earlier systems show the same line as the first, plain row of the list.
+struct MemorySummary: ViewModifier {
     let total: Int
     let pending: Int
     let retentionDays: Int
+    let visible: Bool
 
-    var body: some View {
-        FlowLayout(spacing: Theme.Spacing.xs) {
-            MemoryStatChip(text: total == 1 ? "1 memory" : "\(total) memories", systemImage: "square.stack.3d.up.fill")
-            if pending > 0 {
-                MemoryStatChip(text: "\(pending) processing", systemImage: "sparkles")
-            }
-            MemoryStatChip(text: retentionDays == 1 ? "Kept 1 day" : "Kept \(retentionDays) days", systemImage: "clock.arrow.circlepath")
+    var text: String {
+        var parts = [total == 1 ? "1 memory" : "\(total) memories"]
+        if pending > 0 { parts.append("\(pending) processing") }
+        parts.append(retentionDays == 1 ? "Kept 1 day" : "Kept \(retentionDays) days")
+        return parts.joined(separator: " · ")
+    }
+
+    func body(content: Content) -> some View {
+        if #available(iOS 26, *) {
+            content.navigationSubtitle(visible ? text : "")
+        } else {
+            content
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .accessibilityElement(children: .combine)
     }
 }
 
-#Preview {
-    List {
-        MemorySummaryHeader(total: 42, pending: 3, retentionDays: 7)
-            .listRowInsets(EdgeInsets())
-            .listRowBackground(Color.clear)
+extension View {
+    func memorySummary(total: Int, pending: Int, retentionDays: Int, visible: Bool) -> some View {
+        modifier(MemorySummary(total: total, pending: pending, retentionDays: retentionDays, visible: visible))
     }
 }

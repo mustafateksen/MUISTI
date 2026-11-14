@@ -27,6 +27,11 @@ actor EnrichmentWorker {
     private var wakeup: CheckedContinuation<Void, Never>?
     private let monitor = NWPathMonitor()
     private var backoff: Double = 2
+    /// Called with every newly enriched record (record id, title, its text, its embedding, keyframe): the
+    /// safety rules check it against what was just understood, without another image call.
+    private var onEnriched: (@Sendable (Int64, String?, String, [Float]?, Data?) async -> Void)?
+
+    func setOnEnriched(_ handler: @escaping @Sendable (Int64, String?, String, [Float]?, Data?) async -> Void) { onEnriched = handler }
 
     init(store: MemoryStore, ai: NemotronClient) {
         self.store = store
@@ -44,8 +49,14 @@ actor EnrichmentWorker {
         worker = Task { await self.run() }
     }
 
+    /// Set by `signal()`, cleared when the loop looks for work. A signal that arrives while the
+    /// loop is busy elsewhere (reading the queue, a backfill, a summary) is kept: before this a
+    /// new frame could sit for the full 30 s idle wait.
+    private var signaled = false
+
     func signal() {
         backoff = 2
+        signaled = true
         wakeup?.resume()
         wakeup = nil
     }
@@ -58,6 +69,7 @@ actor EnrichmentWorker {
     private func run() async {
         while !Task.isCancelled {
             status.hasKey = await ai.hasKey
+            signaled = false
             guard status.online, status.hasKey, let next = await store.pending(limit: 1).first else {
                 if status.online, await backfillEmbedding() { continue }
                 if status.online, status.hasKey, await summarizeEpisode() { continue }
@@ -128,6 +140,8 @@ actor EnrichmentWorker {
     }
 
     private func enrich(_ record: MemoryRecord) async throws {
+        let started = ContinuousClock.now
+        let waited = Date().timeIntervalSince(record.seenAt)
         let jpeg = try Data(contentsOf: store.frameURL(record))
         func extract(temperature: Double) async throws -> ExtractedRecord {
             try await ai.chatJSON(
@@ -163,14 +177,22 @@ actor EnrichmentWorker {
                        extracted.searchKeywords.joined(separator: " "), record.street, record.ocrText]
             .compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: "\n")
         let model = await ai.embedModelName
+        let extractedAt = ContinuousClock.now
         let vector = try? await ai.embed(passage, as: .passage)
         await store.applyEnrichment(id: record.id, record: extracted, embedding: vector, model: model)
+        Trace.note("enrich #\(record.id): waited \(String(format: "%.1f", waited)) s · extract \((extractedAt - started).milliseconds) ms · embed \((ContinuousClock.now - extractedAt).milliseconds) ms")
+        if let onEnriched {
+            let frame = jpeg
+            let title = extracted.name ?? extracted.kindLabel
+            Task { await onEnriched(record.id, title, passage, vector, frame) }
+        }
         Log.pipeline.info("enriched \(record.id): \(extracted.kindLabel ?? "-", privacy: .public) / \(extracted.name ?? "-", privacy: .public) · \(extracted.objects.count) things, \(extracted.depictions.count) pictures")
     }
 
     private var waitGeneration = 0
 
     private func waitForWork(timeout: Duration) async {
+        guard !signaled else { return }
         waitGeneration += 1
         let generation = waitGeneration
         await withCheckedContinuation { continuation in

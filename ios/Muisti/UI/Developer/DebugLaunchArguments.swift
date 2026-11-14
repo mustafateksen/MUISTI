@@ -118,6 +118,11 @@ enum DebugLaunchArguments {
                 // `--eval=<folder in Documents>`: retrieval + answer evaluation (eval.json).
                 let folder = ProcessInfo.processInfo.arguments.first { $0.hasPrefix("--eval=") }.map { String($0.dropFirst(7)) } ?? "ingest"
                 await EvalRunner.run(controller: controller, folder: folder)
+            case "conveval":
+                // `--conv=<folder in Documents>`: multi-turn conversations, tool use, live view.
+                let folder = ProcessInfo.processInfo.arguments.first { $0.hasPrefix("--conv=") }.map { String($0.dropFirst(7)) } ?? "conv"
+                await ConversationEval.run(controller: controller, folder: folder)
+            case "safetydemo": await SafetyDemo.run(controller.safety)
             case "safetyeval":
                 // `--safety=<folder in Documents>`: Muisti Turva scenarios, photos, conversation.
                 let folder = ProcessInfo.processInfo.arguments.first { $0.hasPrefix("--safety=") }.map { String($0.dropFirst(9)) } ?? "safety"

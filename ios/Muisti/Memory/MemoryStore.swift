@@ -324,7 +324,31 @@ actor MemoryStore {
     }
 
     func pending(limit: Int) -> [MemoryRecord] {
-        rows("WHERE status = 0 ORDER BY seen_at ASC LIMIT \(limit)")
+        // Newest first: what the user is looking at now is understood within seconds (safety
+        // rules, "what is this"); a backlog from a busy walk fills in behind it.
+        rows("WHERE status = 0 ORDER BY seen_at DESC LIMIT \(limit)")
+    }
+
+    /// Words the speech recogniser should expect, taken from what was seen: sign names,
+    /// streets, keywords and the most frequent words read on signs (so a name seen on a booth is
+    /// not heard as a common word). Data-driven; no word lists.
+    func vocabulary(limit: Int = 100) -> [String] {
+        var weight: [String: Int] = [:]
+        var display: [String: String] = [:]
+        func add(_ raw: String, _ w: Int) {
+            let t = raw.trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters))
+            guard t.count >= 3, t.count <= 40, t.split(separator: " ").count <= 3, t.contains(where: \.isLetter) else { return }
+            let key = t.lowercased()
+            weight[key, default: 0] += w
+            if display[key] == nil { display[key] = t }
+        }
+        for r in recent(limit: 400) {
+            if let name = r.name { add(name, 5) }
+            if let street = r.street { add(street, 3) }
+            for k in (r.keywords ?? "").split(whereSeparator: { ",;\n".contains($0) }) { add(String(k), 2) }
+            for w in r.ocrText.split(whereSeparator: { !$0.isLetter }) where w.count >= 4 { add(String(w), 1) }
+        }
+        return weight.sorted { $0.value > $1.value }.prefix(limit).compactMap { display[$0.key] }
     }
 
     func recent(limit: Int) -> [MemoryRecord] {

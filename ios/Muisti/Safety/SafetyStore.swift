@@ -42,6 +42,9 @@ actor SafetyStore {
               id INTEGER PRIMARY KEY AUTOINCREMENT, at REAL, rule_id TEXT, message TEXT,
               evidence_frame TEXT, severity TEXT, user_response TEXT);
             """, nil, nil, nil)
+        // v2: hazards the frame model flags on its own.
+        sqlite3_exec(handle, "ALTER TABLE object_state ADD COLUMN active INTEGER DEFAULT 0", nil, nil, nil)
+        sqlite3_exec(handle, "ALTER TABLE object_state ADD COLUMN hazard INTEGER DEFAULT 0", nil, nil, nil)
     }
 
     // MARK: Frames
@@ -115,24 +118,27 @@ actor SafetyStore {
     // MARK: Object state
 
     func states() -> [ObjectState] {
-        query("SELECT object, state, since, last_seen, last_state_seen, evidence_frame, pending_on_count, source, place FROM object_state ORDER BY last_seen DESC") { s in
+        query("SELECT object, state, since, last_seen, last_state_seen, evidence_frame, pending_on_count, source, place, active, hazard FROM object_state ORDER BY last_seen DESC") { s in
             ObjectState(object: Self.text(s, 0) ?? "", state: Self.text(s, 1) ?? "unknown",
                         since: Self.date(s, 2) ?? Date(), lastSeen: Self.date(s, 3) ?? Date(),
                         lastStateSeen: Self.date(s, 4) ?? Date(), evidenceFrame: Self.text(s, 5),
                         pendingOnCount: Int(sqlite3_column_int(s, 6)),
-                        source: SafetySource(rawValue: Self.text(s, 7) ?? "") ?? .vision, place: Self.text(s, 8))
+                        source: SafetySource(rawValue: Self.text(s, 7) ?? "") ?? .vision, place: Self.text(s, 8),
+                        active: sqlite3_column_int(s, 9) != 0, hazard: sqlite3_column_int(s, 10) != 0)
         }
     }
 
     func save(_ st: ObjectState) {
         run("""
-            INSERT INTO object_state(object, state, since, last_seen, last_state_seen, evidence_frame, pending_on_count, source, place)
-            VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(object) DO UPDATE SET state=excluded.state, since=excluded.since,
+            INSERT INTO object_state(object, state, since, last_seen, last_state_seen, evidence_frame, pending_on_count, source, place, active, hazard)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(object) DO UPDATE SET state=excluded.state, since=excluded.since,
             last_seen=excluded.last_seen, last_state_seen=excluded.last_state_seen, evidence_frame=excluded.evidence_frame,
-            pending_on_count=excluded.pending_on_count, source=excluded.source, place=excluded.place
+            pending_on_count=excluded.pending_on_count, source=excluded.source, place=excluded.place,
+            active=excluded.active, hazard=excluded.hazard
             """,
             [st.object, st.state, st.since.timeIntervalSince1970, st.lastSeen.timeIntervalSince1970,
-             st.lastStateSeen.timeIntervalSince1970, st.evidenceFrame, st.pendingOnCount, st.source.rawValue, st.place])
+             st.lastStateSeen.timeIntervalSince1970, st.evidenceFrame, st.pendingOnCount, st.source.rawValue, st.place,
+             st.active ? 1 : 0, st.hazard ? 1 : 0])
     }
 
     // MARK: Alerts

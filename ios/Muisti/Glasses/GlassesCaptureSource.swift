@@ -2,6 +2,7 @@ import CoreGraphics
 import Foundation
 import MWDATCamera
 import MWDATCore
+import NetworkExtension
 import Observation
 import UIKit
 import os
@@ -58,6 +59,37 @@ final class GlassesCaptureSource: CaptureSource {
     @ObservationIgnored private var session: DeviceSession?
     /// Head IMU from the glasses (10 Hz) while a session runs; drives the adaptive scheduler.
     @ObservationIgnored let headMotion = GlassesMotion()
+    /// Hands-free voice: on-glasses transcription (text only over the link).
+    @ObservationIgnored let headSpeech = GlassesSpeech()
+    /// Capture / action button on the glasses = push-to-talk.
+    @ObservationIgnored let buttons = GlassesInputs()
+    /// Siri-like wake listening on the phone over the glasses mic's streamed audio.
+    @ObservationIgnored let audioWake = GlassesAudioRecognizer()
+    /// Words the phone recogniser should expect (wake word, its spellings, names in memory).
+    @ObservationIgnored var wakeStrings: () -> [String] = { [] }
+    /// Set when the glasses refused audio streaming: video only from then on.
+    @ObservationIgnored private var audioDisabled = false
+    /// Recent stream errors while audio was on (two within 3 minutes → video only).
+    @ObservationIgnored private var audioStreamErrors: [Date] = []
+    private var streamsAudio: Bool { (wantsSpeech() || wantsStreamAudio()) && !audioDisabled && !MockRuntime.isActive }
+    /// The glasses mic inside the camera stream, for push-to-talk (see `GlassesMicTap`).
+    let micTap = GlassesMicTap()
+    /// Carry the glasses mic in the stream for push-to-talk (Wi-Fi link + Meta mic permission).
+    @ObservationIgnored var wantsStreamAudio: () -> Bool = { false }
+    /// Whether to start glasses speech with a session (setting + microphone permission).
+    @ObservationIgnored var wantsSpeech: () -> Bool = { false }
+    /// Re-reads the glasses microphone permission (it cannot be read before a device is there).
+    @ObservationIgnored var prepareSpeech: () async -> Void = {}
+
+    /// Settings or the microphone permission changed: start or stop glasses speech now.
+    func refreshSpeech() {
+        guard let session, session.state == .started else { return }
+        if wantsSpeech() {
+            headSpeech.attach(to: session)
+        } else {
+            headSpeech.detach()
+        }
+    }
     /// Newest stream frame and when it arrived (adaptive mode); written off the main actor.
     @ObservationIgnored private let latestFrame = OSAllocatedUnfairLock<(VideoFrame, Date)?>(initialState: nil)
     @ObservationIgnored private var camera: MWDATCamera.Camera?
@@ -77,6 +109,9 @@ final class GlassesCaptureSource: CaptureSource {
     @ObservationIgnored private var cameraEverStarted = false
     @ObservationIgnored private var reconnectAttempts = 0
     @ObservationIgnored private var reattachAttempts = 0
+    /// The current attempt failed on the Wi-Fi link: start the next one from a clean slate.
+    @ObservationIgnored private var linkFailed = false
+    @ObservationIgnored private var streamWatchdog: Task<Void, Never>?
     @ObservationIgnored private var reconnectTask: Task<Void, Never>?
 
     @ObservationIgnored private let sessionTokens = ListenerTokenBag()
@@ -102,11 +137,35 @@ final class GlassesCaptureSource: CaptureSource {
     /// to a file (see `BackgroundSegmentRecorder`).
     private(set) var recordingInBackground = false
     @ObservationIgnored private var backgroundRecorder: BackgroundSegmentRecorder?
+    /// Adaptive mode over Wi-Fi: one `.hvc1` stream for foreground (decoded here) and
+    /// background (written to a file) so locking the phone does not rebuild the camera and
+    /// drop the glasses' Wi-Fi link. See `HEVCFrameDecoder`.
+    @ObservationIgnored let hevc = HEVCFrameDecoder()
+    @ObservationIgnored private var compressedLive = false
+    /// `.hvc1` produced no picture on this phone: `.raw` from then on.
+    @ObservationIgnored private var hevcFallback = false
+    @ObservationIgnored private let liveRecorder = OSAllocatedUnfairLock<BackgroundSegmentRecorder?>(initialState: nil)
+    @ObservationIgnored private var hevcCheck: Task<Void, Never>?
+    /// Memories kept from live frames while the phone was locked.
+    @ObservationIgnored private var backgroundKept = 0
+
+    /// Frames come from the decoded stream (foreground and, if iOS allows, background).
+    var decodesLive: Bool { compressedLive && camera != nil }
+
+    /// The pipeline kept a frame (called by the controller).
+    func noteKeptFrame() {
+        if recordingInBackground { backgroundKept += 1 }
+    }
     /// Finished background recordings, for the controller to run through the pipeline.
     @ObservationIgnored let backgroundSegments: AsyncStream<BackgroundSegment>
     @ObservationIgnored private let segmentContinuation: AsyncStream<BackgroundSegment>.Continuation
 
-    private static let photoTimeout: Duration = .seconds(25)   // field: first 12 MP still took 13–15 s
+    private static let photoTimeout: Duration = .seconds(25)
+
+    /// The SDK picks the transport from Info.plist: with the ExternalAccessory protocol it uses
+    /// Bluetooth Classic only (Meta, issue #356); without it, the glasses' own Wi-Fi (SoftAP).
+    static let usesWiFiTransport: Bool =
+        Bundle.main.object(forInfoDictionaryKey: "UISupportedExternalAccessoryProtocols") == nil   // field: first 12 MP still took 13–15 s
 
     init(wearables: any WearablesInterface = Wearables.shared) {
         self.wearables = wearables
@@ -134,8 +193,8 @@ final class GlassesCaptureSource: CaptureSource {
         if device.hinge == .closed { return "Glasses are folded. Unfold them to start a new session." }
         if device.don == .doffed { return "Glasses aren't on. Put them on to reconnect." }
         if device.link != .connected { return "Connecting to glasses…" }
-        if config?.autoReconnect == true, reconnectAttempts >= 5 {
-            return "Couldn't connect. Stop and start again."
+        if config?.autoReconnect == true, reconnectAttempts >= 3 {
+            return "Couldn't connect yet. Trying again…"
         }
         return "Reconnecting to glasses…"
     }
@@ -200,6 +259,9 @@ final class GlassesCaptureSource: CaptureSource {
         lastError = nil
         reconnectAttempts = 0
         reattachAttempts = 0
+        if linkFailed { Self.forgetGlassesWiFi() }
+        audioDisabled = false   // a new recording tries the glasses mic audio again
+        audioStreamErrors = []
 
         guard wearables.registrationState == .registered else {
             blocked = .needsRegistration
@@ -289,7 +351,9 @@ final class GlassesCaptureSource: CaptureSource {
     }
 
     func captureStill(trigger: CaptureTrigger) async -> CapturedFrame? {
-        guard !recordingInBackground else { return nil }   // background: the stream is recorded instead
+        // Background: frames come from the running HEVC stream if the phone decodes them there;
+        // otherwise the stream is only recorded to a file.
+        guard !recordingInBackground || compressedLive else { return nil }
         guard let config else { return nil }
         // Silent: a stream photo plays the glasses' capture chime every time.
         if config.mode.picksStreamFrames { return await newestStreamFrame(trigger: trigger) }
@@ -304,23 +368,53 @@ final class GlassesCaptureSource: CaptureSource {
     /// Newest frame of the running stream (adaptive mode): no transfer wait. Waits up to 2 s
     /// for one that is less than a second old.
     private func newestStreamFrame(trigger: CaptureTrigger) async -> CapturedFrame? {
-        let deadline = Date().addingTimeInterval(2)
+        // A look on request (live view, "capture now") takes any frame from the last 3 s and
+        // leaves it for the scheduler; scheduled stills want a new frame each time.
+        let manual = trigger == .manual
+        let maxAge: TimeInterval = manual ? 3 : 1
+        let deadline = Date().addingTimeInterval(manual ? 3 : 2)
+        if compressedLive { return await newestDecodedFrame(trigger: trigger, maxAge: maxAge, deadline: deadline) }
         var picked: (VideoFrame, Date)?
         while picked == nil, Date() < deadline {
             if streamState == .streaming, let latest = latestFrame.withLock({ $0 }),
-               Date().timeIntervalSince(latest.1) < 1 {
+               Date().timeIntervalSince(latest.1) < maxAge {
                 picked = latest
             } else {
                 try? await Task.sleep(for: .milliseconds(100))
             }
         }
-        guard let (frame, at) = picked, device.don != .doffed else { return nil }
-        latestFrame.withLock { $0 = nil }   // the next still must be a new frame
+        guard let (frame, at) = picked, device.don != .doffed else {
+            Log.glasses.info("no stream frame (\(trigger.rawValue, privacy: .public)): stream \(String(describing: self.streamState), privacy: .public), don \(String(describing: self.device.don), privacy: .public)")
+            return nil
+        }
+        if !manual { latestFrame.withLock { $0 = nil } }   // the next scheduled still must be a new frame
         let origin = streamOrigin
         return await Task.detached(priority: .userInitiated) { () -> CapturedFrame? in
             guard let image = frame.makeUIImage(), let jpeg = image.jpegData(compressionQuality: 0.9) else { return nil }
             let size = CGSize(width: image.size.width * image.scale, height: image.size.height * image.scale)
             return CapturedFrame(capturedAt: at, origin: origin, jpeg: jpeg, pixelSize: size, isHighRes: false, trigger: trigger)
+        }.value
+    }
+
+    private func newestDecodedFrame(trigger: CaptureTrigger, maxAge: TimeInterval, deadline: Date) async -> CapturedFrame? {
+        let manual = trigger == .manual
+        var picked: DecodedFrame?
+        while picked == nil, Date() < deadline {
+            if streamState == .streaming, let frame = hevc.newest(maxAge: maxAge, take: !manual) {
+                picked = frame
+            } else {
+                try? await Task.sleep(for: .milliseconds(100))
+            }
+        }
+        guard let picked, device.don != .doffed else {
+            Trace.note("no decoded frame (\(trigger.rawValue)): stream \(streamState), decoded \(hevc.decoded), don \(device.don)")
+            Log.glasses.info("no stream frame (\(trigger.rawValue, privacy: .public)): stream \(String(describing: self.streamState), privacy: .public), decoded \(self.hevc.decoded), don \(String(describing: self.device.don), privacy: .public)")
+            return nil
+        }
+        let origin = streamOrigin
+        return await Task.detached(priority: .userInitiated) { () -> CapturedFrame? in
+            guard let (jpeg, size) = HEVCFrameDecoder.jpeg(picked.buffer, quality: 0.9) else { return nil }
+            return CapturedFrame(capturedAt: picked.at, origin: origin, jpeg: jpeg, pixelSize: size, isHighRes: false, trigger: trigger)
         }.value
     }
 
@@ -438,12 +532,27 @@ final class GlassesCaptureSource: CaptureSource {
         case .started:
             reconnectAttempts = 0
             lastError = nil   // recovered: stale teardown errors no longer apply
-            attachCameraIfNeeded()
-            if let session { headMotion.attach(to: session) }
+            if let session {
+                headMotion.attach(to: session)
+                buttons.attach(to: session)
+                // Microphone permission first: it decides whether the stream carries audio.
+                Task { [weak self] in
+                    guard let self else { return }
+                    await self.prepareSpeech()
+                    guard let current = self.session, current.state == .started else { return }
+                    self.attachCameraIfNeeded()
+                    if self.wantsSpeech() {
+                        self.headSpeech.attach(to: current)
+                    } else {
+                        Log.glasses.info("glasses speech off (setting or microphone permission)")
+                    }
+                }
+            }
         case .stopped:
             // Terminal. A new session is needed to continue (hinge reopen does not revive it).
             cleanupSession()
-            if wantRunning, !backgroundPaused, config?.autoReconnect == true, hasActiveDevice {
+            // `linkFailed`: we stopped it ourselves to renegotiate the link; always come back.
+            if wantRunning, !backgroundPaused, config?.autoReconnect == true || linkFailed, hasActiveDevice {
                 scheduleReconnect()
             }
         default:
@@ -453,8 +562,14 @@ final class GlassesCaptureSource: CaptureSource {
     }
 
     private func cleanupSession() {
+        liveRecorder.withLock { $0 = nil }
+        compressedLive = false
+        hevcCheck?.cancel()
         sessionTokens.clear()
         headMotion.detach()
+        headSpeech.detach()
+        buttons.detach()
+        audioWake.stop()
         cameraTokens.clear()
         pendingPhoto.fulfill(nil)
         pendingStreamPhoto.fulfill(nil)
@@ -474,9 +589,13 @@ final class GlassesCaptureSource: CaptureSource {
     }
 
     private func scheduleReconnect() {
-        guard reconnectTask == nil, reconnectAttempts < 5 else { return }
+        // No attempt limit: a failed Wi-Fi join ("Unable to join the network") used to burn
+        // all five attempts within seconds while the SDK was still tearing down, and then
+        // nothing ever tried again. Back off instead: 1, 2, 4, 8, 16, 30, 30… s.
+        guard reconnectTask == nil else { return }
         reconnectAttempts += 1
-        let delay = Double(reconnectAttempts)
+        let delay = min(pow(2, Double(reconnectAttempts - 1)), 30)
+        if reconnectAttempts >= 2, Self.usesWiFiTransport { Self.forgetGlassesWiFi() }
         Log.glasses.info("reconnect attempt \(self.reconnectAttempts) in \(delay) s")
         reconnectTask = Task { [weak self] in
             try? await Task.sleep(for: .seconds(delay))
@@ -504,7 +623,15 @@ final class GlassesCaptureSource: CaptureSource {
         } else if config.mode.picksStreamFrames {
             // Only the newest frame is ever used: 2 fps leaves Bluetooth room for 720p
             // (at 7 fps the SDK dropped to 504×896 after a minute, field 14 Nov).
-            streamConfig = StreamConfiguration(videoCodec: .raw, resolution: .high, frameRate: 2)
+            // With hands-free on, the glasses mic rides along as 16 kHz PCM for wake listening.
+            // Over Bluetooth Classic, audio shares a narrow link: ask for 504×896 straight away
+            // (the SDK dropped further to 360×640). Over the glasses' Wi-Fi there is room for 720p.
+            let audio = streamsAudio
+            let roomy = Self.usesWiFiTransport || !audio
+            streamConfig = StreamConfiguration(videoCodec: Self.usesWiFiTransport && !hevcFallback ? .hvc1 : .raw,
+                                               audioCodec: audio ? .pcm(sampleRate: .rate16000, numberOfChannels: 1) : nil,
+                                               resolution: roomy ? .high : .medium,
+                                               frameRate: Self.usesWiFiTransport ? 7 : 2)
         } else {
             streamConfig = StreamConfiguration(
                 videoCodec: .raw,
@@ -519,6 +646,8 @@ final class GlassesCaptureSource: CaptureSource {
             }
             camera = newCamera
             resetCameraFlags()
+            compressedLive = !background && streamConfig.videoCodec == .hvc1 && config.mode.picksStreamFrames
+            if compressedLive { hevc.reset() }
             observe(camera: newCamera, photoMode: !background && config.mode.usesPhotoCapability,
                     recorder: background ? backgroundRecorder : nil)
             streamState = .starting
@@ -569,9 +698,42 @@ final class GlassesCaptureSource: CaptureSource {
             // Adaptive: keep only the newest frame; the scheduler takes it when a still is due.
             let latest = latestFrame
             latest.withLock { $0 = nil }
-            stream.videoFramePublisher.listen { frame in
-                latest.withLock { $0 = (frame, Date()) }
-            }.store(in: cameraTokens)
+            if compressedLive {
+                let decoder = hevc
+                let recorderBox = liveRecorder
+                stream.videoFramePublisher.listen { frame in
+                    let sample = frame.sampleBuffer
+                    // Background: straight to the file (no hardware decoder for a background
+                    // app); foreground: decode, keep the newest picture.
+                    // Background: also into a file, in case iOS gives no decoder there; the
+                    // file is dropped if frames were understood live (`backgroundKept`).
+                    recorderBox.withLock({ $0 })?.append(sample)
+                    decoder.decode(sample)
+                }.store(in: cameraTokens)
+            } else {
+                stream.videoFramePublisher.listen { frame in
+                    latest.withLock { $0 = (frame, Date()) }
+                }.store(in: cameraTokens)
+            }
+            if streamsAudio {
+                let wake = audioWake
+                let speech = headSpeech
+                let tap = micTap
+                let wakeListening = wantsSpeech()
+                stream.audioFramePublisher.listen { frame in
+                    let buffer = frame.pcmBuffer
+                    if wakeListening { wake.append(buffer) }
+                    tap.feed(buffer)
+                }.store(in: cameraTokens)
+                if wakeListening {
+                    wake.start(contextualStrings: wakeStrings(), onPartial: { text in
+                        Task { @MainActor in speech.partial(text) }
+                    }) { text in
+                        Task { @MainActor in speech.utterance(text, source: "phone") }
+                    }
+                }
+                Log.glasses.info("camera stream carries the glasses mic (push-to-talk\(wakeListening ? " + wake word" : "", privacy: .public))")
+            }
         } else if let recorder {
             // Background: compressed samples go straight to the file, nothing is decoded.
             stream.videoFramePublisher.listen { frame in
@@ -598,6 +760,7 @@ final class GlassesCaptureSource: CaptureSource {
             // Born `.stopped` too, so only a camera that was up and went down counts.
             guard cameraEverStarted, camera != nil else { break }
             Log.glasses.info("camera went down")
+            audioWake.stop()
             cameraTokens.clear()
             camera = nil
             pendingPhoto.fulfill(nil)
@@ -610,11 +773,34 @@ final class GlassesCaptureSource: CaptureSource {
         recompute()
     }
 
+    /// Stops streaming the glasses mic and rebuilds the camera without it. Wake listening goes
+    /// on through the glasses' own transcription (text only).
+    private func dropAudio(reason: String) {
+        guard !audioDisabled else { return }
+        audioDisabled = true
+        audioStreamErrors = []
+        audioWake.stop()
+        Log.glasses.info("glasses audio off (\(reason, privacy: .public)): video only, wake word via glasses transcription")
+        // The camera going down reattaches it with the new (video-only) configuration.
+        reattachAttempts = 0
+        camera?.stop()
+    }
+
     private func scheduleReattach() {
-        guard wantRunning, reattachAttempts < 3 else { return }
+        guard wantRunning else { return }
         reattachAttempts += 1
+        if reattachAttempts > 2, let session {
+            // The camera keeps failing on this session (often the Wi-Fi link): start over with
+            // a new session, which negotiates the link again; `.stopped` schedules it.
+            Log.glasses.info("camera failed \(self.reattachAttempts - 1) times: new session")
+            linkFailed = true
+            reattachAttempts = 0
+            session.stop()
+            return
+        }
+        let delay = Double(reattachAttempts)
         Task { [weak self] in
-            try? await Task.sleep(for: .seconds(1))
+            try? await Task.sleep(for: .seconds(delay))
             guard let self, self.wantRunning, self.camera == nil,
                   self.session?.state == .started else { return }
             self.attachCameraIfNeeded()
@@ -624,8 +810,12 @@ final class GlassesCaptureSource: CaptureSource {
     private func streamStateChanged(_ newState: StreamState) {
         streamState = newState
         Log.glasses.info("stream → \(String(describing: newState), privacy: .public)")
+        armStreamWatchdog(for: newState)
         switch newState {
         case .streaming:
+            linkFailed = false
+            reattachAttempts = 0
+            if compressedLive { checkDecoding() }
             if usesPhoto, !recordingInBackground { startPhotoIfNeeded() }
         case .stopped:
             if usesPhoto, wakeStreamStopIntended {
@@ -645,6 +835,57 @@ final class GlassesCaptureSource: CaptureSource {
             break
         }
         recompute()
+    }
+
+    /// Safety net: if the `.hvc1` stream gives no decodable picture within 8 s, use `.raw`.
+    private func checkDecoding() {
+        hevcCheck?.cancel()
+        let current = camera
+        hevcCheck = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(8))
+            guard let self, !Task.isCancelled, self.compressedLive, self.camera === current,
+                  self.streamState == .streaming, !self.recordingInBackground else { return }
+            if self.hevc.decoded > 0 {
+                Log.glasses.info("HEVC stream decoding: \(self.hevc.decoded) frames in 8 s")
+                return
+            }
+            Log.glasses.info("HEVC stream gave no picture in 8 s: switching to raw frames")
+            self.hevcFallback = true
+            self.detachCamera()
+            self.attachCameraIfNeeded()
+        }
+    }
+
+    /// A stream stuck in "starting" (the Wi-Fi join timed out inside the SDK and nothing told
+    /// us) counts as a failure after 25 s: the camera is rebuilt, then the session.
+    private func armStreamWatchdog(for newState: StreamState) {
+        streamWatchdog?.cancel()
+        streamWatchdog = nil
+        guard newState == .starting || newState == .waitingForDevice else { return }
+        streamWatchdog = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(25))
+            guard let self, !Task.isCancelled, self.wantRunning, !self.recordingInBackground,
+                  self.streamState == newState, self.camera != nil,
+                  self.device.link == .connected, self.device.hinge != .closed, self.device.don != .doffed else { return }
+            Log.glasses.info("stream stuck in \(String(describing: newState), privacy: .public) for 25 s: retrying")
+            self.linkFailed = true
+            self.camera?.stop()
+            self.cameraTokens.clear()
+            self.camera = nil
+            self.resetCameraFlags()
+            self.scheduleReattach()
+        }
+    }
+
+    /// Wi-Fi networks this app configured (the glasses' hotspot; iOS lists only our own).
+    /// After a failed join iOS can keep the stale entry; removing it makes the next attempt
+    /// join afresh.
+    static func forgetGlassesWiFi() {
+        NEHotspotConfigurationManager.shared.getConfiguredSSIDs { ssids in
+            guard !ssids.isEmpty else { return }
+            Log.glasses.info("forgetting \(ssids.count) glasses Wi-Fi configuration(s) for a fresh join")
+            ssids.forEach { NEHotspotConfigurationManager.shared.removeConfiguration(forSSID: $0) }
+        }
     }
 
     private func startPhotoIfNeeded() {
@@ -727,6 +968,17 @@ final class GlassesCaptureSource: CaptureSource {
             lastError = "\(error.localizedDescription) Adaptive mode saves battery and reduces heat."
         case .photoCaptureFailed:
             pendingStreamPhoto.fulfill(nil)   // silent: keep using stream frames
+        case .audioStreamingError:
+            // Wake listening falls back to the glasses' own transcription; video goes on.
+            dropAudio(reason: "audio streaming error")
+            return
+        case .videoStreamingError where streamsAudio:
+            // Video hiccups after audio joined the link (field 14 Nov: none in 4 min without
+            // audio, two in a minute with it). Twice in 3 minutes: video only from now on.
+            let now = Date()
+            audioStreamErrors = audioStreamErrors.filter { now.timeIntervalSince($0) < 180 } + [now]
+            if audioStreamErrors.count >= 2 { dropAudio(reason: "video errors with audio on") }
+            return
         default:
             lastError = error.localizedDescription
         }
@@ -840,7 +1092,21 @@ final class GlassesCaptureSource: CaptureSource {
     /// running in the background, and write it to a file. Without it (setting off, or no
     /// running session): end the session on purpose and offer "Resume" on return.
     private func handleDidEnterBackground() {
+        Trace.inBackground = true
+        Trace.note("enter background (running \(wantRunning), compressed \(compressedLive), decoded \(hevc.decoded))")
         guard wantRunning, session != nil else { return }
+        if config?.backgroundCapture == true, session?.state == .started, compressedLive, camera != nil {
+            // Same stream, now into a file: the camera and its Wi-Fi link stay as they are.
+            recordingInBackground = true
+            let recorder = BackgroundSegmentRecorder(
+                directory: FileManager.default.temporaryDirectory.appendingPathComponent("background", isDirectory: true))
+            backgroundRecorder = recorder
+            backgroundKept = 0
+            liveRecorder.withLock { $0 = recorder }
+            Log.glasses.info("background: live HEVC frames + backup file (camera kept)")
+            recompute()
+            return
+        }
         if config?.backgroundCapture == true, session?.state == .started {
             recordingInBackground = true
             backgroundRecorder = BackgroundSegmentRecorder(
@@ -865,8 +1131,20 @@ final class GlassesCaptureSource: CaptureSource {
 
     /// Back in the foreground: close the background file, hand it over, restore the camera.
     private func handleWillEnterForeground() async {
+        Trace.inBackground = false
+        Trace.note("enter foreground (decoded \(hevc.decoded), kept while locked \(backgroundKept))")
         guard recordingInBackground else { return }
         recordingInBackground = false
+        if compressedLive, camera != nil {
+            liveRecorder.withLock { $0 = nil }
+            // Decoder still delivering: keep it; otherwise restart at the next key frame.
+            if hevc.newest(maxAge: 2, take: false) == nil { hevc.reset() }
+            recompute()
+            let live = backgroundKept >= 3
+            Log.glasses.info("foreground: \(self.backgroundKept) memories kept live while locked; backup file \(live ? "dropped" : "processed", privacy: .public)")
+            await finishBackgroundRecording(discard: live)
+            return
+        }
         detachCamera()
         recompute()
         await finishBackgroundRecording()
@@ -874,16 +1152,23 @@ final class GlassesCaptureSource: CaptureSource {
         if wantRunning { attachCameraIfNeeded() }
     }
 
-    private func finishBackgroundRecording() async {
+    private func finishBackgroundRecording(discard: Bool = false) async {
         let recorder = backgroundRecorder
         backgroundRecorder = nil
         if let segment = await recorder?.finish() {
+            if discard {
+                try? FileManager.default.removeItem(at: segment.url)
+                return
+            }
             Log.glasses.info("background segment: \(Int(segment.duration)) s")
             segmentContinuation.yield(segment)
         }
     }
 
     private func detachCamera() {
+        liveRecorder.withLock { $0 = nil }
+        compressedLive = false
+        hevcCheck?.cancel()
         camera?.stop()
         cameraTokens.clear()
         camera = nil
