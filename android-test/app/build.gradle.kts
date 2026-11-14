@@ -1,3 +1,4 @@
+import java.security.MessageDigest
 import java.util.Properties
 
 plugins {
@@ -69,7 +70,22 @@ val fetchPrivacyModel by tasks.registering {
         tmp.renameTo(out)
     }
 }
-tasks.named("preBuild") { dependsOn(copyPrompts, fetchPrivacyModel) }
+// D2: privacy_prompts.json must be regenerated whenever tools/make_privacy_prompts.py changes. The script stamps its
+// own SHA-256 (CRLF -> LF) into the json; the build fails if they differ.
+val checkPrivacyPrompts by tasks.registering {
+    val script = rootProject.file("tools/make_privacy_prompts.py")
+    val json = layout.projectDirectory.file("src/main/assets/privacy_prompts.json").asFile
+    inputs.files(script, json)
+    mustRunAfter(copyPrompts)   // copyPrompts writes into the same assets folder
+    doLast {
+        val sha = MessageDigest.getInstance("SHA-256")
+            .digest(script.readText().replace("\r\n", "\n").toByteArray()).joinToString("") { "%02x".format(it) }
+        val stored = Regex("\"source_sha256\":\\s*\"([0-9a-f]+)\"").find(json.readText())?.groupValues?.get(1)
+        if (stored != sha) throw GradleException("privacy_prompts.json is stale: tools/make_privacy_prompts.py changed. " +
+            "Regenerate: python -I tools/make_privacy_prompts.py app/src/main/assets/privacy_prompts.json")
+    }
+}
+tasks.named("preBuild") { dependsOn(copyPrompts, fetchPrivacyModel, checkPrivacyPrompts) }
 
 // Parity tests talk to the real model with the same keys (eval against the Python pipeline).
 tasks.withType<Test>().configureEach {

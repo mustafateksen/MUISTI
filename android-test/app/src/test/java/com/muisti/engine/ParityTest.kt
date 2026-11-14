@@ -121,32 +121,10 @@ class ParityTest {
         val asker = object { fun ask(q: String, d: List<Doc>, n: Long) =
             if (useAgent) agent!!.run(q, emptyList(), d, n) else asker0.ask(q, d, n) }
         val spec = JSONObject(File(nem, "eval/ask_tests.json").readText())
-        var latency = 0.0; var callsTotal = 0
-        var ok = 0; var seenOk = 0; var trapOk = 0; var halluc = 0; var wrong = 0
-        val qs = spec.arr("questions").objects()
-        val out = StringBuilder()
-        for (t in qs) {
-            val r = asker.ask(t.getString("q"), docs, t.str("now")?.let { parseNow(it) } ?: now)
-            latency += r.latencyS; callsTotal += r.calls
-            val expect = t.getString("expect_label")
-            val accept = t.arr("accept_labels").strings().ifEmpty { listOf(expect) }
-            fun has(s: String) = s.lowercase().split("|").any { r.answer.lowercase().contains(it) }
-            val good = r.label in accept &&
-                (r.label != "SEEN" || t.arr("must_contain").strings().all { has(it) }) &&
-                !(r.label == "SEEN" && t.arr("must_not_contain").strings().any { has(it) })
-            if (good) ok++
-            if (expect == "SEEN" && good) seenOk++
-            if (expect == "DONT_KNOW" && good) trapOk++
-            if (expect == "DONT_KNOW" && r.label == "SEEN") halluc++
-            if (expect != "DONT_KNOW" && r.label == "SEEN" && !good) wrong++
-            val line = "${if (good) "OK " else "XX "} [${r.label.padEnd(9)}] ${t.getString("q")}\n      -> ${r.answer}   (${r.why})"
-            println(line); out.append(line).append('\n')
+        // build/parity_agent.{txt,json}: summary + per-question tool traces (RegressionReport)
+        RegressionReport.run(spec.arr("questions").objects(), File(if (useAgent) "build/parity_agent" else "build/parity_ask")) { t ->
+            asker.ask(t.getString("q"), docs, t.str("now")?.let { parseNow(it) } ?: now)
         }
-        val nSeen = qs.count { it.getString("expect_label") == "SEEN" }
-        val nTrap = qs.count { it.getString("expect_label") == "DONT_KNOW" }
-        val summary = "accuracy $ok/${qs.size} | answerable $seenOk/$nSeen | traps abstained $trapOk/$nTrap | hallucinated on traps $halluc | answered but wrong $wrong | avg ${"%.1f".format(latency / qs.size)} s, ${"%.1f".format(callsTotal.toDouble() / qs.size)} calls"
-        println(summary)
-        File(if (useAgent) "build/parity_agent.txt" else "build/parity_ask.txt").writeText(out.append(summary).toString())
     }
 
     /**

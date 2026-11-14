@@ -4,7 +4,7 @@ whole "training". Needs: pip install onnxruntime tokenizers pillow numpy, and th
 https://huggingface.co/Xenova/mobileclip_s0 (onnx/text_model_quantized.onnx, onnx/vision_model.onnx, tokenizer.json)
 in --models (default: next to this script, folder mobileclip/).
 Usage: python -I make_privacy_prompts.py ../app/src/main/assets/privacy_prompts.json [test images...]"""
-import json, sys, os
+import hashlib, json, sys, os
 import numpy as np
 import onnxruntime as ort
 from tokenizers import Tokenizer
@@ -64,7 +64,10 @@ def main():
         feeds[extra.name] = (feeds[tm.get_inputs()[0].name] != 0).astype(np.int64)
     emb = tm.run(None, feeds)[0]
     emb = emb / np.linalg.norm(emb, axis=1, keepdims=True)
+    # the app build fails if this script changes without regenerating the json (gradle checkPrivacyPrompts, defect D2)
+    src = open(os.path.abspath(__file__), "rb").read().replace(b"\r\n", b"\n")
     json.dump({"model": "Xenova/mobileclip_s0 vision_model.onnx", "size": 256, "scale": 100.0,
+               "source_sha256": hashlib.sha256(src).hexdigest(),
                "prompts": [{"cls": r[0], "kind": r[1], "text": r[2], "vec": [round(float(x), 5) for x in v]}
                            for r, v in zip(rows, emb)]}, open(out, "w"))
     print("wrote", out, len(rows), "prompts dim", emb.shape[1])
