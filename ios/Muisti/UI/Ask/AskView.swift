@@ -4,6 +4,7 @@ import SwiftUI
 /// and the evidence frames (time, street, OCR text, map pin) under it.
 struct AskView: View {
     let controller: CaptureController
+    let config: AppConfig
     let voice: VoiceAssistant
     @State private var typed = ""
     @FocusState private var typing: Bool
@@ -13,9 +14,26 @@ struct AskView: View {
             ScrollView {
                 VStack(spacing: Theme.Spacing.l) {
                     VStack(spacing: Theme.Spacing.s) {
+                        Toggle("Hey Emir ile sor", isOn: Binding(
+                            get: { voice.handsFree },
+                            set: { enabled in Task { await voice.setHandsFree(enabled) } }
+                        ))
+                        if !voice.isBusy && !voice.openingMic {
+                            Picker("Soru dili", selection: Binding(
+                                get: { voice.localeIdentifier },
+                                set: { config.voiceLocale = $0; voice.localeIdentifier = $0 }
+                            )) {
+                                Text("English").tag("en-US")
+                                Text("Türkçe").tag("tr-TR")
+                            }.pickerStyle(.segmented)
+                        }
                         VoiceOrb(voice: voice, action: toggleListening)
                             .frame(height: voice.lastResult == nil ? 320 : 220)
-                        AskPhaseText(phase: voice.phase, transcript: voice.transcript, showsHint: voice.lastResult == nil)
+                        if voice.waitingForWake {
+                            Text("“Hey Emir” bekleniyor…")
+                        } else {
+                            AskPhaseText(phase: voice.phase, transcript: voice.transcript, showsHint: voice.lastResult == nil)
+                        }
                     }
 
                     if let result = voice.lastResult {

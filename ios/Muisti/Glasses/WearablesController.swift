@@ -27,6 +27,10 @@ final class WearablesController {
     @ObservationIgnored private var compatibilityTokens: [DeviceIdentifier: any AnyListenerToken] = [:]
     @ObservationIgnored private var compatibility: [DeviceIdentifier: Compatibility] = [:]
 
+    @ObservationIgnored private var invocationStream: VoiceInvocationsStream?
+    @ObservationIgnored private var invocationTokens: [any AnyListenerToken] = []
+    @ObservationIgnored private var invocationDevice: DeviceIdentifier?
+
     static let metaAIAppStoreURL = URL(string: "https://apps.apple.com/app/id1558240027")!
 
     init(wearables: any WearablesInterface = Wearables.shared) {
@@ -39,6 +43,7 @@ final class WearablesController {
             for await state in stream {
                 guard let self else { return }
                 self.registrationState = state
+                self.updateVoiceInvocations()
                 if state == .registered {
                     self.metaAIMissing = false
                     await self.refreshCameraPermission()
@@ -50,14 +55,54 @@ final class WearablesController {
             for await ids in stream {
                 guard let self else { return }
                 self.deviceIds = ids
+                self.updateVoiceInvocations()
                 self.trackCompatibility(ids)
             }
         }
     }
 
     isolated deinit {
+        invocationStream?.stop()
         registrationTask?.cancel()
         devicesTask?.cancel()
+    }
+
+    // Experimental DAT 1.0.1 feature. An unavailable grant must not block capture.
+    func updateVoiceInvocations() {
+        let device = isRegistered ? deviceIds.first : nil
+        guard device != invocationDevice else { return }
+        invocationStream?.stop()
+        invocationStream = nil
+        invocationTokens.removeAll()
+        invocationDevice = nil
+        guard let device else { return }
+        do {
+            let stream = try VoiceInvocationsStream(wearables: wearables)
+            let actionToken = stream.invocationsPublisher.listen { action in
+                guard let launch = action as? LaunchApp else { return }
+                Task { @MainActor in
+                    AppSignals.shared.requestListening()
+                    _ = await launch.responseHandle.sendSuccess(actionOutput: nil)
+                }
+            }
+            let errorToken = stream.errorPublisher.listen { [weak self] error in
+                Task { @MainActor in
+                    guard let self, self.invocationDevice == device else { return }
+                    Log.glasses.warning("Voice invocation: \(error.description, privacy: .public)")
+                    self.invocationStream?.stop()
+                    self.invocationStream = nil
+                    self.invocationTokens.removeAll()
+                    self.invocationDevice = nil
+                }
+            }
+            invocationTokens = [actionToken, errorToken]
+            try stream.start(deviceIdentifier: device)
+            invocationDevice = device
+            invocationStream = stream
+        } catch {
+            invocationTokens.removeAll()
+            Log.glasses.info("Voice invocation unavailable: \(error.localizedDescription, privacy: .public)")
+        }
     }
 
     // MARK: Registration

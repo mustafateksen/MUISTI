@@ -118,9 +118,7 @@ final class AppConfig {
         didSet { KeychainStore.write(rerankKey.trimmingCharacters(in: .whitespacesAndNewlines), for: "rerank-api-key") }
     }
     var retentionDays: Int { didSet { save("retentionDays", retentionDays) } }
-    /// Speech recognition is locked to English (not the phone language, not a saved choice).
-    /// Answers are spoken in the language Nemotron detects in the question.
-    let voiceLocale = "en-US"
+    var voiceLocale: String { didSet { save("voiceLocale", voiceLocale) } }
     var speakAnswers: Bool { didSet { save("speakAnswers", speakAnswers) } }
     var zones: [NoRecordZone] {
         didSet { if let data = try? JSONEncoder().encode(zones) { defaults.set(data, forKey: "zones") } }
@@ -158,6 +156,7 @@ final class AppConfig {
         embedKey = KeychainStore.read("embed-api-key") ?? ""
         rerankModel = defaults.string(forKey: "rerankModel") ?? NemotronClient.defaultRerankModel
         rerankKey = KeychainStore.read("rerank-api-key") ?? ""
+        voiceLocale = defaults.string(forKey: "voiceLocale") ?? "en-US"
         retentionDays = defaults.object(forKey: "retentionDays") as? Int ?? 7
         speakAnswers = defaults.object(forKey: "speakAnswers") as? Bool ?? true
         if let data = defaults.data(forKey: "zones"), let decoded = try? JSONDecoder().decode([NoRecordZone].self, from: data) {

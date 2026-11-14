@@ -15,7 +15,7 @@ struct RootView: View {
             HomeView(controller: controller, config: config, wearables: wearables)
                 .tabItem { Label("Kayıt", systemImage: "eyeglasses") }
                 .tag(AppTab.capture)
-            AskView(controller: controller, voice: controller.voice)
+            AskView(controller: controller, config: config, voice: controller.voice)
                 .tabItem { Label("Sor", systemImage: "waveform") }
                 .tag(AppTab.ask)
             MemoryListView(controller: controller)
@@ -26,7 +26,8 @@ struct RootView: View {
             if pending { handleListenRequest() }
         }
         .onChange(of: scenePhase) { _, phase in
-            if phase == .active { handleListenRequest() }
+            if phase == .active { wearables.updateVoiceInvocations(); handleListenRequest() }
+            if phase == .background { Task { await controller.voice.setHandsFree(false) } }
         }
         .task {
             #if DEBUG

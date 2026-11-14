@@ -18,6 +18,11 @@ final class VoiceAssistant {
     private(set) var lastResult: AskResult?
     private(set) var history: [AskResult] = []
     var localeIdentifier = "en-US"
+    private(set) var handsFree = false
+    private(set) var waitingForWake = false
+    private(set) var openingMic = false
+    private var generation = 0
+    private var triggeredByPhrase = false
     var speakAnswers = true
     /// Microphone spectrum and spoken-word pulses for the visualizer.
     let levels = VoiceLevels()
@@ -40,68 +45,134 @@ final class VoiceAssistant {
     // MARK: Listen
 
     func toggleListening() async {
-        if phase == .listening { await finishListening() } else { await startListening() }
+        if phase == .listening && !waitingForWake { await finishListening() } else { await startListening() }
     }
 
     func startListening() async {
-        guard phase != .listening, phase != .thinking else { return }
-        synthesizer.stopSpeaking(at: .immediate)
-        transcript = ""
-
-        guard await Self.requestSpeechAuthorization() else {
-            phase = .failed("Konuşma tanıma izni yok. Ayarlar > Muisti > Konuşma Tanıma.")
-            return
-        }
-        guard await AVAudioApplication.requestRecordPermission() else {
-            phase = .failed("Mikrofon izni yok. Ayarlar > Muisti > Mikrofon.")
-            return
-        }
-        guard let recognizer = SFSpeechRecognizer(locale: Locale(identifier: localeIdentifier)), recognizer.isAvailable else {
-            phase = .failed("Bu dil için konuşma tanıma şu an kullanılamıyor (\(localeIdentifier)).")
-            return
-        }
-        do {
-            try Self.activateAudioSession()
-            let session = SpeechSession(recognizer: recognizer)
-            let levels = levels
-            try session.start { [weak self] text, isFinal in
-                Task { @MainActor in self?.handlePartial(text, isFinal: isFinal) }
-            } onError: { [weak self] message in
-                Task { @MainActor in self?.handleError(message) }
-            } onBands: { bands in
-                Task { @MainActor in levels.update(bands) }
-            }
-            self.session = session
-            phase = .listening
-            armSilenceTimer(after: 6)   // nothing said within 6 s → give up quietly
-            maxTask = Task { [weak self] in
-                try? await Task.sleep(for: .seconds(15))
-                await self?.finishListening()
-            }
-        } catch {
-            phase = .failed("Mikrofon açılamadı: \(error.localizedDescription)")
-            Self.deactivateAudioSession()
+        if waitingForWake {
+            stopMic()
+            await openMic(waitForWake: false)
+        } else if phase != .listening && phase != .thinking && phase != .speaking {
+            await openMic(waitForWake: false)
         }
     }
 
-    func finishListening() async {
-        guard phase == .listening else { return }
+    func setHandsFree(_ enabled: Bool) async {
+        guard enabled != handsFree else { return }
+        handsFree = enabled
+        if !enabled {
+            if openingMic || phase == .listening {
+                stopMic()
+                phase = .idle
+                Self.deactivateAudioSession()
+            }
+        } else if !isBusy {
+            await openMic(waitForWake: true)
+        }
+    }
+
+    private func stopMic() {
+        generation += 1
+        openingMic = false
+        waitingForWake = false
+        triggeredByPhrase = false
         silenceTask?.cancel()
         maxTask?.cancel()
         session?.stop()
         session = nil
         levels.reset()
-        let question = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !question.isEmpty else {
-            phase = .idle
-            Self.deactivateAudioSession()
+    }
+
+    private func micFailure(_ message: String) {
+        stopMic()
+        handsFree = false
+        phase = .failed(message)
+        Self.deactivateAudioSession()
+    }
+
+    private func openMic(waitForWake: Bool) async {
+        guard !openingMic, session == nil else { return }
+        generation += 1
+        let ticket = generation
+        openingMic = true
+        transcript = ""
+        let speechAllowed = await Self.requestSpeechAuthorization()
+        guard ticket == generation else { return }
+        guard speechAllowed else { micFailure("Konuşma tanıma izni gerekiyor."); return }
+        let micAllowed = await AVAudioApplication.requestRecordPermission()
+        guard ticket == generation else { return }
+        guard micAllowed else { micFailure("Mikrofon izni gerekiyor."); return }
+        guard let recognizer = SFSpeechRecognizer(locale: Locale(identifier: localeIdentifier)),
+              recognizer.isAvailable else {
+            micFailure("Konuşma tanıma kullanılamıyor (\(localeIdentifier)).")
             return
         }
-        await ask(question)
+        if handsFree && !recognizer.supportsOnDeviceRecognition {
+            micFailure("Hey Emir için bu dilde cihaz üstü konuşma tanıma gerekiyor.")
+            return
+        }
+        do {
+            try Self.activateAudioSession()
+            let session = SpeechSession(recognizer: recognizer)
+            self.session = session
+            try session.start { [weak self] text, final in
+                Task { @MainActor in
+                    guard let self, self.generation == ticket else { return }
+                    await self.handlePartial(text, isFinal: final)
+                }
+            } onError: { [weak self] error in
+                Task { @MainActor in
+                    guard let self, self.generation == ticket else { return }
+                    if self.waitingForWake && error.domain == "kAFAssistantErrorDomain" && error.code == 1110 {
+                        await self.finishListening()
+                    } else if self.transcript.isEmpty {
+                        self.micFailure(error.localizedDescription)
+                    } else {
+                        await self.finishListening()
+                    }
+                }
+            } onBands: { [weak self] bands in
+                Task { @MainActor in
+                    guard let self, self.generation == ticket else { return }
+                    self.levels.update(bands)
+                }
+            }
+            openingMic = false
+            waitingForWake = waitForWake
+            phase = .listening
+            if !waitForWake { armSilenceTimer(after: 6) }
+            armLimit(waitForWake ? 45 : 15)
+        } catch {
+            micFailure("Mikrofon açılamadı: \(error.localizedDescription)")
+        }
+    }
+
+    private func armLimit(_ seconds: Double) {
+        maxTask?.cancel()
+        maxTask = Task { [weak self] in
+            do { try await Task.sleep(for: .seconds(seconds)) } catch { return }
+            await self?.finishListening()
+        }
+    }
+
+    func finishListening() async {
+        guard phase == .listening else { return }
+        let question = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+        stopMic()
+        phase = .idle
+        if !question.isEmpty {
+            await ask(question)
+        } else if handsFree {
+            await openMic(waitForWake: true)
+        } else {
+            Self.deactivateAudioSession()
+        }
     }
 
     /// Typed question (also used by tests and when speech is unavailable).
     func ask(_ question: String) async {
+        guard !openingMic, phase != .thinking, phase != .speaking else { return }
+        stopMic()
         transcript = question
         phase = .thinking
         let result = await engine.ask(question, location: location.freshFix(maxAge: 120))
@@ -115,28 +186,41 @@ final class VoiceAssistant {
         }
         phase = .idle
         Self.deactivateAudioSession()
+        if handsFree { await openMic(waitForWake: true) }
     }
 
-    private func handlePartial(_ text: String, isFinal: Bool) {
+    // A recognition partial is cumulative. Extract the suffix on each revision.
+    static func wakeSuffix(_ text: String) -> String? {
+        guard let range = text.range(of: #"(?i)\bhey[\s,!.?-]+emir\b"#,
+                                     options: .regularExpression, range: nil, locale: nil) else { return nil }
+        return String(text[range.upperBound...])
+            .trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters))
+    }
+
+    private func handlePartial(_ text: String, isFinal: Bool) async {
         guard phase == .listening else { return }
-        transcript = text
-        if isFinal {
-            Task { await finishListening() }
+        if waitingForWake {
+            guard let suffix = Self.wakeSuffix(text) else {
+                if isFinal { await finishListening() }
+                return
+            }
+            waitingForWake = false
+            triggeredByPhrase = true
+            armLimit(15)
+            transcript = suffix
+        } else if triggeredByPhrase {
+            if let suffix = Self.wakeSuffix(text) { transcript = suffix }
         } else {
-            armSilenceTimer(after: 1.6)   // end of question = 1.6 s without new words
+            transcript = text
         }
-    }
-
-    private func handleError(_ message: String) {
-        guard phase == .listening else { return }
-        if transcript.isEmpty {
-            session?.stop()
-            session = nil
-            levels.reset()
-            phase = .failed(message)
-            Self.deactivateAudioSession()
+        if isFinal && triggeredByPhrase && transcript.isEmpty {
+            // Some recognizers finalize just the wake words during a short pause.
+            stopMic()
+            await openMic(waitForWake: false)
+        } else if isFinal {
+            await finishListening()
         } else {
-            Task { await finishListening() }
+            armSilenceTimer(after: transcript.isEmpty ? 6 : 1.6)
         }
     }
 
@@ -232,8 +316,9 @@ private final class SpeechSession: @unchecked Sendable {
     }
 
     func start(onText: @escaping @Sendable (String, Bool) -> Void,
-               onError: @escaping @Sendable (String) -> Void,
+               onError: @escaping @Sendable (NSError) -> Void,
                onBands: @escaping @Sendable ([Float]) -> Void) throws {
+        request.contextualStrings = ["Hey Emir"]
         request.shouldReportPartialResults = true
         if recognizer.supportsOnDeviceRecognition {
             request.requiresOnDeviceRecognition = true   // the question never leaves the phone
@@ -260,7 +345,7 @@ private final class SpeechSession: @unchecked Sendable {
             if let result {
                 onText(result.bestTranscription.formattedString, result.isFinal)
             } else if let error {
-                onError(error.localizedDescription)
+                onError(error as NSError)
             }
         }
     }
