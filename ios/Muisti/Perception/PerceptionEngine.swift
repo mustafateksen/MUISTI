@@ -14,9 +14,16 @@ struct NoRecordZone: Codable, Sendable, Identifiable, Equatable {
     var longitude: Double
     var radius: Double = 100
 
-    func contains(latitude lat: Double, longitude lon: Double) -> Bool {
-        MemoryStore.haversine(latitude, longitude, lat, lon) <= radius
+    /// Inside, or possibly inside given the GPS uncertainty (a 60 m fix 120 m from a 100 m
+    /// zone may well be in it). The allowance is capped at 100 m so a very poor fix does not
+    /// block a whole district. (Android `Zones.inside`.)
+    func contains(latitude lat: Double, longitude lon: Double, accuracy: Double? = nil) -> Bool {
+        let slack = min(max(accuracy ?? 0, 0), 100)
+        return MemoryStore.haversine(latitude, longitude, lat, lon) <= radius + slack
     }
+
+    /// Radius choices offered in Settings.
+    static let radii: [Double] = [50, 100, 200, 500, 1000]
 }
 
 enum DropReason: String, Sendable, CaseIterable {
@@ -76,7 +83,7 @@ actor PerceptionEngine {
     }
 
     func process(_ frame: CapturedFrame, street: String?, area: String? = nil) -> PerceptionResult {
-        if let lat = frame.latitude, let lon = frame.longitude, zones.contains(where: { $0.contains(latitude: lat, longitude: lon) }) {
+        if let lat = frame.latitude, let lon = frame.longitude, zones.contains(where: { $0.contains(latitude: lat, longitude: lon, accuracy: frame.horizontalAccuracy) }) {
             return .drop(.noRecordZone)
         }
         guard let analysis = ImageData.thumbnail(frame.jpeg, maxPixel: 512) else { return .drop(.unreadable) }
@@ -202,6 +209,7 @@ actor PerceptionEngine {
         let now = Date()
         if box.isPrivate {
             Trace.note("frame withheld: private scene")
+            lastPrivateScene.withLock { $0 = now }
             privateUntil.withLock { $0 = now.addingTimeInterval(privatePause) }
             return ([], nil)
         }
@@ -218,6 +226,8 @@ actor PerceptionEngine {
     /// How long after a private scene nothing is kept (seconds; 0 switches the wait off).
     nonisolated(unsafe) static var privatePause: TimeInterval = 20
     private static let privateUntil = OSAllocatedUnfairLock(initialState: Date.distantPast)
+    /// When a private scene was last in view (the pipeline drops frames held just before it).
+    static let lastPrivateScene = OSAllocatedUnfairLock(initialState: Date.distantPast)
     /// Ends the wait now (tests feed unrelated photos one after another).
     static func endPrivatePause() { privateUntil.withLock { $0 = .distantPast } }
 

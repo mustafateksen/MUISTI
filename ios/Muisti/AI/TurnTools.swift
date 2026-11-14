@@ -24,10 +24,11 @@ enum TurnTools {
     what you just asked or warned about, so read the conversation and the pending yes/no first.
     """
 
-    static func user(question: String, now: Date, conversation: [String], safety: String, lookedSecondsAgo: Int?, position: String? = nil) -> String {
+    static func user(question: String, now: Date, conversation: [String], safety: String, lookedSecondsAgo: Int?, position: String? = nil,
+                     cameraLive: Bool? = nil) -> String {
         """
         Current local time: \(QueryEngine.promptTime(now))
-        User position now: \(position ?? "unknown")
+        User position now: \(position ?? "unknown")\(cameraLive.map { "\nGlasses camera: " + ($0 ? "sending pictures (look_now sees what is in front of the user right now)" : "NOT sending pictures right now (look_now would see nothing; what is around the user can still be answered with search_memory, place here)") } ?? "")
         Conversation so far (oldest first):
         \(conversation.isEmpty ? "(new conversation)" : conversation.joined(separator: "\n"))
         \(lookedSecondsAgo.map { "Your last reply looked through the glasses \($0) seconds ago.\n" } ?? "")
@@ -102,8 +103,11 @@ enum TurnTools {
              message is about the present view, in any words or language: what is this, what do you see, \
              look, read this, what does it say, what colour is it, is it on, is this the right one, \
              "this" or "here" pointing at something, a garbled request about seeing or looking, or a \
-             "yes" to your own offer to look. You can always look: never say you cannot see.
-             """),
+             "yes" to your own offer to look. You can always look: never say you cannot see. \
+             (Whether something was seen at this place earlier — "did I see one here" — is a \
+             question about the past: search_memory with place here.)
+             """,
+             properties: [#""reasoning_needed":{"type":["boolean","null"],"description":"true when answering takes working through several steps (an equation, a word problem, comparing prices per unit); otherwise false or null."}"#]),
         tool("search_memory", """
              Look up what the glasses saw earlier and what Muisti Turva knows: places, signs and their \
              text, objects, when and where something was, what came before or after it, the safety \
@@ -244,7 +248,8 @@ enum TurnTools {
     /// What the model decided for this turn.
     enum Decision: Sendable {
         case reply(String)
-        case look
+        /// `reasoning`: the answer needs working out step by step (the model thinks first).
+        case look(reasoning: Bool = false)
         /// `from`/`to`: the span of time the user named, if any; `place`: the place they named.
         case search(String?, from: Date? = nil, to: Date? = nil, place: String? = nil)
         case forget(minutes: Int?, reply: String)
@@ -274,10 +279,12 @@ enum TurnTools {
         var location: String?
         var from: String?
         var to: String?
+        var reasoning_needed: Bool?
 
         init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
             query = c.lenientString(.query)
+            reasoning_needed = c.lenientBool(.reasoning_needed)
             text = c.lenientString(.text)
             minutes = c.lenientDouble(.minutes).map { Int($0) }
             reply = c.lenientString(.reply)
@@ -301,7 +308,7 @@ enum TurnTools {
 
         enum CodingKeys: String, CodingKey {
             case query, text, minutes, reply, rule, rule_id, object, kind, value
-            case say, cue, place, intent_id, name, topic, title, start, location, from, to
+            case say, cue, place, intent_id, name, topic, title, start, location, from, to, reasoning_needed
         }
     }
 
@@ -310,6 +317,7 @@ enum TurnTools {
     /// which answers from evidence instead of acting on a guess.
     static func decision(from turn: NemotronClient.ToolReply) -> Decision {
         var looked = false
+        var reasoning = false
         var search: (query: String?, from: Date?, to: Date?, place: String?)?
         for call in turn.calls {
             let args = call.decode(Arguments.self)
@@ -317,7 +325,9 @@ enum TurnTools {
             switch call.name {
             case "say":
                 if let text = args?.text { return .reply(text) }
-            case "look_now": looked = true
+            case "look_now":
+                looked = true
+                reasoning = args?.reasoning_needed ?? false
             case "search_memory":
                 let now = Date()
                 search = (args?.query, args?.from.flatMap { Cue(at: $0).nextDue(after: now) }, args?.to.flatMap { Cue(at: $0).nextDue(after: now) },
@@ -364,7 +374,7 @@ enum TurnTools {
             default: break
             }
         }
-        if looked { return .look }
+        if looked { return .look(reasoning: reasoning) }
         if let search { return .search(search.query, from: search.from, to: search.to, place: search.place) }
         // A tool call that could not be used and no words: answer from memory.
         return turn.text.isEmpty ? .search(nil) : .reply(turn.text)

@@ -5,3 +5,5 @@ board_equation.jpg, price_tag.jpg: drawn for this project (text on a plain backg
 stove_on.jpg: {"title": "Gas stove flame", "creator": "Ervins Strauhmanis", "license": "by", "license_version": "2.0", "landing": "https://www.flickr.com/photos/76523360@N03/13936690129"}
 medicine.jpg: {"title": "Medication pills blister 2", "creator": "hitthatswitch", "license": "by-nc-sa", "license_version": "2.0", "landing": "https://www.flickr.com/photos/27898848@N06/3174608146"}
 stove_off.jpg: {"title": "Did I turn the kitchen stove off?", "creator": "Dieter Drescher", "license": "by-nc-nd", "license_version": "2.0", "landing": "https://www.flickr.com/photos/22958748@N06/2209075201"}
+sw_*.jpg: frames of 'Old Light Switch.webm', Antti Makkonen, CC BY 3.0, Wikimedia Commons
+kt_*.jpg: frames of 'Whistling kettle on gas range.webm', CC BY-SA 2.0, Wikimedia Commons (from Flickr)

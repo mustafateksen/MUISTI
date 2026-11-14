@@ -31,7 +31,7 @@ final class SafetyMonitor {
         var homeEvery: TimeInterval = 30          // at home, hands not in view
         var labelEvery: TimeInterval = 6          // allergen rules: a package check this often
         var awayEvery: TimeInterval = 20          // event rules away from home
-        var maxPerMinute = 20
+        var maxPerMinute = 60
         var onReadingsNeeded = 2
         var staleAfter: TimeInterval = 12 * 3600
         var homeRadius: Double = 80
@@ -77,7 +77,14 @@ final class SafetyMonitor {
     static let stripSeconds: TimeInterval = 12
     @ObservationIgnored private var lastSent: Date?
     @ObservationIgnored private var sentTimes: [Date] = []
-    @ObservationIgnored private var inFlight = false
+    /// Looks in flight, by what they look for (the watched things and allergens, at home or
+    /// away). A frame that arrives while its kind of look is running is not dropped: it waits,
+    /// a newer one of the same kind takes its place (merged), and it is looked at as soon as
+    /// the running look is done. Looks for different things run side by side.
+    @ObservationIgnored private var looksInFlight: Set<Int> = []
+    @ObservationIgnored private var waitingFrames: [Int: CapturedFrame] = [:]
+    /// Where merged and expired frames are written down (kind, state, detail).
+    @ObservationIgnored var eventLog: (@Sendable (String, String, String) async -> Void)?
     @ObservationIgnored private var snoozedUntil: [String: Date] = [:]
     @ObservationIgnored private var lastAlertRule: String?
     @ObservationIgnored private var lastLeaveAt: Date?
@@ -165,7 +172,21 @@ final class SafetyMonitor {
     func consider(_ frame: CapturedFrame) {
         let watched = self.watched
         let auto = autoHazards()
-        guard !watched.isEmpty || !watchedAllergens.isEmpty || auto, !inFlight else { return }
+        guard !watched.isEmpty || !watchedAllergens.isEmpty || auto else { return }
+        var hasher = Hasher()
+        hasher.combine(watched)
+        hasher.combine(watchedAllergens)
+        hasher.combine(atHome)
+        let lookKey = hasher.finalize()
+        guard !looksInFlight.contains(lookKey) else {
+            if waitingFrames[lookKey] != nil {
+                Trace.note("safety: waiting frame merged into a newer one")
+                let log = eventLog
+                Task { await log?("safety.frame", "merged", "a newer frame of the same look took its place") }
+            }
+            waitingFrames[lookKey] = frame
+            return
+        }
         let now = Date()
         sentTimes.removeAll { now.timeIntervalSince($0) > 60 }
         guard sentTimes.count < tuning.maxPerMinute else { return }
@@ -193,13 +214,16 @@ final class SafetyMonitor {
         if home, since < tuning.homeHandsEvery { return }
         if !home, !hasAllergenRules, !hasAwayRules { return }
         if !home, since < min(tuning.labelEvery, tuning.awayEvery) { return }
-        inFlight = true
+        looksInFlight.insert(lookKey)
         let jpeg = frame.jpeg
         let tuning = self.tuning
         let allergens = watchedAllergens
         let earlier = recentFrames.filter { $0.at < frame.capturedAt.addingTimeInterval(-0.5) }.suffix(Self.stripFrames - 1)
         Task {
-            defer { self.inFlight = false }
+            defer {
+                self.looksInFlight.remove(lookKey)
+                if let next = self.waitingFrames.removeValue(forKey: lookKey) { self.consider(next) }
+            }
             // Hands first (cheap); the privacy copy (OCR + head masking) only for frames that are due.
             let hands = await Task.detached(priority: .utility) { SafetyFrame.handsVisible(jpeg) }.value
             let due = home ? (hands ? since >= tuning.homeHandsEvery : since >= tuning.homeEvery)
@@ -261,6 +285,47 @@ final class SafetyMonitor {
         // Something was done in these frames: the moments before stay with the evidence frame.
         if let file, let strip, !observation.actions.isEmpty { await store.saveStrip(strip.frames, before: file) }
         await apply(observation, at: frame.capturedAt, frameFile: file, latitude: frame.latitude, longitude: frame.longitude)
+    }
+
+    #if DEBUG
+    /// The strip look on frames given by a test (already a few seconds of one moment, oldest
+    /// first): the same prompt, masking and picture layout as `observe`, nothing stored.
+    func debugStripLook(_ frames: [Data], watched: [String], seconds: Int) async -> SafetyObservation? {
+        let masked = await Task.detached { frames.compactMap { SafetyFrame.prepare($0, maxPixel: 768, fromPipeline: false) } }.value
+        guard masked.count == frames.count, let last = masked.last else { return nil }
+        let before = masked.dropLast().map(\.jpeg)
+        let ai = ai
+        let base = SafetyPrompts.observeUser(watched: watched, allergens: [], ocr: last.ocr)
+        let sheet = QueryEngine.montage(jpegs: before.suffix(Self.sheetFrames - 1) + [last.jpeg], cell: 768)
+        @Sendable func look(separate: Bool) async throws -> SafetyObservation {
+            let count = separate ? masked.count : min(masked.count, 4)
+            return try await ai.chatJSON(SafetyObservation.self, system: SafetyPrompts.observeSystem,
+                                         user: base + (count > 1 ? SafetyPrompts.stripNote(frames: count, seconds: seconds) : ""),
+                                         image: .init(jpeg: separate ? last.jpeg : (sheet ?? last.jpeg)),
+                                         earlierImages: separate ? before.map { NemotronClient.ImagePart(jpeg: $0) } : [],
+                                         jsonSchema: SafetyPrompts.observeSchema, schemaName: "observation", maxTokens: 600, temperature: 0)
+        }
+        let several = await ai.multiImageChat && masked.count > 1
+        do { return try await look(separate: several) } catch NemotronClient.NemotronError.http(400, _) where several {
+            return try? await look(separate: false)
+        } catch { return nil }
+    }
+    #endif
+
+    /// States the frame analysis read on a stored frame (pipeline v2: the second source). They
+    /// enter the same state machine as a reading of their own, for watched things only, and
+    /// only when no safety look covered that moment — also for frames recorded while the phone
+    /// was in the pocket, with the time they were taken.
+    func noteEnriched(_ states: [ExtractedRecord.ObjectStateSeen], at: Date) async {
+        guard !states.isEmpty else { return }
+        if let lastSent, abs(lastSent.timeIntervalSince(at)) < 4 { return }
+        let watched = self.watched.map { $0.split(separator: ":").last.map(String.init) ?? $0 }.map { $0.lowercased() }
+        for seen in states where seen.state != "unknown" {
+            let name = seen.object.lowercased()
+            guard let object = watched.first(where: { name.contains($0) || $0.contains(name) }) else { continue }
+            Trace.note("safety: \(object)=\(seen.state) from the frame analysis (\(seen.evidence ?? "-"))")
+            await observe(object: object, state: seen.state, at: at, frameFile: nil, place: nil, source: .enrichment)
+        }
     }
 
     // MARK: State machine
@@ -669,18 +734,10 @@ final class SafetyMonitor {
         return label
     }
 
-    /// A safety call that a question pushed aside is made again once the question is answered
-    /// (before, that frame's check was simply lost).
+    /// A safety call, in the safety lane.
     private static func afterQuestions<T: Sendable>(_ ai: NemotronClient, _ call: @Sendable () async throws -> T) async throws -> T {
-        do {
-            return try await call()
-        } catch NemotronClient.NemotronError.preempted {
-            let waitStart = Date()
-            while await ai.questionsInFlight > 0, Date().timeIntervalSince(waitStart) < 30 {
-                try? await Task.sleep(for: .milliseconds(200))
-            }
-            return try await call()
-        }
+        // Safety looks have their own lane: a question neither cancels nor delays them.
+        try await LaneKind.$current.withValue(.safety) { try await call() }
     }
 
     @ObservationIgnored private var queryVectors: [String: [Float]] = [:]

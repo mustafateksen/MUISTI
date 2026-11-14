@@ -87,8 +87,117 @@ enum ConversationEval {
     /// "Can it do this with what I am looking at?": each entry of `Documents/<folder>/tests.json`
     /// (`file`, `say`, `must`) is asked as a fresh conversation with that photo as the live
     /// view. Writes `look_result.txt` and `LOOKTEST` log lines.
+    /// The long-conversation test of pipeline v2: 30 turns, things said early asked for late
+    /// (by then they are only in a summary), and the same after a restart (a new engine that
+    /// has nothing but the dialog on disk). Writes `Documents/dialog_result.txt`.
+    static func runDialogTest(controller: CaptureController) async {
+        guard let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { return }
+        let engine = controller.queryEngine
+        await engine.resetConversation()
+        let filler = ["What is an Arduino?", "Thanks.", "How many minutes are in a day?", "OK, good.", "What is the capital of Finland?",
+                      "Nice.", "What does HTTP stand for?", "Got it.", "How far is the Moon?", "Great, thanks.", "What is a haiku?",
+                      "Alright.", "Who wrote Kalevala?", "Thank you.", "What is the boiling point of water?", "OK.",
+                      "What is a prime number?", "Cool.", "How many legs does a spider have?", "Thanks a lot.", "What is photosynthesis?",
+                      "I see.", "What is the tallest mountain on Earth?", "OK thanks.", "What is an API?", "Good to know."]
+        // turn number (1-based) → what is said; the rest is filler.
+        let said: [Int: String] = [3: "By the way, my sister Leena lands tonight at 18:40, on flight AY1337.",
+                                   12: "I'm meeting Jussi from Wolt at the coffee place called Fazer on Kluuvikatu tomorrow at ten.",
+                                   25: "What time does my sister land?", 27: "And what was her flight number?",
+                                   29: "Who am I meeting tomorrow, and where?"]
+        let must: [Int: [String]] = [25: ["18:40"], 27: ["1337"], 29: ["jussi", "fazer"]]
+        var lines: [String] = []
+        var passed = 0, total = 0
+        var next = 0
+        for turn in 1...30 {
+            let text = said[turn] ?? filler[next % filler.count]
+            if said[turn] == nil { next += 1 }
+            let result = await engine.ask(text, location: nil)
+            await ContextBuilder.summarizeIfNeeded(engine.dialog, ai: controller.ai)
+            if let needed = must[turn] {
+                total += 1
+                let answer = result.answer.lowercased()
+                let ok = needed.allSatisfy { answer.contains($0) }
+                if ok { passed += 1 }
+                lines.append("\(ok ? "PASS" : "FAIL") turn \(turn) “\(text)” → \(result.answer) · \(result.latencyMs) ms · \(result.trace ?? "")")
+            }
+        }
+        let summaries = await engine.dialog.summaries(since: Date().addingTimeInterval(-3600))
+        lines.append("summaries made: \(summaries.count)" + summaries.map { "\n  · \($0.text)" }.joined())
+        // Restart: a new engine, nothing in memory but the same dialog file.
+        let restarted = QueryEngine(store: controller.store, ai: controller.ai)
+        for (question, needed) in [("What did I tell you about my sister today?", ["18:40"]), ("Remind me, who was I going to meet tomorrow?", ["jussi"])] {
+            let result = await restarted.ask(question, location: nil)
+            total += 1
+            let answer = result.answer.lowercased()
+            let ok = needed.contains { answer.contains($0) }
+            if ok { passed += 1 }
+            lines.append("\(ok ? "PASS" : "FAIL") after restart “\(question)” → \(result.answer) · \(result.latencyMs) ms · \(result.trace ?? "")")
+        }
+        lines.insert("DIALOGTEST SUMMARY \(passed)/\(total)", at: 0)
+        for line in lines { Log.pipeline.info("\(line, privacy: .public)") }
+        try? lines.joined(separator: "\n").write(to: documents.appendingPathComponent("dialog_result.txt"), atomically: true, encoding: .utf8)
+        await engine.resetConversation()
+    }
+
+    /// Peak load (pipeline v2, §8): 64 frame analyses with pictures are sent at once on the
+    /// background lane while turn decisions are made on the user lane; what counts is how long
+    /// the user's calls take meanwhile. Writes `Documents/load_result.txt`.
+    static func runLoadTest(controller: CaptureController) async {
+        guard let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { return }
+        let ai = controller.ai
+        let store = controller.store
+        let frames = await store.recent(limit: 8).compactMap { record in (try? Data(contentsOf: store.frameURL(record))).map { (record.ocrText, $0) } }
+        guard !frames.isEmpty else { return }
+        func decide(_ question: String) async -> Int? {
+            await ai.beginQuestion()
+            defer { Task { await ai.endQuestion() } }
+            let began = ContinuousClock.now
+            let reply = try? await ai.chatTools(system: TurnTools.system,
+                                                user: TurnTools.user(question: question, now: Date(), conversation: [], safety: "", lookedSecondsAgo: nil),
+                                                tools: TurnTools.tools)
+            return reply == nil ? nil : (ContinuousClock.now - began).milliseconds
+        }
+        let questions = ["What was the phone number of the food truck?", "Where did I see a pharmacy?", "What is this?", "Thanks!",
+                         "Remind me to buy milk", "Did I see a church?", "What time is it in Tokyo?", "Where were the toilets?",
+                         "Read this for me", "What did I see most recently?", "Is the stove on?", "Which bakeries did I pass?"]
+        var quiet: [Int] = []
+        for q in questions.prefix(6) { if let ms = await decide(q) { quiet.append(ms) } }
+        let began = ContinuousClock.now
+        let background = Task { () -> (done: Int, failed: Int, ms: Int) in
+            await withTaskGroup(of: Bool.self) { group in
+                for i in 0..<64 {
+                    let (ocr, jpeg) = frames[i % frames.count]
+                    group.addTask {
+                        (try? await ai.chat(system: MemoryPrompts.extractionSystem, user: MemoryPrompts.extractionUser(ocr: ocr),
+                                            image: .init(jpeg: jpeg), jsonSchema: MemoryPrompts.extractionSchema, schemaName: "memory_record",
+                                            maxTokens: 2500, temperature: 0, background: true)) != nil
+                    }
+                }
+                var done = 0, failed = 0
+                for await ok in group { if ok { done += 1 } else { failed += 1 } }
+                return (done, failed, (ContinuousClock.now - began).milliseconds)
+            }
+        }
+        try? await Task.sleep(for: .milliseconds(300))
+        var busy: [Int] = []
+        var round = 0
+        while !background.isCancelled, round < 4 {
+            round += 1
+            await withTaskGroup(of: Int?.self) { group in
+                for q in questions.prefix(4) { group.addTask { await decide(q) } }
+                for await ms in group { if let ms { busy.append(ms) } }
+            }
+        }
+        let result = await background.value
+        func pct(_ v: [Int], _ p: Double) -> Int { v.isEmpty ? 0 : v.sorted()[min(v.count - 1, Int(Double(v.count) * p))] }
+        let lines = ["LOADTEST SUMMARY user-lane turn decision: quiet p50 \(pct(quiet, 0.5)) ms p90 \(pct(quiet, 0.9)) ms · under load p50 \(pct(busy, 0.5)) ms p90 \(pct(busy, 0.9)) ms (\(busy.count) calls, 4 at a time)",
+                     "background: 64 frame analyses with pictures sent at once (lane lets 8 through, 2 while a question is answered): \(result.done) done, \(result.failed) failed in \(result.ms) ms"]
+        for line in lines { Log.pipeline.info("\(line, privacy: .public)") }
+        try? lines.joined(separator: "\n").write(to: documents.appendingPathComponent("load_result.txt"), atomically: true, encoding: .utf8)
+    }
+
     static func runLookTest(controller: CaptureController, folder: String) async {
-        struct Case: Decodable { let file: String; let say: String; let must: [String] }
+        struct Case: Decodable { let file: String; let say: String; let must: [String]; var any: [String]?; var not: [String]? }
         guard let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { return }
         let dir = documents.appendingPathComponent(folder, isDirectory: true)
         guard let data = try? Data(contentsOf: dir.appendingPathComponent("tests.json")),
@@ -96,10 +205,11 @@ enum ConversationEval {
         let engine = controller.queryEngine
         let box = LiveBox()
         await engine.setLiveView { box.frame }
+        await engine.setCameraLive { box.frame != nil }
         var lines: [String] = []
         var passed = 0
         for test in cases {
-            await engine.clearConversation()
+            await engine.resetConversation()
             guard let raw = try? Data(contentsOf: dir.appendingPathComponent(test.file)),
                   let copy = await Task.detached(operation: { SafetyFrame.prepare(raw, maxPixel: 1536, fromPipeline: false) }).value else {
                 lines.append("SKIP \(test.file): could not be prepared")
@@ -108,7 +218,10 @@ enum ConversationEval {
             box.frame = (copy.jpeg, copy.ocr, Date())
             let result = await engine.ask(test.say, location: nil)
             let answer = result.answer.lowercased()
+            // must: all of them; any: at least one; not: none of them.
             let ok = test.must.allSatisfy { answer.contains($0.lowercased()) }
+                && (test.any.map { $0.contains { answer.contains($0.lowercased()) } } ?? true)
+                && !(test.not ?? []).contains { answer.contains($0.lowercased()) }
             if ok { passed += 1 }
             let line = "\(ok ? "PASS" : "FAIL") \(test.file) “\(test.say)” → [\(result.label.rawValue)] \(result.answer) · \(result.latencyMs) ms · \(result.trace ?? "")"
             lines.append(line)
@@ -124,12 +237,13 @@ enum ConversationEval {
         let engine = controller.queryEngine
         let box = LiveBox()
         await engine.setLiveView { box.frame }
+        await engine.setCameraLive { box.frame != nil }
         var report: [String] = []
         var passed = 0, total = 0, actionOK = 0
         var prepared: [String: (Data, String)] = [:]
 
         for (ci, conversation) in conversations.enumerated() {
-            await engine.clearConversation()
+            await engine.resetConversation()
             for turn in conversation {
                 if let file = turn.live {
                     if prepared[file] == nil, let raw = try? Data(contentsOf: dir.appendingPathComponent(file)),

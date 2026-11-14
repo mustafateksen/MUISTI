@@ -131,7 +131,10 @@ final class CaptureController {
             await enrichment.setOnEnriched { id, title, passage, vector, frame in
                 await safety.checkEnriched(recordID: id, title: title, passage: passage, vector: vector, frame: frame)
             }
-            await enrichment.setOnNoticed { noticed in await agent.noticed(noticed) }
+            await enrichment.setOnNoticed { noticed in
+                await safety.noteEnriched(noticed.states, at: noticed.seenAt)
+                await agent.noticed(noticed)
+            }
             await memoryPipeline.setOnTextStored { id, text, frame in
                 await safety.checkText(recordID: id, text: text, frame: frame)
             }
@@ -194,6 +197,12 @@ final class CaptureController {
             frames: { ids in await safety.frames(forEvents: ids) }
         )
         agent.safetyContext = { await safety.promptContext() }
+        let toolbox = ReadToolbox.make(memory: store, ai: ai, dialog: queryEngine.dialog, safety: safety, agent: agent, location: location)
+        agent.toolbox = toolbox
+        Task { [queryEngine] in await queryEngine.setToolbox(toolbox) }
+        agent.dialog = queryEngine.dialog
+        safety.eventLog = { [queryEngine] kind, state, detail in await queryEngine.dialog.logEvent(kind: kind, state: state, detail: detail) }
+        agent.dialogLines = { [queryEngine] now in await queryEngine.dialogLines(now: now) }
         agent.safetyEvents = { since in await safetyStore.events(since: since, limit: 3000) }
         let engine = queryEngine
         Task {
@@ -279,6 +288,23 @@ final class CaptureController {
         Task { [weak self] in
             await engineForLive.setLiveView { [weak self] in
                 await self?.liveView()
+            }
+            // Recording and a frame came in the last 15 s. (It read `isCapturing`, which is only
+            // true while a high-resolution photo is being taken, so the model was told "the
+            // camera is NOT sending pictures" while it was.)
+            await engineForLive.setSharpView { [weak self] in await self?.sharpView() }
+            await engineForLive.setCameraLive { [weak self] in
+                await MainActor.run {
+                    guard let self, self.isRunning else { return false }
+                    return self.lastFrame.map { Date().timeIntervalSince($0.at) < 15 } ?? false
+                }
+            }
+            await engineForLive.setNearbyPlaces { [weak self] words, fix in
+                guard await self?.agent.settings.mapSearch == true else { return [] }
+                let here = fix.clLocation
+                return await Places.search(words, near: here.coordinate, radius: 800).prefix(5).map {
+                    "- \($0.name), about \(Int(($0.location.distance(from: here) / 10).rounded()) * 10) m away"
+                }
             }
         }
         // Short press of the glasses' capture button (Meta takes its photo): keep this moment.
@@ -453,6 +479,16 @@ final class CaptureController {
         return (jpeg, newest.ocrText, newest.seenAt)
     }
 
+    /// A full-resolution photo of what the glasses see now, masked like every frame that
+    /// leaves the phone, at a size that keeps small print readable.
+    func sharpView() async -> (jpeg: Data, ocr: String, at: Date)? {
+        guard isRunning, let frame = await activeSource.requestHighResPhoto() else { return nil }
+        ingest(frame)
+        let jpeg = frame.jpeg
+        guard let copy = await Task.detached(priority: .userInitiated, operation: { SafetyFrame.prepare(jpeg, maxPixel: 2560) }).value else { return nil }
+        return (copy.jpeg, copy.ocr, frame.capturedAt)
+    }
+
     func requestHighRes() async {
         guard !isCapturing else { return }
         isCapturing = true
@@ -479,6 +515,7 @@ final class CaptureController {
         await safety.store.deleteAll()
         await safety.reload()
         await agent.deleteAll()
+        await queryEngine.resetConversation()
         notice = String(localized: "Deleted \(removed) records.")
         await refreshCounts()
     }
@@ -490,6 +527,10 @@ final class CaptureController {
 
     /// Frames from a background recording, every `step` seconds, through the normal pipeline
     /// with their real time and the nearest GPS fix. Dedup drops the repeats. File deleted after.
+    /// They are no blind spot for the agent any more (pipeline v2, A7): each kept frame is
+    /// enriched like any other, the states its analysis reads (a stove on, a door open) enter
+    /// the safety state machine with the time the frame was taken, and the judge looks at it
+    /// as a late record: what still matters comes as "at 14:20 I saw…", never as a live warning.
     private func ingestBackgroundSegment(_ segment: BackgroundSegment, step: Double = 2.5) async {
         let asset = AVURLAsset(url: segment.url)
         let generator = AVAssetImageGenerator(asset: asset)

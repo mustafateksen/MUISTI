@@ -45,8 +45,18 @@ final class AgentSettings {
         eveningDigest = flag("agent.digest", true)
         dailySpokenBudget = number("agent.budget2", 40)
         minGapMinutes = number("agent.minGap2", 2)
-        quietFromHour = number("agent.quietFrom", 22)
-        quietToHour = number("agent.quietTo", 7)
+        // No quiet hours unless the user sets them (15 Nov: with 22–7 as the default, Muisti
+        // said nothing by itself in the evening and at night — everything became a silent
+        // notification — which is when it was being tried). The old default is dropped once.
+        if !stored.bool(forKey: "agent.quietDefaultDropped") {
+            stored.set(true, forKey: "agent.quietDefaultDropped")
+            if number("agent.quietFrom", 22) == 22, number("agent.quietTo", 7) == 7 {
+                stored.removeObject(forKey: "agent.quietFrom")
+                stored.removeObject(forKey: "agent.quietTo")
+            }
+        }
+        quietFromHour = number("agent.quietFrom", 0)
+        quietToHour = number("agent.quietTo", 0)
         digestHour = number("agent.digestHour", 20)
     }
 

@@ -18,6 +18,9 @@ enum EvalSwitch {
     static let noUnsure = has("--no-unsure")
     /// `--no-look-again`: skip the visual re-check of answers.
     static let noLookAgain = has("--no-look-again")
+    /// `--think-look` / `--no-think-look`: thinking on (or off) for every look answer, whatever the turn decided.
+    static let thinkLook = has("--think-look")
+    static let noThinkLook = has("--no-think-look")
     /// `--no-second-search`: no second search round for questions the first one could not answer.
     static let noSecondSearch = has("--no-second-search")
     /// `--picture-cell=640`: cell size of the answer picture grid.

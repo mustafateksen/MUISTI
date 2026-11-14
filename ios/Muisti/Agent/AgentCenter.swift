@@ -34,7 +34,7 @@ final class AgentCenter {
     private(set) var lastJudgement = "—"
     private(set) var judgements = 0
     /// A frame is being weighed, or one is waiting for its turn (the remote driver waits for this).
-    var isWeighing: Bool { judging || waitingNotice != nil }
+    var isWeighing: Bool { judging || !waitingNotices.isEmpty }
 
     @ObservationIgnored private let ai: NemotronClient
     @ObservationIgnored private let memory: MemoryStore
@@ -49,7 +49,11 @@ final class AgentCenter {
     @ObservationIgnored private var timer: Task<Void, Never>?
     @ObservationIgnored private var cueVectors: [String: [Float]] = [:]
     @ObservationIgnored private var judging = false
-    @ObservationIgnored private var waitingNotice: EnrichmentWorker.Noticed?
+    /// Records waiting for their turn with the judge, oldest first. Every one gets looked at
+    /// (before, only the newest was kept and the ones in between were lost); one that has
+    /// waited long is still judged and reaches the user as a late note, not as speech.
+    @ObservationIgnored private var waitingNotices: [EnrichmentWorker.Noticed] = []
+    static let maxWaitingNotices = 40
     @ObservationIgnored private var navigator = Navigator()
     /// The walking route to the destination, when Apple Maps found one.
     private(set) var route: RouteGuide?
@@ -90,7 +94,9 @@ final class AgentCenter {
 
     static let snooze: TimeInterval = 30 * 60
     static let nearPlace: Double = 90
-    static let reviewEvery: TimeInterval = 10 * 60
+    /// Muisti's own look at how the day is going, while capturing and when something changed
+    /// (pipeline v2: every 2 minutes; it was 10 when the server was shared and slow).
+    static let reviewEvery: TimeInterval = 2 * 60
 
     init(ai: NemotronClient, memory: MemoryStore, location: LocationProvider, motion: MotionProvider) {
         self.ai = ai
@@ -269,6 +275,19 @@ final class AgentCenter {
 
     private func situation(now: Date) -> String {
         "Current local time: \(QueryEngine.promptTime(now))\nUser position now: \(location.positionText() ?? "unknown")\n" + promptContext(now: now)
+    }
+
+    /// The conversation with the user, as the question side reads it: the judge sees it too
+    /// ("I'm in a meeting", "I already took it", "I'm waiting for Ali" change what is worth saying).
+    @ObservationIgnored var dialogLines: (@Sendable (Date) async -> [String])?
+    /// The look-up tools of the agent loop.
+    @ObservationIgnored var toolbox: ReadToolbox?
+    /// Where a decision to stay silent is written into the conversation stream.
+    @ObservationIgnored var dialog: DialogStore?
+
+    private func situationWithTalk(now: Date) async -> String {
+        let talk = await dialogLines?(now) ?? []
+        return situation(now: now) + (talk.isEmpty ? "" : "\n\nConversation with the user so far (oldest first; what they told you counts — plans, what they already did, a wish not to be disturbed):\n" + talk.joined(separator: "\n"))
     }
 
     // MARK: Commands (the user's turn)
@@ -462,18 +481,26 @@ final class AgentCenter {
     func noticed(_ n: EnrichmentWorker.Noticed) async {
         guard settings.enabled else { return }
         guard !judging else {
-            waitingNotice = n   // the newest one is looked at when the current judgement is done
+            await dialog?.logEvent(kind: "record.noticed", state: "queued", detail: n.title, recordID: n.recordID)
+            waitingNotices.append(n)
+            if waitingNotices.count > Self.maxWaitingNotices {
+                let dropped = waitingNotices.removeFirst()
+                await dialog?.logEvent(kind: "record.noticed", state: "expired", detail: "more than \(Self.maxWaitingNotices) waiting", recordID: dropped.recordID)
+                await logSilent(topic: "notice", text: dropped.title ?? "", reason: "expired: more than \(Self.maxWaitingNotices) records were waiting for a judgement",
+                                recordID: dropped.recordID)
+            }
             return
         }
         judging = true
         defer {
             judging = false
-            if let next = waitingNotice {
-                waitingNotice = nil
+            if !waitingNotices.isEmpty {
+                let next = waitingNotices.removeFirst()
                 Task { await self.noticed(next) }
             }
         }
         let candidates = await matching(n)
+        await dialog?.logEvent(kind: "record.noticed", state: "handled", detail: n.title, recordID: n.recordID)
         var flag = n.attention.flatMap { $0 == "none" ? nil : $0 }
         // The enrichment did not flag it, but it looks like one of the things Muisti watches for anyway.
         if flag == nil, settings.noticing, let own = await standingMatch(n) { flag = "personal (\(own))" }
@@ -496,8 +523,12 @@ final class AgentCenter {
         } else {
             happened = "The glasses saw the frame below \(ago) seconds ago, and its analysis flagged it. Nothing was found that links it to the user's intents, destination, calendar or belongings: unless you see such a link yourself, or it is a physical danger where they are walking, stay silent."
         }
-        await judge(happened: happened, record: record, related: related, candidates: candidates, jpeg: n.jpeg,
-                    recordID: n.recordID, late: now.timeIntervalSince(n.seenAt) > 120, now: now)
+        // Recorded a while ago (the phone was in the pocket, or the frame waited in a queue)
+        // and only now looked at: it is still judged, as something from then.
+        let late = now.timeIntervalSince(n.seenAt) > 120
+        let then = late ? "\nThis frame is from \(QueryEngine.promptTime(n.seenAt)), \(QueryEngine.agoText(now.timeIntervalSince(n.seenAt))) ago: it was recorded then and is only being looked at now. If it still matters (something left on and not seen switched off since, a deadline not yet passed, an intent still open), say it as something you saw then, with its time; if its moment has passed, stay silent." : ""
+        await judge(happened: happened + then, record: record, related: related, candidates: candidates, jpeg: n.jpeg,
+                    recordID: n.recordID, late: late, now: now)
     }
 
     /// Open intents whose "on seeing" cue this record may be (embedding first, reranker for the
@@ -572,8 +603,9 @@ final class AgentCenter {
                        recordID: Int64? = nil, late: Bool = false, expires: Date? = nil, now: Date = Date()) async {
         guard await ai.hasKey else { return }
         let started = ContinuousClock.now
-        let user = Notice.user(situation: situation(now: now), happened: happened, record: record, related: related, candidates: candidates)
-        guard let outcome = await Notice.judge(ai, user: user, jpeg: jpeg, language: language(), recordID: recordID) else { return }
+        let asked = Notice.user(situation: await situationWithTalk(now: now), happened: happened, record: record, related: related, candidates: candidates)
+        guard let outcome = await Notice.judge(ai, user: asked, jpeg: jpeg, language: language(), recordID: recordID, toolbox: toolbox) else { return }
+        let user = asked + outcome.lookedUp
         judgements += 1
         let ms = (ContinuousClock.now - started).milliseconds
         for id in outcome.completed {
@@ -639,6 +671,8 @@ final class AgentCenter {
 
     private func logSilent(topic: String, text: String, reason: String, recordID: Int64?) async {
         Trace.note("agent silent [\(topic)] \(reason)")
+        await dialog?.append(DialogTurn(at: Date(), speaker: .note, text: "stayed silent about \(topic): \(reason.prefix(200))",
+                                        recordIDs: recordID.map { $0 > 0 ? [$0] : [] } ?? []))
         await store.insert(Intervention(source: "agent", topic: topic, urgency: .fyi, level: .silent, text: String(text.prefix(300)),
                                         recordID: recordID, reason: reason))
     }

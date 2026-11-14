@@ -11,6 +11,8 @@ import Foundation
 
 enum SafetySource: String, Codable, Sendable {
     case vision, user_voice, user_confirmed, system
+    /// Read by the frame analysis of a stored memory frame (no safety look of its own).
+    case enrichment
 }
 
 enum SafetyEventKind: String, Codable, Sendable {

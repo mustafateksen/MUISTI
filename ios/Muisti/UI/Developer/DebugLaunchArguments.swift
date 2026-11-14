@@ -129,6 +129,12 @@ enum DebugLaunchArguments {
                 // `--look=<folder in Documents>`: questions about photos given as the live view.
                 let folder = ProcessInfo.processInfo.arguments.first { $0.hasPrefix("--look=") }.map { String($0.dropFirst(7)) } ?? "looktest"
                 await ConversationEval.runLookTest(controller: controller, folder: folder)
+            case "loadtest": await ConversationEval.runLoadTest(controller: controller)
+            case "dialogtest": await ConversationEval.runDialogTest(controller: controller)
+            case "actiontest":
+                // `Documents/actiontest/cases.json`: frames of one moment, what the strip look
+                // reports and what the "did I do it" check says about a claim.
+                await ActionTest.run(controller: controller)
             case "privacycheck":
                 // Photos in Documents/agentset: `priv_…` must be withheld, the others prepared.
                 // Touches no stored data; writes Documents/privacy_result.txt.

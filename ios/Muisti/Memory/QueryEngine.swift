@@ -75,28 +75,105 @@ actor QueryEngine {
         var looked = false
     }
     private var conversation: [Turn] = []
+    /// The conversation on disk (pipeline v2): every turn in both directions, summaries of
+    /// older turns and Muisti's own short notes. What the models read as "conversation so far"
+    /// is built from it (`ContextBuilder`), so it survives a restart and is not cut to the last
+    /// few minutes; the array above only serves the mechanics of follow-ups (which records the
+    /// last reply relied on, whether it looked).
+    nonisolated let dialog = DialogStore()
+    /// Writes to the dialog in the order they were made; readers wait for the last one.
+    private var dialogWrites: Task<Int64, Never>?
+    private var dialogLoaded = false
+    /// The tool this turn ended in, written next to the reply.
+    private var lastTool: String?
+    static let spokeFirst = "(Muisti spoke first)"
 
     private func remember(_ turn: Turn) {
         conversation.append(turn)
-        if conversation.count > 6 { conversation.removeFirst(conversation.count - 6) }
+        if conversation.count > 12 { conversation.removeFirst(conversation.count - 12) }
+        let dialog = self.dialog, previous = dialogWrites, tool = lastTool, ai = self.ai
+        dialogWrites = Task {
+            _ = await previous?.value
+            if turn.question != Self.spokeFirst {
+                await dialog.append(DialogTurn(at: turn.at, speaker: .user, text: turn.question))
+            }
+            let id = await dialog.append(DialogTurn(at: turn.at, speaker: turn.question == Self.spokeFirst ? .proactive : .muisti,
+                                                    text: turn.answer, tool: tool, recordIDs: turn.ids, looked: turn.looked))
+            Task { await ContextBuilder.summarizeIfNeeded(dialog, ai: ai) }
+            return id
+        }
+    }
+
+    /// After a restart: the last turns come back from disk, so a follow-up still knows what
+    /// the previous reply relied on.
+    private func loadDialogIfNeeded() async {
+        guard !dialogLoaded else { return }
+        dialogLoaded = true
+        guard conversation.isEmpty else { return }
+        var question: DialogTurn?
+        var restored: [Turn] = []
+        for turn in await dialog.latest(limit: 16) {
+            switch turn.speaker {
+            case .user: question = turn
+            case .muisti:
+                restored.append(Turn(question: question?.text ?? "", answer: turn.text, ids: turn.recordIDs, at: turn.at, looked: turn.looked))
+                question = nil
+            case .proactive: restored.append(Turn(question: Self.spokeFirst, answer: turn.text, ids: turn.recordIDs, at: turn.at))
+            case .note: break
+            }
+        }
+        if conversation.isEmpty { conversation = Array(restored.suffix(12)) }
+    }
+
+    /// "Conversation so far" for a prompt: summaries, Muisti's notes and the latest turns.
+    func dialogLines(now: Date = Date()) async -> [String] {
+        _ = await dialogWrites?.value
+        return await ContextBuilder.conversation(dialog, now: now)
     }
 
     /// Muisti spoke first (a warning or a yes/no question).
-    func noteMuistiSaid(_ text: String) { remember(Turn(question: "(Muisti spoke first)", answer: text, ids: [], at: Date())) }
+    func noteMuistiSaid(_ text: String) {
+        lastTool = nil
+        remember(Turn(question: Self.spokeFirst, answer: text, ids: [], at: Date()))
+    }
 
     /// The reply actually given (a warning may replace the model's acknowledgement).
     func noteExchange(question: String, answer: String) {
         if let last = conversation.last, last.question == question {
             conversation[conversation.count - 1].answer = answer
+            let dialog = self.dialog, previous = dialogWrites
+            dialogWrites = Task {
+                let id = await previous?.value ?? 0
+                if id > 0 { await dialog.setText(id: id, answer) }
+                return id
+            }
         } else {
             remember(Turn(question: question, answer: answer, ids: [], at: Date()))
         }
     }
 
-    /// Starts a new conversation (the chat was cleared).
+    /// Starts a new conversation (the chat was cleared): the turns are no longer read word for
+    /// word; what was summarised before stays.
     func clearConversation() {
         conversation = []
         lastLive = nil
+        dialogLoaded = true
+        let dialog = self.dialog, previous = dialogWrites
+        dialogWrites = Task {
+            let id = await previous?.value ?? 0
+            await dialog.startSession()
+            return id
+        }
+    }
+
+    /// Forgets the whole conversation, summaries and notes included (delete everything; tests).
+    func resetConversation() async {
+        conversation = []
+        lastLive = nil
+        dialogLoaded = true
+        _ = await dialogWrites?.value
+        dialogWrites = nil
+        await dialog.deleteAll()
     }
 
     func setSafety(_ bridge: SafetyBridge) { safety = bridge }
@@ -105,6 +182,19 @@ actor QueryEngine {
     private var placeResolver: (@Sendable (String, LocationFix?) async -> MemoryArea?)?
     func setPlaceResolver(_ resolver: @escaping @Sendable (String, LocationFix?) async -> MemoryArea?) { placeResolver = resolver }
     private var areas: [String: MemoryArea] = [:]
+    /// What the map shows around a position for some words ("café"), as lines for the model.
+    private var nearbyPlaces: (@Sendable (String, LocationFix) async -> [String])?
+    func setNearbyPlaces(_ search: @escaping @Sendable (String, LocationFix) async -> [String]) { nearbyPlaces = search }
+    /// The look-up tools of the agent loop (earlier conversation, object states, log, map).
+    private var toolbox: ReadToolbox?
+    func setToolbox(_ box: ReadToolbox) { toolbox = box }
+    /// A full-resolution photo of the present view (slower than a stream frame, and the
+    /// glasses make their capture sound): for a look whose first frame was too small to read.
+    private var sharpView: (@Sendable () async -> (jpeg: Data, ocr: String, at: Date)?)?
+    func setSharpView(_ provider: @escaping @Sendable () async -> (jpeg: Data, ocr: String, at: Date)?) { sharpView = provider }
+    /// Whether the glasses are sending pictures now (nil: not known, as in tests).
+    private var cameraLive: (@Sendable () async -> Bool)?
+    func setCameraLive(_ live: @escaping @Sendable () async -> Bool) { cameraLive = live }
 
     private func area(named name: String, here: LocationFix?) async -> MemoryArea? {
         let key = name.lowercased()
@@ -126,6 +216,14 @@ actor QueryEngine {
     /// 80-question simulator set: questions about things never seen topped out at -2.94;
     /// wrongly refused answers had -2.04…-2.71.
     static let secondLookLogit = -2.8
+    /// Whether the model thinks first when the turn says an answer needs working out. Off:
+    /// measured 15 Nov on the look set, thinking took the same sums from 2–3 s to 10–13 s and
+    /// solved nothing that was not already solved without it (11 of 11); on the phone it read
+    /// as "it cannot solve it and waits forever". The switch and the turn's `reasoning_needed`
+    /// stay, for a model or a question set where it pays.
+    static let thinkingForWorkedAnswers = false
+    /// Below this, the reranker saw nothing in a record that answers the question.
+    static let unsupportedLogit = -3.1
     /// Added to the reranker's logit for records made where the user is now (same venue).
     static let sameVenueBonus = 0.75
     /// Groups sent to the reranker.
@@ -146,9 +244,15 @@ actor QueryEngine {
         var decision: TurnTools.Decision?
         var trace: [String] = []
         /// The place the search was limited to, and how many records were made there.
-        var place: (area: MemoryArea, records: Int)?
+        var place: (area: MemoryArea, records: Int, ids: Set<Int64>)?
         /// The words the memory was searched with.
         var query: String?
+        /// Places the map shows around the user (a question about the surroundings).
+        var nearby: [String] = []
+        /// The model asked to look and the glasses sent no picture.
+        var noLiveView = false
+        /// What the model looked up before it decided (the results as it read them).
+        var lookedUp = ""
     }
     private var prepared: (question: String, at: Date, task: Task<Retrieval, Never>)?
 
@@ -177,17 +281,21 @@ actor QueryEngine {
         let ai = self.ai
         // The turn decision (reply directly, look, search, a command), in parallel with the
         // memory search: by the time the model has asked for the memory, it is usually there.
+        await loadDialogIfNeeded()
         let recent = conversation.filter { now.timeIntervalSince($0.at) < 15 * 60 }.suffix(4)
-        let talk = recent.map { "user: \($0.question)\nMuisti: \($0.answer)" }
+        let talk = await dialogLines(now: now)
         let looked = recent.last?.looked == true ? lastLive.map { Int(now.timeIntervalSince($0.at)) }.flatMap { $0 < 90 ? $0 : nil } : nil
         let safetyBridge = safety
         let hasKey = await ai.hasKey
         let place = position
-        let decideTask = Task { () -> (decision: TurnTools.Decision?, ms: Int) in
-            guard hasKey else { return (nil, 0) }
+        let camera = cameraLive
+        let box = toolbox
+        let decideTask = Task { () -> (decision: TurnTools.Decision?, ms: Int, looked: AgentLoop.Outcome?) in
+            guard hasKey else { return (nil, 0, nil) }
             let safetyText = await safetyBridge?.context() ?? ""
             return await Self.decide(ai, user: TurnTools.user(question: trimmed, now: now, conversation: Array(talk),
-                                                              safety: safetyText, lookedSecondsAgo: looked, position: place))
+                                                              safety: safetyText, lookedSecondsAgo: looked, position: place,
+                                                              cameraLive: await camera?()), toolbox: box)
         }
         let findTask = Task { await self.find(trimmed, location: location) }
         // A first message is complete by itself: its rerank starts at once. In a conversation
@@ -197,12 +305,16 @@ actor QueryEngine {
             let found = await findTask.value
             return await self.reranked(found, query: trimmed, location: location)
         } : nil
-        let (decision, decideMs) = await withTaskCancellationHandler { await decideTask.value } onCancel: {
+        let (decision, decideMs, loop) = await withTaskCancellationHandler { await decideTask.value } onCancel: {
             decideTask.cancel()
             findTask.cancel()
             searchTask?.cancel()
         }
         out.decision = decision
+        if let loop, !loop.lookedUp.isEmpty {
+            out.lookedUp = loop.shown
+            out.trace.append("looked up: " + loop.lookedUp.joined(separator: ", "))
+        }
         switch decision {
         case .reply: out.trace.append("turn: reply \(decideMs) ms")
         case .look: out.trace.append("turn: tool look_now \(decideMs) ms")
@@ -271,15 +383,34 @@ actor QueryEngine {
             let began = ContinuousClock.now
             within = await area(named: place, here: location)
             if let within {
-                let count = await store.ids(within: within).count
-                out.place = (within, count)
+                let made = await store.ids(within: within)
+                let count = made.count
+                out.place = (within, count, Set(made))
                 out.trace.append("place “\(place)” r \(Int(within.radius)) m: \(count) records · \((ContinuousClock.now - began).milliseconds) ms")
             } else {
                 out.trace.append("place “\(place)” not located")
             }
         }
+        // The place is the filter now: in the words searched for it only pulls towards records
+        // whose text happens to carry the name.
+        var query = query
+        if let place, within != nil, let range = query.range(of: place, options: [.caseInsensitive, .diacriticInsensitive]) {
+            let rest = query.replacingCharacters(in: range, with: " ").split(separator: " ").joined(separator: " ")
+            if rest.count >= 3 { query = rest }
+        }
         out.query = query
+        // About the surroundings: what the map shows around here is fetched alongside.
+        var mapTask: Task<[String], Never>?
+        if place?.caseInsensitiveCompare("here") == .orderedSame, let location, let nearbyPlaces {
+            let words = query
+            mapTask = Task { await withTimeout(seconds: 1.5) { await nearbyPlaces(words, location) } ?? [] }
+        }
+        defer { mapTask?.cancel() }
         let ranked = await reranked(await find(query, location: location, from: from, to: to, within: within), query: query, location: location)
+        if let mapTask {
+            out.nearby = await mapTask.value
+            if !out.nearby.isEmpty { out.trace.append("map: \(out.nearby.count) places nearby") }
+        }
         out.groups = ranked.groups
         out.trace += ranked.trace
     }
@@ -392,15 +523,19 @@ actor QueryEngine {
     }
 
     /// The turn call with native tool calling, raced over both hosts.
-    private static func decide(_ ai: NemotronClient, user: String) async -> (decision: TurnTools.Decision?, ms: Int) {
+    private static func decide(_ ai: NemotronClient, user: String, toolbox: ReadToolbox? = nil) async -> (decision: TurnTools.Decision?, ms: Int, looked: AgentLoop.Outcome?) {
         let began = ContinuousClock.now
+        // The agent loop: the model may look things up first (earlier conversation, the state
+        // of a thing, the log, the map), then ends in one of the turn's own tools.
         let outcome = await hedged(ai, seconds: 8) { host in
-            try await ai.chatTools(system: TurnTools.system, user: user, tools: TurnTools.tools, route: host)
+            try await AgentLoop.run(ai, system: TurnTools.system, user: user, decide: TurnTools.tools, reads: AgentLoop.turnReads,
+                                    toolbox: toolbox, route: host)
         }
         if case .failure(let error) = outcome.result {
             Log.net.info("turn call failed: \((error as? LocalizedError)?.errorDescription ?? error.localizedDescription, privacy: .public)")
         }
-        return ((try? outcome.result.get()).map(TurnTools.decision), (ContinuousClock.now - began).milliseconds)
+        let loop = try? outcome.result.get()
+        return (loop.map { TurnTools.decision(from: $0.reply) }, (ContinuousClock.now - began).milliseconds, loop)
     }
 
     func ask(_ question: String, location: LocationFix?, position: String? = nil, now: Date = Date()) async -> AskResult {
@@ -424,7 +559,9 @@ actor QueryEngine {
         let safetyBridge = safety
         async let safetyTextAsync = safetyBridge?.context() ?? ""
         // Follow-ups: the last few turns, and the live frame of a look that just happened.
+        await loadDialogIfNeeded()
         let turns = Array(conversation.filter { now.timeIntervalSince($0.at) < 15 * 60 }.suffix(4))
+        let talkLines = await dialogLines(now: now)
         let carried = turns.last?.looked == true ? lastLive.flatMap { now.timeIntervalSince($0.at) < 90 ? $0 : nil } : nil
 
         // 1–4. Turn decision + query vector + search + rerank. Already running if the same
@@ -442,6 +579,14 @@ actor QueryEngine {
         prepared = nil
         retrieval.trace.forEach { trace.add($0) }
         let groups = retrieval.groups
+        switch retrieval.decision {
+        case .reply: lastTool = "say"
+        case .look: lastTool = "look_now"
+        case .search: lastTool = "search_memory"
+        case .forget: lastTool = "forget_recent"
+        case .command(_, _, let tool), .agent(_, _, let tool): lastTool = tool
+        case nil: lastTool = nil
+        }
         let isLook: Bool
         switch retrieval.decision {
         case .reply(let text):
@@ -460,6 +605,8 @@ actor QueryEngine {
                 return result(trimmed, Self.unclearText, .unknown, [], true, started, nil, language, trace)
             }
             let removed = await store.delete(since: now.addingTimeInterval(-Double(minutes) * 60))
+            _ = await dialogWrites?.value
+            await dialog.delete(since: now.addingTimeInterval(-Double(minutes) * 60))
             await safetyBridge?.forget(now.addingTimeInterval(-Double(minutes) * 60))
             trace.add("forget: \(minutes) min, \(removed) records deleted")
             var r = result(trimmed, reply, .seen, [], true, started, nil, language, trace)
@@ -500,7 +647,10 @@ actor QueryEngine {
         rankedForResult = groups.prefix(Self.rerankDepth).map { $0.allRecords.map(\.id) }
         // Follow-ups: the records the previous reply relied on stay in view ("what was next to
         // it?" retrieves nothing about "it" by itself).
-        let carriedIDs = turns.last?.ids ?? []
+        // A question about one place: nothing made elsewhere comes along (not the previous
+        // answer's records, not the newest frames, not the latest episode).
+        let placeIDs = retrieval.place?.ids
+        let carriedIDs = (turns.last?.ids ?? []).filter { placeIDs?.contains($0) ?? true }
         if !carriedIDs.isEmpty {
             let present = Set(context.flatMap(\.allRecords).map(\.id))
             let missing = carriedIDs.filter { !present.contains($0) }
@@ -524,7 +674,7 @@ actor QueryEngine {
             where !episodeIDs.contains(id) && episodeIDs.count < Self.episodeContext + 1 { episodeIDs.append(id) }
         // The most recent episode is always there: "what did I just see / where am I now" need
         // the latest frames whatever the search ranked first.
-        if let latest = await store.episodes(limit: 1).first, !episodeIDs.contains(latest.id) {
+        if placeIDs == nil, let latest = await store.episodes(limit: 1).first, !episodeIDs.contains(latest.id) {
             episodeIDs.append(latest.id)
         }
         let episodes = await store.episodes(episodeIDs)
@@ -552,7 +702,7 @@ actor QueryEngine {
         let answerStarted = ContinuousClock.now
         let language = Self.detectLanguage(trimmed)
         // Newest frames first, so recency never has to be worked out from relevance order.
-        let latest = await store.recent(limit: 5).map { r -> String in
+        let latest = await store.recent(limit: 5).filter { placeIDs?.contains($0.id) ?? true }.map { r -> String in
             let ago = max(0, Int(now.timeIntervalSince(r.seenAt) / 60))
             let what = [r.kind, r.name].compactMap { $0 }.joined(separator: " ")
             return "- id \(r.id), minutes_ago: \(ago), \(Self.promptTime(r.seenAt))" + (what.isEmpty ? "" : ", \(what)")
@@ -571,7 +721,8 @@ actor QueryEngine {
            !pictureRecords.contains(where: { $0.id == pictured.id }) {
             extras.append(pictured)
         }
-        if let newest = await self.store.recent(limit: 1).first, !pictureRecords.contains(where: { $0.id == newest.id }),
+        if let newest = await self.store.recent(limit: 1).first, placeIDs?.contains(newest.id) ?? true,
+           !pictureRecords.contains(where: { $0.id == newest.id }),
            !extras.contains(where: { $0.id == newest.id }) {
             extras.append(newest)
         }
@@ -601,15 +752,35 @@ actor QueryEngine {
         // number read from a sign): it counts as shown to the model for the evidence check.
         let place = self.position
         if let place { safetyText += "\n" + place }
+        // What was said in the conversation may be said back (a time the user mentioned is
+        // not a number read from a sign): it counts as shown for the evidence check.
+        if !talkLines.isEmpty { safetyText += "\n" + talkLines.joined(separator: "\n") }
         var user = MemoryPrompts.answerUser(question: trimmed, language: language, now: now, position: place,
-                                            records: context.map { Self.describe($0, now: now, position: position[$0.record.id]) },
+                                            records: context.map { hit in
+                                                Self.describe(hit, now: now, position: position[hit.record.id])
+                                                    + (retrieval.place.map { "\nMade in: \($0.area.name) (by the phone's position)" } ?? "")
+                                            },
                                             episodes: episodeText, latest: latest, safety: safetyText, picture: pictureCaption,
-                                            conversation: turns.map { "user: \($0.question)\nMuisti: \($0.answer)" + ($0.ids.isEmpty ? "" : " [relied on record ids \($0.ids.map(String.init).joined(separator: ", "))]") })
+                                            conversation: talkLines)
         if let place = retrieval.place {
             user += "\n\nPlace asked about: \(place.area.name). The search was limited to records made there: "
                 + (place.records == 0
                    ? "there are none, the glasses recorded nothing in that place. The whole answer is one sentence saying that you did not see it there (BILMIYORUM, found false, used_ids []). Naming something seen in another place is a mistake here, however similar it is."
-                   : "\(place.records) record(s) were made there, so never say you have nothing from there. Every record listed under Records was made in \(place.area.name) (the phone's position says so, whatever the record's own text or street says), and only those; frames listed elsewhere in this message may be from other places and do not answer a question about \(place.area.name). If none of them shows what is asked, the whole answer is one sentence saying you did not see it there.")
+                   : "you do have records from there (\(place.records)), so never say you have none. Every record listed under Records was made in \(place.area.name) (the phone's position says so, whatever the record's own text or street says), and only those; frames listed elsewhere in this message may be from other places and do not answer a question about \(place.area.name). If none of them shows what is asked, the whole answer is one sentence saying you did not see it there.")
+        }
+        if !retrieval.lookedUp.isEmpty {
+            user += "\n\nWhat you looked up before answering (it counts as known to you; say where it comes from — the log, the map, what the user said):" + retrieval.lookedUp
+            safetyText += retrieval.lookedUp
+        }
+        if retrieval.noLiveView {
+            user += "\n\nNO LIVE VIEW: you wanted to look through the glasses, but their camera is not sending pictures right now. "
+                + "If the records, the position or the map results answer the question (what is around here, what was seen earlier), answer from them. "
+                + "If it can only be answered by looking (what is this, read this), say in one short sentence that the glasses' camera is not sending pictures right now."
+        }
+        if !retrieval.nearby.isEmpty {
+            user += "\n\nMap results near the user's position now (from Apple Maps, NOT seen by the glasses; nearest first):\n" + retrieval.nearby.joined(separator: "\n")
+                + "\nWhen the user asks what is nearby or around here and the records do not show it, you may name up to three of these, saying plainly that the map shows them and that you have not seen them (label BILMIYORUM, found false: this is the one case where a not-seen answer says more than one sentence). Distances as written."
+            safetyText += "\n" + retrieval.nearby.joined(separator: "\n")
         }
         var image = picture.map { NemotronClient.ImagePart(jpeg: $0) }
         // Follow-up right after a look ("what does it say exactly?", "is it on?"): the same live
@@ -640,11 +811,18 @@ actor QueryEngine {
             if let fresh = taken?.live { lastLive = fresh }
             let cached = taken?.live == nil ? lastLive.flatMap { Date().timeIntervalSince($0.at) < 30 ? $0 : nil } : nil
             guard let live = taken?.live ?? cached else {
-                trace.add("look_now: no live frame")
-                var r = result(trimmed, String(localized: "I can't see anything right now: the glasses aren't sending images."), .unknown, [], true,
-                               started, nil, language?.code, trace)
-                r.isCommand = true
-                return r
+                // No picture comes from the glasses: that is told to the model as the result of
+                // the look, and the question goes on with what the memory, the position and the
+                // map hold (before, a fixed "I can't see anything" ended the turn here, also for
+                // "is there a café nearby", and came back on every rephrasing).
+                trace.add("look_now: no live frame → memory")
+                var blind = retrieval
+                blind.decision = .search(retrieval.query ?? trimmed, place: nil)
+                blind.noLiveView = true
+                if blind.nearby.isEmpty, let location, let nearbyPlaces {
+                    blind.nearby = await withTimeout(seconds: 1.5) { await nearbyPlaces(trimmed, location) } ?? []
+                }
+                return await run(question, location: location, now: now, started: started, second: blind, trace: trace)
             }
             trace.add(cached == nil ? "look_now" : "look_now (reused frame)")
             lookedLive = true
@@ -659,13 +837,18 @@ actor QueryEngine {
             image = NemotronClient.ImagePart(jpeg: live.jpeg)
             safetyText += "\n" + live.ocr + "\n" + when
         }
-        var answered = await Self.answer(ai, user: user, image: image, looking: lookedLive, trace: &trace)
+        var thinking = false
+        if case .look(let reasoning) = retrieval.decision, lookedLive, (Self.thinkingForWorkedAnswers && reasoning) || EvalSwitch.thinkLook {
+            thinking = true
+            trace.add("thinking on")
+        }
+        var answered = await Self.answer(ai, user: user, image: image, looking: lookedLive, thinking: thinking, trace: &trace)
         if case .failure = answered, image != nil {
             // A host that refuses the picture must not cost the answer: once more, text only.
             trace.add("retry without picture")
             answered = await Self.answer(ai, user: user, image: nil, looking: lookedLive, trace: &trace)
         }
-        let draft: AnswerDraft
+        var draft: AnswerDraft
         switch answered {
         case .success(let value):
             draft = value
@@ -675,6 +858,28 @@ actor QueryEngine {
             return offline(trimmed, context, started, note: String(localized: "Nemotron didn't answer (\(why)); local search."), trace)
         }
         trace.add("answer \((ContinuousClock.now - answerStarted).milliseconds) ms\(image == nil ? "" : " · picture")")
+
+        // Looked, and what was asked about is too small to read in the stream's frame (a
+        // problem on a laptop across the table): one full-resolution photo from the glasses,
+        // and the same question again from it. Still unreadable: the model's own sentence
+        // asking for a closer look stands.
+        if isLook, lookedLive, draft.too_small == true, let sharpView, !Task.isCancelled {
+            let began = ContinuousClock.now
+            if let sharp = await withTimeout(seconds: 6, { await sharpView() }) ?? nil {
+                trace.add("sharper photo \((ContinuousClock.now - began).milliseconds) ms")
+                lastLive = sharp
+                let closer = user + "\n\nA SHARPER PHOTO of the same view was just taken for this question and is the attached picture now (full resolution). "
+                    + "Text read on it by the phone: \(sharp.ocr.isEmpty ? "(none)" : sharp.ocr). Answer the question from it."
+                safetyText += "\n" + sharp.ocr
+                image = NemotronClient.ImagePart(jpeg: sharp.jpeg)
+                if case .success(let second) = await Self.answer(ai, user: closer, image: image, looking: true, thinking: thinking, trace: &trace) {
+                    draft = second
+                    user = closer
+                }
+            } else {
+                trace.add("sharper photo: none")
+            }
+        }
 
         // One repair round: tell the model exactly which check failed and let it answer again.
         var final = draft
@@ -709,8 +914,8 @@ actor QueryEngine {
         // (Not for a place that holds no records at all: other words find nothing there either.)
         let notFound = final.action == .answer
             && (AnswerLabel(rawValue: final.label.uppercased()) != .seen || final.found == false)
-        if notFound, second == nil, !isLook, !lookedLive, retrieval.place?.records != 0, !EvalSwitch.noSecondSearch, !Task.isCancelled,
-           let next = await again(trimmed, first: retrieval, conversation: turns.map { "user: \($0.question)\nMuisti: \($0.answer)" },
+        if notFound, second == nil, !isLook, !lookedLive, retrieval.place?.records != 0, retrieval.nearby.isEmpty, !EvalSwitch.noSecondSearch, !Task.isCancelled,
+           let next = await again(trimmed, first: retrieval, conversation: talkLines,
                                   location: location, now: now) {
             next.trace.forEach { trace.add($0) }
             var nextRound = next
@@ -747,7 +952,12 @@ actor QueryEngine {
         let ocr = evidence.map(Self.mergedOCR).joined(separator: "\n")
         let readFromText = draft.quotes.contains { !$0.hasPrefix("(") && EvidenceRule.quoteSupported($0, in: ocr) }
             || !EvidenceRule.numberRuns(draft.answer).isEmpty
-        guard !readFromText else { return nil }
+        // "Seen", although the search itself found nothing it thought relevant among what the
+        // answer cites: looked at again whatever the quotes say (a true quote of a place name
+        // carried a made-up "zebras at the museum" past this check on 14 Nov).
+        let best = evidence.compactMap(\.signals.rerankLogit).max()
+        let unsupported = (best ?? -.infinity) < Self.unsupportedLogit
+        guard !readFromText || unsupported else { return nil }
         // Every frame the answer cites, not just the first: "what came right after the pharmacy"
         // cites the pharmacy and the thing after it, and only one of the two photos shows the
         // thing claimed. (With the first photo alone, such answers were withdrawn as soon as the
@@ -789,28 +999,9 @@ actor QueryEngine {
         if EvalSwitch.noLookAgain { return nil }
         guard draft.action == .answer, AnswerLabel(rawValue: draft.label.uppercased()) == .seen, draft.found != false else { return nil }
         let jpegs = frames.suffix(8).compactMap { try? Data(contentsOf: $0) }
-        guard let last = jpegs.last else { return nil }
-        let ai = ai
-        let several = await ai.multiImageChat && jpegs.count > 1
-        let sheet = jpegs.count > 1 ? Self.montage(jpegs: Array(jpegs.suffix(4)), cell: 768) : last
-        let answerText = draft.answer
-        @Sendable func ask(separate: Bool) async throws -> DoneCheck.Verdict {
-            let shown = separate ? jpegs.count : min(jpegs.count, 4)
-            let user = "Question: \(question)\nAnswer: \(answerText)\n"
-                + (shown > 1 ? "The \(shown) photos are in time order, 1 (oldest) to \(shown) (the moment of the log entry)\(separate ? "" : ", numbered on one sheet")." : "One photo: the moment of the log entry.")
-            return try await ai.chatJSON(DoneCheck.Verdict.self, system: DoneCheck.system, user: user,
-                                         image: .init(jpeg: separate ? last : (sheet ?? last)),
-                                         earlierImages: separate ? jpegs.dropLast().map { NemotronClient.ImagePart(jpeg: $0) } : [],
-                                         jsonSchema: DoneCheck.schema, schemaName: "done_check", maxTokens: 160, temperature: 0)
-        }
         let began = ContinuousClock.now
-        let verdict = await withTimeout(seconds: 5) { () -> DoneCheck.Verdict in
-            do { return try await ask(separate: several) } catch NemotronClient.NemotronError.http(400, _) where several {
-                return try await ask(separate: false)
-            }
-        }
-        guard let verdict else {
-            trace.add("done check: no verdict")
+        guard let verdict = await Self.doneVerdict(ai, question: question, answer: draft.answer, jpegs: jpegs) else {
+            if !jpegs.isEmpty { trace.add("done check: no verdict") }
             return nil
         }
         trace.add("done check (\(jpegs.count) frames): \(verdict.verdict) \((ContinuousClock.now - began).milliseconds) ms")
@@ -822,20 +1013,43 @@ actor QueryEngine {
         return honest
     }
 
+    /// The frames of a log entry, in time order, against what an answer says was done.
+    static func doneVerdict(_ ai: NemotronClient, question: String, answer: String, jpegs: [Data]) async -> DoneCheck.Verdict? {
+        guard let last = jpegs.last else { return nil }
+        let several = await ai.multiImageChat && jpegs.count > 1
+        let sheet = jpegs.count > 1 ? Self.montage(jpegs: Array(jpegs.suffix(4)), cell: 768) : last
+        @Sendable func ask(separate: Bool) async throws -> DoneCheck.Verdict {
+            let shown = separate ? jpegs.count : min(jpegs.count, 4)
+            let user = "Question: \(question)\nAnswer: \(answer)\n"
+                + (shown > 1 ? "The \(shown) photos are in time order, 1 (oldest) to \(shown) (the moment of the log entry)\(separate ? "" : ", numbered on one sheet")." : "One photo: the moment of the log entry.")
+            return try await ai.chatJSON(DoneCheck.Verdict.self, system: DoneCheck.system, user: user,
+                                         image: .init(jpeg: separate ? last : (sheet ?? last)),
+                                         earlierImages: separate ? jpegs.dropLast().map { NemotronClient.ImagePart(jpeg: $0) } : [],
+                                         jsonSchema: DoneCheck.schema, schemaName: "done_check", maxTokens: 160, temperature: 0)
+        }
+        return await withTimeout(seconds: 5) { () -> DoneCheck.Verdict in
+            do { return try await ask(separate: several) } catch NemotronClient.NemotronError.http(400, _) where several {
+                return try await ask(separate: false)
+            }
+        }
+    }
+
     /// The answer call, raced over both hosts of the same model (`hedged`): the host that is
     /// fast right now answers; the other joins after a short wait if the first stays silent.
     /// (Before: Verda got 12 s, then NVIDIA build 20 s, one after the other.)
     private static func answer(_ ai: NemotronClient, user: String, image: NemotronClient.ImagePart? = nil, looking: Bool = false,
-                               trace: inout Trace) async -> Result<AnswerDraft, Error> {
+                               thinking: Bool = false, trace: inout Trace) async -> Result<AnswerDraft, Error> {
         let began = ContinuousClock.now
         // Looking through the glasses now: working something out from the view is allowed, and
         // the schema asks which numbers were read and which were calculated.
         let user = looking ? user + MemoryPrompts.workOutNote : user
         let schema = looking ? MemoryPrompts.lookAnswerSchema : MemoryPrompts.answerSchema
         let outcome = await hedged(ai, seconds: 20) { host in
-            let draft = try await ai.chatJSON(AnswerDraft.self, system: MemoryPrompts.answerSystem, user: user, image: image,
-                                              jsonSchema: schema, schemaName: "answer", maxTokens: 1000,
-                                              temperature: 0, route: host)
+            let draft = try await Reasoning.$on.withValue(thinking) {
+                try await ai.chatJSON(AnswerDraft.self, system: MemoryPrompts.answerSystem, user: user, image: image,
+                                      jsonSchema: schema, schemaName: "answer", maxTokens: looking ? 1500 : 1000,
+                                      temperature: 0, route: host)
+            }
             // A reply with no words ("/") is a failed decode, not an answer: the other host's counts.
             guard draft.answer.contains(where: \.isLetter) else {
                 throw NemotronClient.NemotronError.badResponse("empty answer")
@@ -1051,7 +1265,15 @@ actor QueryEngine {
         let worked = draft.derived.flatMap { EvidenceRule.numberRuns($0) }
             .filter { !$0.contains(":") && EvidenceRule.digits($0).count <= 6 }
             .map(EvidenceRule.canonicalNumber)
-        let allowed = seenTimes(evidence).union(EvidenceRule.numberRuns(extra).map(EvidenceRule.canonicalNumber)).union(worked)
+        // Worked from the live picture: the figures of the task as the model read them and of
+        // its steps are its working too. The picture is what it read them from; the phone's
+        // OCR misses matrix rows, exponents and small handwriting far more often than it does.
+        let steps = liveLook && !(draft.working ?? "").isEmpty
+            ? EvidenceRule.numberRuns((draft.problem ?? "") + "\n" + (draft.working ?? ""))
+                .filter { !$0.contains(":") && EvidenceRule.digits($0).count <= 6 }
+                .map(EvidenceRule.canonicalNumber)
+            : []
+        let allowed = seenTimes(evidence).union(EvidenceRule.numberRuns(extra).map(EvidenceRule.canonicalNumber)).union(worked).union(steps)
         let missing = EvidenceRule.unsupportedNumbers(in: draft.answer, ocr: ocr, allowed: allowed)
         if !missing.isEmpty {
             reasons.append("these numbers are not in the OCR text of the records listed in used_ids: \(missing.joined(separator: ", "))")
@@ -1134,8 +1356,9 @@ actor QueryEngine {
             trace.add("inferred → not sure")
         }
         // Not seen: there is no frame to show for it. (Before, the best-ranked frame was shown
-        // as "the closest match", which read as an answer.)
-        if label == .unknown { evidence = [] }
+        // as "the closest match", which read as an answer.) Likewise an answer that cites no
+        // record — it rests on the conversation, the log or the agent's notes — shows no frame.
+        if label == .unknown || (draft.used_ids ?? []).isEmpty { evidence = [] }
         return result(question, answer, label, evidence, true, started, nil, draft.language, trace)
     }
 
@@ -1189,6 +1412,8 @@ actor QueryEngine {
     }()
 
     static func promptTime(_ date: Date) -> String { promptDate.string(from: date) }
+    /// HH:mm, for conversation lines.
+    static func clock(_ date: Date) -> String { Cue.stamp(date).suffix(5).description }
 
     /// Labelled record text: without labels the model did not tell a slogan from a sign's name.
     private static func describe(_ hit: MemoryHit, now: Date, position: (index: Int, count: Int)? = nil) -> String {

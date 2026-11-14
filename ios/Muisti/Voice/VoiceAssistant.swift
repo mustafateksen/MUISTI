@@ -68,7 +68,15 @@ final class VoiceAssistant {
     /// 1.2 s cut people off in real use (14 Nov, on the phone: "What about 2nd floor? What",
     /// "Do you know" — a breath or an "uh" in the middle of a sentence): back to 1.8 s. The
     /// search already starts 0.45 s into the pause, so most of the wait is not lost.
-    static let endOfQuestionSilence = 1.8
+    /// Silence that ends a question once the recogniser has punctuated it as finished
+    /// ("…close?"). Measured on 150 real phone questions in the Mac harness.
+    static let endOfQuestionSilence = 1.6
+    /// Silence that ends it when the words so far look unfinished ("…how much I owe and"):
+    /// people pause to think mid-sentence; 1.8 s cut 5 of 150 real questions, this 0.
+    static let midSentenceSilence = 3.0
+    /// Voice heard but no words yet (they come about a second after it): keep waiting at least this.
+    static let firstWordsWait = 3.0
+    @ObservationIgnored private var listenStartedAt = Date()
     static let prepareAfter = 0.45
 
     init(engine: QueryEngine, location: LocationProvider) {
@@ -138,6 +146,7 @@ final class VoiceAssistant {
             self.session = session
             phase = .listening
             turn.mark("mic open")
+            listenStartedAt = Date()
             armSilenceTimer(after: 6)   // nothing said within 6 s → give up quietly
             maxTask = Task { [weak self] in
                 try? await Task.sleep(for: .seconds(25))
@@ -228,6 +237,28 @@ final class VoiceAssistant {
         lastResult = nil
         transcript = ""
         phase = .idle
+    }
+
+    /// How the user called Muisti (pipeline v2, `user.summon`): every way in — a tap, the
+    /// glasses' wake word, later Siri or a phone-side wake word — produces the same event and
+    /// goes down the same path; a new way in is one more producer of it, nothing else.
+    struct Summon: Sendable {
+        enum Source: String, Sendable { case tap, glassesWakeWord, phoneWakeWord, siri, typed, driver }
+        var source: Source
+        /// What was already heard or typed, if anything (nil: open the microphone and listen).
+        var text: String?
+    }
+
+    func summon(_ summon: Summon) async {
+        Trace.note("user.summon [\(summon.source.rawValue)]\(summon.text.map { " “\($0.prefix(60))”" } ?? "")")
+        guard let text = summon.text?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else {
+            await startListening()
+            return
+        }
+        switch summon.source {
+        case .glassesWakeWord, .phoneWakeWord, .siri: await askFromGlasses(text)
+        case .tap, .typed, .driver: await ask(text)
+        }
     }
 
     /// A question heard through the glasses (wake word already removed).
@@ -410,7 +441,18 @@ final class VoiceAssistant {
             Task { await finishListening() }
         } else {
             if changed { turn.mark("last word") }
-            armSilenceTimer(after: Self.endOfQuestionSilence)
+            // Updates also arrive (unchanged) while the user is audibly speaking, so these
+            // timers only run out after real silence (see AnalyzerSpeechSession).
+            let words = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            if words.isEmpty {
+                let left = 6 - Date().timeIntervalSince(listenStartedAt)
+                armSilenceTimer(after: max(Self.firstWordsWait, left))
+            } else if let last = words.last, ".?!".contains(last) {
+                armSilenceTimer(after: Self.endOfQuestionSilence)
+            } else {
+                armSilenceTimer(after: Self.midSentenceSilence)
+            }
+            guard changed, !words.isEmpty else { return }
             // A short pause: start searching on these words. If the user goes on, the next
             // partial replaces it; if not, the answer is that much closer when listening ends.
             prepareTask?.cancel()
@@ -977,6 +1019,7 @@ private final class TapSpeechSession: ListeningSession, @unchecked Sendable {
         request.shouldReportPartialResults = true
         if recognizer.supportsOnDeviceRecognition { request.requiresOnDeviceRecognition = true }
         request.taskHint = .dictation   // whole spoken questions, not search keywords
+        request.addsPunctuation = true   // "?" / "." tells the listener the question is finished
         let request = request
         let final = final
         let analyzer = SpectrumAnalyzer()
@@ -1030,6 +1073,7 @@ private final class SpeechSession: ListeningSession, @unchecked Sendable {
             request.requiresOnDeviceRecognition = true   // the question never leaves the phone
         }
         request.taskHint = .dictation   // whole spoken questions, not search keywords
+        request.addsPunctuation = true   // "?" / "." tells the listener the question is finished
         let input = audioEngine.inputNode
         // The route may just have switched to the glasses (HFP, 8/16 kHz). Installing a tap with
         // a stale or empty format raises an Objective-C exception that kills the app.

@@ -65,6 +65,12 @@ final class RemoteDriver {
                 Log.app.error("remote driver: needs --remote-driver=<port>|<token of 8+ characters>")
                 return
             }
+            // `--remote-driver-keep`: stays on with this token when the app is opened by hand
+            // later (a phone handed to someone without Xcode), on the default port.
+            if ProcessInfo.processInfo.arguments.contains("--remote-driver-keep") {
+                UserDefaults.standard.set(parts[1], forKey: "remoteDriver.token")
+                enabledInApp = true
+            }
             start(controller: controller, port: port, token: parts[1], speak: ProcessInfo.processInfo.arguments.contains("--remote-driver-speak"))
         } else if enabledInApp {
             start(controller: controller, port: defaultPort, token: appToken, speak: false)
@@ -129,7 +135,10 @@ final class RemoteDriver {
         // "What is this?" looks at the newest frame the driver showed.
         let box = liveBox
         let engine = controller.queryEngine
-        Task { await engine.setLiveView { box.get() } }
+        Task {
+            await engine.setLiveView { box.get() }
+            await engine.setCameraLive { box.get() != nil }
+        }
         listener.newConnectionHandler = { [weak self] connection in
             connection.start(queue: self?.queue ?? .global())
             Self.receive(connection, buffer: Data()) { request in

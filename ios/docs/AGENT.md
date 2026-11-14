@@ -101,6 +101,15 @@ iOS, başka bir uygulamada (Apple Haritalar, Google Haritalar) çalışan naviga
 
 Bu cümleler günlük bütçeye ve aralık kuralına takılmaz (kullanıcının beklediği şey); sessiz saatler ve susturma geçerlidir. Rota bilgisi modele de verilir: "nerede döneceğim", "ne kadar kaldı" soruları buradan cevaplanır. Rotası bulunamayan hedefte eski davranış sürer (uzaklaşınca yönüyle söylenir, tabelası görülürse söylenir).
 
+## Pipeline v2'de değişenler (15 Kasım)
+
+Ayrıntı ve tablo: `PIPELINE.md` §9. Ajan tarafı için özet:
+- **Hiçbir kayıt düşmüyor:** hakem meşgulken gelen kayıtlar sıraya girer (`waitingNotices`, en çok 40); her biri ya söylenir ya da gerekçesiyle `interventions` tablosuna "sustu" diye yazılır. Testte aynı anda gelen 5 işaretli kaydın 5'i de yargılandı.
+- **Hakem konuşmayı okuyor:** soru hattının okuduğu aynı bağlam (özetler, Muisti'nin kendi notları, bugünün son turları) hakemin istemine de girer. Kullanıcı "toplantıdayım" derse model bunu `note_to_self` ile süreli not olarak tutar; sonraki her tur ve her hakem çağrısı onu görür.
+- **Karar öncesi bakabiliyor:** hakem artık `find_in_memory`, `object_state`, `safety_log`, `recall_dialog`, `route_status`, `calendar`, `places` araçlarıyla bakıp sonra karar veriyor (en çok 3 model çağrısı; son adımda yalnız karar araçları). Baktıkları, söylediği cümlenin kanıt denetiminde gösterilmiş sayılır.
+- **Geç kareler:** telefon ceptayken kaydedilen ya da kuyrukta beklemiş kare "o saatten bir kare" notuyla yargılanır; önemi sürüyorsa "00:44'te ocağı yanık gördüm, hâlâ açık mı?" diye geriye dönük sorulur, canlı uyarı olarak seslendirilmez.
+- **Periyodik bakış** 2 dakikada bir (durum değiştiyse); susma kararları konuşma akışına `system_note` olarak yazılır.
+
 ## Kendiliğinden kolladıkları
 
 Zenginleştirmenin işaretine ek olarak dört sabit "görünce" ipucu her karede embedding + rerank ile denenir (`AgentCenter.standing`): yakından görülen ilaç, bırakılmış kişisel eşya, evde açık kalan şey, yürünen yerdeki tehlike (ıslak zemin levhası, kırmızı yaya ışığı, bisiklet yolu, kazı). Eşleşirse hakem, notlara ve güvenlik günlüğüne bakıp söyler ya da sorar. Tehlike ipucu yalnız kare 20 saniyeden yeniyse hakeme gider.

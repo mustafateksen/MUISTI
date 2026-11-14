@@ -17,6 +17,10 @@ actor NemotronClient {
         /// Empty = no reranking (fused order is used as is).
         var rerankModel = NemotronClient.defaultRerankModel
         var rerankKey = ""
+        /// The same model on build.nvidia.com as a second host when the team's own container
+        /// fails. Off unless switched on: the container is the team's alone now and answers
+        /// in 0.1–0.9 s, and pictures are only ever sent to it.
+        var allowNvidiaFallback = false
 
         /// The team's own retrieval container goes with its chat container unless another host is set.
         var effectiveEmbedURL: URL { embedBaseURL ?? (baseURL == NemotronClient.muistiChatBase ? NemotronClient.muistiRetrievalBase : baseURL) }
@@ -172,21 +176,20 @@ actor NemotronClient {
     }
     var hasKey: Bool { !settings.apiKey.isEmpty }
 
-    /// Questions in flight. Background enrichment waits while > 0, so a spoken question never
-    /// queues behind frame extraction on the same (sometimes slow) Verda endpoint.
+    /// Questions in flight: telemetry only. Nothing waits for it and nothing is cancelled for
+    /// it any more (pipeline v2): each kind of work has its own lane with its own capacity, so
+    /// a question does not queue behind frame extraction and frame extraction does not stop
+    /// while the user talks.
     private(set) var questionsInFlight = 0
-    /// Background (enrichment) requests in flight; a question cancels them so it is served first.
-    private var backgroundRequests: [UUID: Task<(Data, URLResponse), Error>] = [:]
 
     func beginQuestion() {
         questionsInFlight += 1
-        if !backgroundRequests.isEmpty {
-            Log.net.info("question: pre-empting \(self.backgroundRequests.count) background request(s)")
-            backgroundRequests.values.forEach { $0.cancel() }
-            backgroundRequests.removeAll()
-        }
+        Task { await Lane.shared(.background).answering(1) }
     }
-    func endQuestion() { questionsInFlight = max(0, questionsInFlight - 1) }
+    func endQuestion() {
+        questionsInFlight = max(0, questionsInFlight - 1)
+        Task { await Lane.shared(.background).answering(-1) }
+    }
     /// Set after the host answers 404/400 for embeddings, so we stop spending calls on it.
     private var embeddingsUnavailable = false
     var embeddingsEnabled: Bool {
@@ -222,7 +225,7 @@ actor NemotronClient {
 
     /// Same Nemotron 3.5 Super VL on build.nvidia.com, with the NVIDIA key (rerank/embed key).
     var fallbackAvailable: Bool {
-        !settings.effectiveRerankKey.isEmpty && settings.baseURL.host != Provider.nvidia.baseURL.host
+        settings.allowNvidiaFallback && !settings.effectiveRerankKey.isEmpty && settings.baseURL.host != Provider.nvidia.baseURL.host
     }
 
     /// Several pictures in one request (frames of one moment, oldest first, `image` last) are
@@ -234,10 +237,14 @@ actor NemotronClient {
               jsonSchema: String? = nil, schemaName: String = "record",
               maxTokens: Int = 700, temperature: Double = 0,
               route requested: Route? = nil, background: Bool = false) async throws -> String {
-        let route = requested ?? preferredRoute()
+        // A picture never goes to the second host, whatever the caller or the latency says.
+        let route = image != nil || !fallbackAvailable ? .primary : (requested ?? preferredRoute())
         let baseURL = route == .primary ? settings.baseURL : Provider.nvidia.baseURL
         let model = route == .primary ? settings.chatModel : Provider.nvidia.chatModel
         let key = route == .primary ? settings.apiKey : settings.effectiveRerankKey
+        // Every outgoing picture passes the on-device private-scene check (fails closed).
+        let image = image.flatMap { OutgoingImageGate.allows($0.jpeg) ? $0 : nil }
+        let earlierImages = image == nil ? [] : OutgoingImageGate.filter(earlierImages.map(\.jpeg)).map { ImagePart(jpeg: $0) }
         var content: [[String: Any]] = [["type": "text", "text": user]]
         if let image {
             content.append([
@@ -260,11 +267,12 @@ actor NemotronClient {
         var body: [String: Any] = [
             "model": model,
             "messages": messages,
-            "max_tokens": maxTokens,
+            // Thinking eats tokens before the answer: a call that asks for it gets room for both.
+            "max_tokens": Reasoning.on ? max(maxTokens, 2500) : maxTokens,
             "temperature": temperature,
             "top_p": 0.95,
             "stream": false,
-            "chat_template_kwargs": ["enable_thinking": false],
+            "chat_template_kwargs": ["enable_thinking": Reasoning.on],
         ]
         let host = baseURL.host ?? ""
         let url = baseURL.appendingPathComponent("chat/completions")
@@ -294,6 +302,9 @@ actor NemotronClient {
             let message = choices.first?["message"] as? [String: Any],
             let text = message["content"] as? String
         else { throw NemotronError.badResponse("missing choices[0].message.content") }
+        // With thinking on, a host may leave the reasoning inside the content: only what
+        // follows it is the answer.
+        if Reasoning.on, let end = text.range(of: "</think>", options: .backwards) { return String(text[end.upperBound...]) }
         return text
     }
 
@@ -321,13 +332,13 @@ actor NemotronClient {
     /// that in your memory") instead of searching — 9 of 29 eval turns, 14 Nov.
     func chatTools(system: String, user: String, tools: String, image: ImagePart? = nil, maxTokens: Int = 400,
                    temperature: Double = 0, route requested: Route? = nil, background: Bool = false) async throws -> ToolReply {
-        let route = requested ?? preferredRoute()
+        let route = image != nil || !fallbackAvailable ? .primary : (requested ?? preferredRoute())
         let baseURL = route == .primary ? settings.baseURL : Provider.nvidia.baseURL
         guard let toolList = try? JSONSerialization.jsonObject(with: Data(tools.utf8)) else {
             throw NemotronError.badResponse("tools are not JSON")
         }
         var content: Any = user
-        if let image {
+        if let image, OutgoingImageGate.allows(image.jpeg) {
             content = [["type": "text", "text": user],
                        ["type": "image_url", "image_url": ["url": "data:image/jpeg;base64,\(image.jpeg.base64EncodedString())"]]] as [[String: Any]]
         }
@@ -460,6 +471,8 @@ actor NemotronClient {
     /// only what the extraction happened to write about it.
     func embedImage(_ jpeg: Data) async throws -> [Float] {
         guard imageEmbeddingsEnabled else { throw NemotronError.badResponse("image embeddings off") }
+        // A picture refused by the private-scene check is never sent (the worker marks it done).
+        guard OutgoingImageGate.allows(jpeg) else { throw NemotronError.http(403, "private scene: not sent") }
         // The model's default longest edge is 1120 px.
         let image = ImageData.downscaledJPEG(jpeg, maxPixel: 1024, quality: 0.8)
         if settings.usesMuistiRetrieval {
@@ -615,30 +628,32 @@ actor NemotronClient {
             request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
             request.httpBody = payload
             do {
+                // The request waits for a place in its lane (its kind of work's share of the
+                // server), not for other kinds of work to finish.
+                // Lanes are for the chat model. Embeddings and the reranker run on their own
+                // container, take milliseconds and come in bursts of one request per pair
+                // (20–30 at once for one question): they are not queued.
+                let kind = LaneKind.current ?? (background || paced ? .background : .user)
+                let lane = url.path.hasSuffix("chat/completions") ? Lane.shared(kind) : nil
+                if let queued = await lane?.acquire(), queued.waitedMs >= 100 {
+                    Trace.note("lane \(kind.rawValue): waited \(queued.waitedMs) ms behind \(queued.depth)")
+                }
                 let (data, response): (Data, URLResponse)
-                if background {
-                    let id = UUID()
-                    let session = self.session
-                    let request = request
-                    let task = Task { try await session.data(for: request) }
-                    backgroundRequests[id] = task
-                    defer { backgroundRequests[id] = nil }
-                    do {
-                        (data, response) = try await task.value
-                    } catch is CancellationError {
-                        throw NemotronError.preempted
-                    } catch let error as URLError where error.code == .cancelled {
-                        throw NemotronError.preempted
-                    }
-                } else {
+                do {
                     (data, response) = try await session.data(for: request)
+                    await lane?.release()
+                } catch {
+                    await lane?.release()
+                    throw error
                 }
                 let status = (response as? HTTPURLResponse)?.statusCode ?? 0
                 if (200..<300).contains(status) { return data }
                 let error = NemotronError.http(status, String(decoding: data, as: UTF8.self))
-                // A question never sits out a rate limit: the caller has the other host.
-                guard error.isRetryable, attempt < maxAttempts, background || paced || status != 429 else { throw error }
-                let wait = status == 429 ? 6.0 * Double(attempt) : 1.5 * Double(attempt)
+                let ownHost = !(url.host ?? "").hasSuffix("nvidia.com")
+                // On NVIDIA's shared hosts a question never sits out a rate limit; the team's
+                // own container gets a short backoff for everything (0.5, 1, 2 s).
+                guard error.isRetryable, attempt < maxAttempts, ownHost || background || paced || status != 429 else { throw error }
+                let wait = ownHost ? 0.5 * pow(2, Double(attempt - 1)) : (status == 429 ? 6.0 * Double(attempt) : 1.5 * Double(attempt))
                 Log.net.info("nemotron \(status), retry \(attempt) in \(wait) s")
                 try await Task.sleep(for: .seconds(wait))
             } catch let error as NemotronError {
@@ -681,6 +696,94 @@ actor NemotronClient {
             }
         }
         return nil
+    }
+}
+
+/// Whether the model reasons before it answers (pipeline v2, §5.4). Off for everything that
+/// runs per frame or decides a turn (it costs seconds); on for the few answers that need
+/// working out — the turn decision says which.
+enum Reasoning {
+    @TaskLocal static var on = false
+}
+
+/// The kinds of work that share the model server, each with its own capacity (pipeline v2):
+/// nobody cancels anybody, a request only waits behind requests of its own kind. Measured
+/// capacity of the team's container: 128 picture requests at once; these add up to 32.
+enum LaneKind: String, Sendable {
+    /// Safety looks and danger sentences.
+    case safety
+    /// The user's turn: decision, answer, repair, live look.
+    case user
+    /// The agent's own judgement of what it noticed.
+    case notice
+    /// Enrichment, embeddings, summaries.
+    case background
+
+    /// The lane of the work running in this task (set by the caller of that work); nil means
+    /// the request's own flags decide.
+    @TaskLocal static var current: LaneKind?
+
+    var limit: Int {
+        switch self {
+        case .safety: 6
+        case .user: 8
+        case .notice: 6
+        case .background: 8
+        }
+    }
+
+    /// While the user is being answered, background work starts at most this many new
+    /// requests (nothing running is cancelled). Measured 15 Nov: with 12 frame analyses running
+    /// at once the turn decision took 5 s instead of 0.8 s — the server slows everyone down
+    /// long before it refuses anyone.
+    static let backgroundWhileAnswering = 2
+}
+
+actor Lane {
+    private static let all: [LaneKind: Lane] = [.safety: Lane(.safety), .user: Lane(.user), .notice: Lane(.notice), .background: Lane(.background)]
+    static func shared(_ kind: LaneKind) -> Lane { all[kind]! }
+
+    let kind: LaneKind
+    private var active = 0
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+    /// The background lane makes room while a question is answered.
+    /// Questions being answered right now (counted, so begin and end may arrive in any order).
+    private var questions = 0
+    private var limit: Int { questions > 0 ? min(kind.limit, LaneKind.backgroundWhileAnswering) : kind.limit }
+
+    func answering(_ change: Int) {
+        questions = max(0, questions + change)
+        if questions == 0 { admit() }
+    }
+
+    private func admit() {
+        while !waiters.isEmpty, active < limit {
+            active += 1
+            waiters.removeFirst().resume()
+        }
+    }
+    /// For the developer screen and the trace: requests running and waiting.
+    var load: (active: Int, waiting: Int) { (active, waiters.count) }
+
+    init(_ kind: LaneKind) { self.kind = kind }
+
+    /// A place in the lane, first come first served. Returns how long the request waited and
+    /// how many were ahead of it.
+    func acquire() async -> (waitedMs: Int, depth: Int) {
+        if active < limit {
+            active += 1
+            return (0, 0)
+        }
+        let depth = waiters.count + 1
+        let began = ContinuousClock.now
+        await withCheckedContinuation { waiters.append($0) }
+        return ((ContinuousClock.now - began).milliseconds, depth)
+    }
+
+    /// The place goes to the next waiting request, if the lane has room for it right now.
+    func release() {
+        active = max(0, active - 1)
+        admit()
     }
 }
 

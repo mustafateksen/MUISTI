@@ -25,6 +25,20 @@ actor MemoryPipeline {
     /// rules look at the text right away, before the slower image enrichment.
     private var onTextStored: (@Sendable (Int64, String, Data) async -> Void)?
 
+    /// Kept frames wait here a few seconds before they are stored: if a private scene (bathroom,
+    /// PIN pad…) comes into view meanwhile, the frames just before it are dropped too, since
+    /// walking into such a room is often seen a moment before the classifier is sure.
+    /// (From the Android side's hold buffer.) Frames added by hand skip it.
+    private struct Held {
+        let memory: NewMemory
+        let frame: CapturedFrame
+        let replaces: Int64?
+        let heldAt: Date
+    }
+    private var held: [Held] = []
+    static let holdSeconds: TimeInterval = 3
+    private var flushTask: Task<Void, Never>?
+
     func setOnTextStored(_ handler: @escaping @Sendable (Int64, String, Data) async -> Void) { onTextStored = handler }
 
     init(recorder: SessionRecorder, store: MemoryStore, worker: EnrichmentWorker) {
@@ -48,13 +62,53 @@ actor MemoryPipeline {
             guard streamCounter % streamEveryN == 0 else { return nil }
         }
         let began = ContinuousClock.now
+        let privateBefore = PerceptionEngine.lastPrivateScene.withLock { $0 }
         let outcome = await perception.process(frame, street: street, area: area)
         let perceptionMs = (ContinuousClock.now - began).milliseconds
+        if PerceptionEngine.lastPrivateScene.withLock({ $0 }) > privateBefore {
+            // A private scene: what was seen in the seconds before it is not kept either.
+            let dropped = held.filter { frame.capturedAt.timeIntervalSince($0.frame.capturedAt) <= Self.holdSeconds }
+            held.removeAll { frame.capturedAt.timeIntervalSince($0.frame.capturedAt) <= Self.holdSeconds }
+            if !dropped.isEmpty { Trace.note("\(dropped.count) held frame(s) dropped: private scene followed") }
+        }
+        await release(before: frame.capturedAt.addingTimeInterval(-Self.holdSeconds), wallClock: false)
         switch outcome {
         case .drop(let reason):
             stats.dropped[reason, default: 0] += 1
             return nil
+        case .keep(let memory, _, let replaces) where frame.trigger != .manual:
+            held.append(Held(memory: memory, frame: frame, replaces: replaces, heldAt: Date()))
+            scheduleFlush()
+            return nil
         case .keep(let memory, _, let replaces):
+            return await persist(memory, frame: frame, replaces: replaces, perceptionMs: perceptionMs)
+        }
+    }
+
+    /// Stores held frames captured before `cutoff` (capture time), or held for the full wait
+    /// on the wall clock when nothing newer arrives.
+    private func release(before cutoff: Date, wallClock: Bool) async {
+        let now = Date()
+        let ready = held.filter { wallClock ? now.timeIntervalSince($0.heldAt) >= Self.holdSeconds : $0.frame.capturedAt <= cutoff }
+        guard !ready.isEmpty else { return }
+        held.removeAll { item in ready.contains { $0.frame.capturedAt == item.frame.capturedAt } }
+        for item in ready {
+            _ = await persist(item.memory, frame: item.frame, replaces: item.replaces, perceptionMs: 0)
+        }
+    }
+
+    private func scheduleFlush() {
+        flushTask?.cancel()
+        flushTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(Self.holdSeconds + 0.1))
+            guard !Task.isCancelled else { return }
+            await self?.release(before: .distantPast, wallClock: true)
+            if await self?.held.isEmpty == false { await self?.scheduleFlush() }
+        }
+    }
+
+    private func persist(_ memory: NewMemory, frame: CapturedFrame, replaces: Int64?, perceptionMs: Int) async -> Int64? {
+        do {
             guard let id = await store.insert(memory) else {
                 stats.dropped[.unreadable, default: 0] += 1
                 return nil

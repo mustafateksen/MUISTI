@@ -58,6 +58,19 @@ struct ExtractedRecord: Codable, Sendable {
     /// (`MemoryPrompts.extractionSchema`); read by the agent, not stored.
     var attention: String?
     var attention_reason: String?
+    /// The unified frame analysis (pipeline v2, §3.1): the state of things that can be on or
+    /// open, allergens named on what is in view, what a hand is doing, landmarks for finding
+    /// the way back indoors, and what the wearer holds or has put down. The same call as the
+    /// rest; the safety side reads them for frames it did not look at itself.
+    struct ObjectStateSeen: Codable, Sendable { var object: String; var state: String; var evidence: String? }
+    struct AllergenSeen: Codable, Sendable { var allergen: String; var `where`: String?; var quote: String? }
+    struct ActionSeen: Codable, Sendable { var action: String; var object: String; var confidence: Double? }
+    struct Landmark: Codable, Sendable { var kind: String; var text: String?; var direction: String? }
+    var object_states: [ObjectStateSeen] = []
+    var allergens_seen: [AllergenSeen] = []
+    var actions: [ActionSeen] = []
+    var landmarks: [Landmark] = []
+    var hold_items: [String] = []
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -79,6 +92,11 @@ struct ExtractedRecord: Codable, Sendable {
         caption = c.lenientString(.caption)
         attention = c.lenientString(.attention)
         attention_reason = c.lenientString(.attention_reason)
+        object_states = (try? c.decodeIfPresent([ObjectStateSeen].self, forKey: .object_states)) ?? []
+        allergens_seen = (try? c.decodeIfPresent([AllergenSeen].self, forKey: .allergens_seen)) ?? []
+        actions = (try? c.decodeIfPresent([ActionSeen].self, forKey: .actions)) ?? []
+        landmarks = (try? c.decodeIfPresent([Landmark].self, forKey: .landmarks)) ?? []
+        hold_items = c.lenientStrings(.hold_items) ?? []
         keywords = c.lenientStrings(.keywords)
         confidence = c.lenientDouble(.confidence)
     }
@@ -124,6 +142,20 @@ struct ExtractedRecord: Codable, Sendable {
             if let on = d.on { s += ". Shown on: \(on)" + (d.medium.map { " (\($0))" } ?? "") }
             lines.append(s)
         }
+        let states = object_states.filter { $0.state != "unknown" }
+        if !states.isEmpty {
+            lines.append("States: " + states.map { "\($0.object) \($0.state)" + ($0.evidence.map { $0.isEmpty ? "" : " (\($0))" } ?? "") }.joined(separator: "; "))
+        }
+        if !actions.isEmpty {
+            lines.append("Being done: " + actions.map { "\($0.action.replacingOccurrences(of: "_", with: " ")) \($0.object)" }.joined(separator: "; "))
+        }
+        if !allergens_seen.isEmpty {
+            lines.append("Allergens named: " + allergens_seen.map { "\($0.allergen)" + ($0.where.map { " (\($0))" } ?? "") + ($0.quote.map { " “\($0)”" } ?? "") }.joined(separator: "; "))
+        }
+        if !landmarks.isEmpty {
+            lines.append("Landmarks: " + landmarks.map { "\($0.kind.replacingOccurrences(of: "_", with: " "))" + ($0.text.map { " “\($0)”" } ?? "") + ($0.direction.map { " (\($0))" } ?? "") }.joined(separator: "; "))
+        }
+        if !hold_items.isEmpty { lines.append("In hand or just put down: " + hold_items.joined(separator: ", ")) }
         return lines.isEmpty ? nil : lines.joined(separator: "\n")
     }
 }
@@ -323,8 +355,26 @@ extension MemoryPrompts {
     that is on or open: a lit stove or hob, an iron, a running tap, an open door or window); \
     otherwise "none", which is the usual answer. attention_reason: what exactly, in one short \
     English sentence, quoting the text it rests on; null when attention is "none".
+    - object_states: only for things in view that can be on or off, open or closed, locked or \
+    unlocked (a stove or hob, an oven, an iron, a tap, a door, a window, a fridge door, a lock, \
+    a light): the thing, its state as it looks in this frame ("unknown" when it cannot be told), \
+    and the few words of what shows it (a blue flame, a glowing ring, the knob position). A \
+    thing shown on a screen or a picture is not listed. Usually [].
+    - allergens_seen: food allergens named on a product, label, menu or plate in view (milk, egg, \
+    nuts, peanut, gluten, wheat, soy, fish, shellfish, sesame, strawberry and the like): the \
+    allergen in English, where it is (label, front of package, menu, plate) and the words read, \
+    in their own language. Usually [].
+    - actions: only what a hand in the frame is plainly doing to a thing right now (turning a \
+    knob, locking a door with a key, taking a pill from a blister, putting keys down): a short \
+    verb form like "turning", "locking", "taking", "putting_down", the thing, and how sure \
+    (0..1). One frame rarely shows an action: usually [].
+    - landmarks: what helps to find the way inside a building: exit signs, stairs, lifts, \
+    escalators, numbered rooms or gates, toilets signs, with the text on them and the side an \
+    arrow or the thing itself is on (left, right, ahead). Usually a few indoors, [] outdoors.
+    - hold_items: things held in the hand or just put down within reach (keys, a wallet, a \
+    phone, a medicine box with its name). Usually [].
 
-    Return ONLY one JSON object with keys: useful, kind, subtype, name, name_line, phone, \
+    Return ONLY one JSON object with keys: object_states, allergens_seen, actions, landmarks, hold_items and: useful, kind, subtype, name, name_line, phone, \
     phone_line, hours, hours_line, items, other_text, scene, objects, relations, depictions, \
     caption, keywords, confidence, attention, attention_reason.
     """
@@ -350,8 +400,13 @@ extension MemoryPrompts {
       "keywords":{"type":"array","maxItems":12,"items":{"type":"string"}},
       "confidence":{"type":"number"},
       "attention":{"type":"string","enum":["none","warning","time_limited","schedule","price","event","document","person_badge","personal"]},
-      "attention_reason":{"type":["string","null"]}},
-     "required":["useful","kind","subtype","name","name_line","phone","phone_line","hours","hours_line","items","other_text","scene","objects","relations","depictions","caption","keywords","confidence","attention","attention_reason"]}
+      "attention_reason":{"type":["string","null"]},
+      "object_states":{"type":"array","maxItems":5,"items":{"type":"object","properties":{"object":{"type":"string"},"state":{"type":"string","enum":["on","off","open","closed","locked","unlocked","unknown"]},"evidence":{"type":"string"}},"required":["object","state","evidence"]}},
+      "allergens_seen":{"type":"array","maxItems":6,"items":{"type":"object","properties":{"allergen":{"type":"string"},"where":{"type":"string","enum":["label","front","menu","plate","shelf","other"]},"quote":{"type":["string","null"]}},"required":["allergen","where","quote"]}},
+      "actions":{"type":"array","maxItems":3,"items":{"type":"object","properties":{"action":{"type":"string"},"object":{"type":"string"},"confidence":{"type":"number"}},"required":["action","object","confidence"]}},
+      "landmarks":{"type":"array","maxItems":6,"items":{"type":"object","properties":{"kind":{"type":"string","enum":["exit","stairs","elevator","escalator","room_sign","gate","toilet","shop","other"]},"text":{"type":["string","null"]},"direction":{"type":["string","null"],"enum":["left","right","ahead",null]}},"required":["kind","text","direction"]}},
+      "hold_items":{"type":"array","maxItems":4,"items":{"type":"string"}}},
+     "required":["useful","kind","subtype","name","name_line","phone","phone_line","hours","hours_line","items","other_text","scene","objects","relations","depictions","caption","keywords","confidence","attention","attention_reason","object_states","allergens_seen","actions","landmarks","hold_items"]}
     """#
 }
 

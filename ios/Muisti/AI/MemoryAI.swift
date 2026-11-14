@@ -70,6 +70,13 @@ struct AnswerDraft: Codable, Sendable {
     }
     var figures: [Figure] = []
     var derived: [String] { figures.filter { $0.how == "worked_out" }.map(\.value) }
+    /// Look turns: what was asked about is in view but too small or blurred to read (a problem
+    /// on a far screen). A sharper photo is taken and the question answered again from it.
+    var too_small: Bool?
+    /// Look turns with something to work out: the task as the model read it, and its steps,
+    /// written before the answer (the answer is only as good as the working in front of it).
+    var problem: String?
+    var working: String?
     var unclear_reply: String?
     var rule: SafetyRule?
     var event: EventDraft?
@@ -116,6 +123,9 @@ struct AnswerDraft: Codable, Sendable {
         quotes = (try? c.decodeIfPresent([String].self, forKey: .quotes)) ?? []
         observations = c.lenientString(.observations)
         figures = (try? c.decodeIfPresent([Figure].self, forKey: .figures)) ?? []
+        too_small = c.lenientBool(.too_small)
+        problem = c.lenientString(.problem)
+        working = c.lenientString(.working)
         unclear_reply = c.lenientString(.unclear_reply)
         rule = (try? c.decodeIfPresent(SafetyRule.self, forKey: .rule)) ?? nil
         event = (try? c.decodeIfPresent(EventDraft.self, forKey: .event)) ?? nil
@@ -354,18 +364,33 @@ enum MemoryPrompts {
     This turn you are looking through the glasses. If the user asks you to do something with \
     what the live view shows — solve or calculate it, add it up, convert it, translate or \
     explain it — do it and give the result as your own working ("that makes…"), never as \
-    something written there: that counts as found, label GORDUM, support "stated". After the \
+    something written there: that counts as found, label GORDUM, support "stated". Work before \
+    you answer: in problem, copy the task exactly as it is written, every figure, sign and \
+    exponent and what is asked for, reading each number digit by digit; in working, calculate \
+    in small steps, one per line and at most eight lines, writing out every product, sum and \
+    substitution with its result (use the known rule or formula rather than adding term after \
+    term), and check the last line once against the task. The answer is spoken aloud: it says \
+    what the task is in a few words, the result of that working, and at most one short clause \
+    of how; the steps stay in working. Nothing to work out: leave both empty. After the \
     answer, in figures, list the numbers the answer says, each as read (it is in the live view) \
     or worked_out (you calculated it). A phone number, a time, a posted price, an address or a \
-    code is never worked out. If the user asks for a hint, a first step or a check of their own \
+    code is never worked out. If what they ask about is in view but too small, too far or too \
+    blurred to read in full (the figures of a problem on a distant screen, the small print of a \
+    label), do not describe the scene in its place: set too_small true and say in one sentence \
+    what you can make out and that you need a closer or steadier look. Otherwise too_small is \
+    false. If the user asks for a hint, a first step or a check of their own \
     answer instead of the solution, give exactly that and keep the result to yourself.
     """
 
     /// The answer schema for such a turn: the same, plus `figures`.
     static let lookAnswerSchema: String = answerSchema
+        .replacingOccurrences(of: #""language":{"type":"string"},"#,
+                              with: #""language":{"type":"string"},"problem":{"type":"string"},"working":{"type":"string"},"#)
+        .replacingOccurrences(of: #""required":["language","#, with: #""required":["language","problem","working","#)
         .replacingOccurrences(of: #""quotes":{"type":"array","items":{"type":"string"}},"#,
                               with: #""quotes":{"type":"array","items":{"type":"string"}},"figures":{"type":"array","items":{"type":"object","properties":{"value":{"type":"string"},"how":{"type":"string","enum":["read","worked_out"]}},"required":["value","how"]}},"#)
-        .replacingOccurrences(of: #""used_ids","quotes","#, with: #""used_ids","quotes","figures","#)
+        .replacingOccurrences(of: #""used_ids","quotes","#, with: #""used_ids","quotes","figures","too_small","#)
+        .replacingOccurrences(of: #""figures":{"type":"array""#, with: #""too_small":{"type":"boolean"},"figures":{"type":"array""#)
 
     static let answerSchema = #"""
     {"type":"object","properties":{
@@ -390,7 +415,7 @@ enum MemoryPrompts {
         Answer language: \(language.map { "\($0.name) (\($0.code)), detected from the question" } ?? "the language of the question")
         Current local time: \(QueryEngine.promptTime(now))
         User position now: \(position ?? "unknown")
-        Conversation so far (oldest first):
+        Conversation so far (oldest first; what the user told you here, also in its summarised part, is known to you: when the question asks for something they said — a time, a name, a number, a plan — answer from it as something they told you, label GORDUM, found true, used_ids [] and quotes []):
         \(conversation.isEmpty ? "(new conversation)" : conversation.joined(separator: "\n"))
 
         Question: \(question)

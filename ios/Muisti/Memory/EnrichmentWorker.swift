@@ -44,6 +44,10 @@ actor EnrichmentWorker {
         /// The enrichment's own flag ("none", "warning", "time_limited", …) and its one-line reason.
         var attention: String?
         var reason: String?
+        /// States of on/off, open/closed things the frame analysis read (object, state, evidence).
+        var states: [ExtractedRecord.ObjectStateSeen] = []
+        /// Captured while the phone was in the pocket and processed later.
+        var late = false
     }
 
     private var onNoticed: (@Sendable (Noticed) async -> Void)?
@@ -72,6 +76,7 @@ actor EnrichmentWorker {
 
     func signal() {
         backoff = 2
+        holdUntil = nil
         signaled = true
         wakeup?.resume()
         wakeup = nil
@@ -82,40 +87,87 @@ actor EnrichmentWorker {
         if online { signal() }
     }
 
+    /// Records being enriched right now (the claim: no record goes to two workers; a claim
+    /// lives in memory only, so a restart simply finds the record pending again).
+    private var inFlight: Set<Int64> = []
+    /// After a failure: nothing new is started until then (a new frame's signal ends the hold).
+    private var holdUntil: Date?
+    /// Frames enriched side by side. The background lane lets 12 requests through at once;
+    /// embeddings and summaries share it.
+    static let workers = 5
+    /// A frame this fresh jumps the queue: what the user looks at now is understood within
+    /// seconds, while the backlog of a busy walk is worked off oldest first behind it.
+    static let fastSlotSeconds: TimeInterval = 3
+
     private func run() async {
         while !Task.isCancelled {
             status.hasKey = await ai.hasKey
             signaled = false
-            guard status.online, status.hasKey, let next = await store.pending(limit: 1).first else {
-                if status.online, await backfillEmbedding() { continue }
-                if status.online, await backfillImageEmbedding() { continue }
-                if status.online, status.hasKey, await summarizeEpisode() { continue }
+            guard status.online, status.hasKey else {
                 await waitForWork(timeout: .seconds(30))
                 continue
             }
-            // A question is being answered: let it have the endpoint first.
-            while await ai.questionsInFlight > 0 { try? await Task.sleep(for: .milliseconds(300)) }
-            do {
-                try await enrich(next)
-                status.enriched += 1
-                status.lastError = nil
-                backoff = 2
-            } catch NemotronClient.NemotronError.preempted {
-                // A question took the endpoint; try this frame again right after it.
+            if let hold = holdUntil, hold > Date() {
+                await waitForWork(timeout: .seconds(hold.timeIntervalSinceNow))
+                if !signaled { holdUntil = nil }
                 continue
-            } catch {
-                await store.markAttemptFailed(id: next.id)
-                status.failed += 1
-                status.lastError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-                Log.net.error("enrich \(next.id) failed: \(self.status.lastError ?? "", privacy: .public)")
-                if case NemotronClient.NemotronError.missingKey = error {
-                    await waitForWork(timeout: .seconds(60))
-                } else {
-                    await waitForWork(timeout: .seconds(backoff))
-                    backoff = min(backoff * 2, 60)
+            }
+            var started = 0
+            let free = Self.workers - inFlight.count
+            if free > 0 {
+                var queue = await store.pendingOldest(limit: Self.workers * 2).filter { !inFlight.contains($0.id) }
+                if let newest = await store.pending(limit: 1).first, !inFlight.contains(newest.id),
+                   Date().timeIntervalSince(newest.seenAt) < Self.fastSlotSeconds, queue.first?.id != newest.id {
+                    queue.removeAll { $0.id == newest.id }
+                    queue.insert(newest, at: 0)
+                }
+                for record in queue.prefix(free) {
+                    inFlight.insert(record.id)
+                    started += 1
+                    Task { await self.work(record) }
                 }
             }
+            if started > 0 { continue }
+            // Nothing new to start: older gaps are filled in while there is room.
+            if inFlight.count < 2 {
+                if await backfillEmbedding() { continue }
+                if await backfillImageEmbedding() { continue }
+                if await summarizeEpisode() { continue }
+            }
+            await waitForWork(timeout: .seconds(inFlight.isEmpty ? 30 : 5))
         }
+    }
+
+    /// One record, start to finish; frees its place and wakes the loop.
+    private func work(_ record: MemoryRecord) async {
+        defer {
+            inFlight.remove(record.id)
+            wake()
+        }
+        do {
+            try await enrich(record)
+            status.enriched += 1
+            status.lastError = nil
+            backoff = 2
+        } catch {
+            await store.markAttemptFailed(id: record.id)
+            status.failed += 1
+            status.lastError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            Log.net.error("enrich \(record.id) failed: \(self.status.lastError ?? "", privacy: .public)")
+            if case NemotronClient.NemotronError.missingKey = error {
+                holdUntil = Date().addingTimeInterval(60)
+            } else {
+                holdUntil = Date().addingTimeInterval(backoff)
+                backoff = min(backoff * 2, 60)
+            }
+        }
+    }
+
+    /// Wakes the loop without touching the hold (a finished record is not a new frame).
+    private func wake() {
+        signaled = true
+        wakeup?.resume()
+        wakeup = nil
     }
 
     /// Adds a vector to one older record when embeddings became available later. Returns
@@ -169,8 +221,6 @@ actor EnrichmentWorker {
             Log.pipeline.info("episode \(episode.id): \(result.title ?? "-", privacy: .public) (\(records.count) frames)")
             status.episodes += 1
             return true
-        } catch NemotronClient.NemotronError.preempted {
-            return false   // a question went first; summarise later
         } catch {
             // Do not retry in a tight loop: mark as done for now, the next new frame re-opens it.
             await store.setEpisodeSummary(id: episode.id, title: episode.title, summary: episode.summary, summarizedCount: enriched)
@@ -234,7 +284,8 @@ actor EnrichmentWorker {
         if let onNoticed {
             let noticed = Noticed(recordID: record.id, seenAt: record.seenAt, title: extracted.name ?? extracted.kindLabel,
                                   passage: passage, vector: vector, jpeg: jpeg,
-                                  attention: extracted.attention, reason: extracted.attention_reason)
+                                  attention: extracted.attention, reason: extracted.attention_reason,
+                                  states: extracted.object_states, late: waited > 120)
             Task { await onNoticed(noticed) }
         }
         // The keyframe vector last: the record is already searchable and safety-checked; this

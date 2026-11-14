@@ -1277,6 +1277,82 @@
     "Chat model" : {
       "shouldTranslate" : false
     },
+    "Check saved memories for private places" : {
+      "localizations" : {
+        "fi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tarkista tallennetut muistot yksityisten paikkojen varalta"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Kayıtlı anılarda özel yer ara"
+          }
+        }
+      }
+    },
+    "Checked %lld. Nothing private found." : {
+      "localizations" : {
+        "fi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tarkistettu %lld. Mitään yksityistä ei löytynyt."
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld kontrol edildi. Özel bir şey bulunmadı."
+          }
+        }
+      }
+    },
+    "Checked %lld. Removed %lld." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Checked %1$lld. Removed %2$lld."
+          }
+        },
+        "fi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tarkistettu %lld. Poistettu %lld."
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld kontrol edildi. %lld silindi."
+          }
+        }
+      }
+    },
+    "Checking %lld of %lld…" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Checking %1$lld of %2$lld…"
+          }
+        },
+        "fi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tarkistetaan %lld/%lld…"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld / %lld kontrol ediliyor…"
+          }
+        }
+      }
+    },
     "Choose a provider preset" : {
       "shouldTranslate" : false
     },
@@ -3143,6 +3219,7 @@
       "shouldTranslate" : false
     },
     "I can't see anything right now: the glasses aren't sending images." : {
+      "extractionState" : "stale",
       "localizations" : {
         "fi" : {
           "stringUnit" : {
@@ -3244,22 +3321,6 @@
         }
       }
     },
-    "I'm not sure I saw that, so I'd rather not guess." : {
-      "localizations" : {
-        "fi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "En ole varma, näinkö sen, joten en lähde arvaamaan."
-          }
-        },
-        "tr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Bunu gördüğümden emin değilim, o yüzden tahmin yürütmeyeyim."
-          }
-        }
-      }
-    },
     "I don't have your location yet, so I can't save this place." : {
       "localizations" : {
         "fi" : {
@@ -3342,6 +3403,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Dinliyorum"
+          }
+        }
+      }
+    },
+    "I'm not sure I saw that, so I'd rather not guess." : {
+      "localizations" : {
+        "fi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "En ole varma, näinkö sen, joten en lähde arvaamaan."
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bunu gördüğümden emin değilim, o yüzden tahmin yürütmeyeyim."
           }
         }
       }
@@ -3794,6 +3871,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Az önce gözlükten baktım."
+          }
+        }
+      }
+    },
+    "Looks at every saved picture on this iPhone again and deletes those showing a bathroom, a shower or a PIN pad. Nothing is sent anywhere." : {
+      "localizations" : {
+        "fi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Käy läpi jokaisen tähän iPhoneen tallennetun kuvan uudelleen ja poistaa ne, joissa näkyy kylpyhuone, suihku tai PIN-näppäimistö. Mitään ei lähetetä minnekään."
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bu iPhone'daki her kayıtlı resme yeniden bakar ve banyo, duş ya da şifre tuş takımı görünenleri siler. Hiçbir şey bir yere gönderilmez."
           }
         }
       }
@@ -4731,6 +4824,22 @@
         }
       }
     },
+    "Not seen" : {
+      "localizations" : {
+        "fi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ei nähty"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Görülmedi"
+          }
+        }
+      }
+    },
     "Not set" : {
       "localizations" : {
         "fi" : {
@@ -4814,6 +4923,7 @@
       }
     },
     "Nothing seen within 100 m of places like home or work is saved to memory. Swipe left to delete." : {
+      "extractionState" : "stale",
       "localizations" : {
         "fi" : {
           "stringUnit" : {
@@ -4825,6 +4935,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Ev veya iş gibi yerlerin 100 m yakınında görülen hiçbir şey hafızaya kaydedilmez. Silmek için sola kaydır."
+          }
+        }
+      }
+    },
+    "Nothing seen within the chosen distance of places like home or work is saved to memory; when your position is uncertain, Muisti counts you as inside. Swipe left to delete." : {
+      "localizations" : {
+        "fi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mitään, mitä nähdään valitun etäisyyden sisällä kodin tai työpaikan kaltaisista paikoista, ei tallenneta muistiin; jos sijaintisi on epävarma, Muisti olettaa sinun olevan alueella. Poista pyyhkäisemällä vasemmalle."
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ev ya da iş gibi yerlerin seçilen mesafesi içinde görülen hiçbir şey hafızaya kaydedilmez; konumun belirsizse Muisti seni içeride sayar. Silmek için sola kaydır."
           }
         }
       }
@@ -5985,22 +6111,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Göster"
-          }
-        }
-      }
-    },
-    "Not seen" : {
-      "localizations" : {
-        "fi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Ei nähty"
-          }
-        },
-        "tr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Görülmedi"
           }
         }
       }
@@ -7534,6 +7644,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Muisti'yi onaylamak için Meta AI uygulamasına geçecek, sonra buraya döneceksin. İnternet bağlantısı gerekir."
+          }
+        }
+      }
+    },
+    "You're in a no-record zone now" : {
+      "localizations" : {
+        "fi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Olet nyt alueella, jolla ei tallenneta"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Şu an kayıt dışı bir bölgedesin"
           }
         }
       }

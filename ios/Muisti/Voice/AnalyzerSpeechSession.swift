@@ -102,11 +102,9 @@ final class AnalyzerSpeechSession: ListeningSession, @unchecked Sendable {
                 last = now
                 return true
             }) else { return }
-            // Only once words have been heard: before that a click or a breath must not swap
-            // the "nothing said yet" wait for the short end-of-question one.
-            let current = speechText.withLock { Self.join($0.finalized, $0.volatile) }
-            guard !current.isEmpty else { return }
-            onText(current, false)
+            // Before the first words this is an empty update: the listener then keeps waiting
+            // for words (they come about a second after the voice), never ends early.
+            onText(speechText.withLock { Self.join($0.finalized, $0.volatile) }, false)
         }
         switch source {
         case .glasses(let tap):

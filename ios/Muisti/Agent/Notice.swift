@@ -132,6 +132,8 @@ enum Notice {
 
         var telling: Telling?
         var offer: Offer?
+        /// What the judge looked up before deciding (it counts as shown to it).
+        var lookedUp = ""
         var silentReason: String?
         var notes: [Intent] = []
         var completed: [String] = []
@@ -190,7 +192,10 @@ enum Notice {
             default: break
             }
         }
-        if out.telling == nil, out.offer == nil, out.silentReason == nil { out.silentReason = "no decision" }
+        if out.telling == nil, out.offer == nil, out.silentReason == nil {
+            out.silentReason = "no decision"
+            Trace.note("agent judge: no decision in calls [\(turn.calls.map { "\($0.name) \($0.arguments.prefix(80))" }.joined(separator: " | "))] text “\(turn.text.prefix(80))”")
+        }
         return out
     }
 
@@ -237,13 +242,23 @@ enum Notice {
     }
 
     /// One judgement. nil: the call failed (nothing is said).
-    static func judge(_ ai: NemotronClient, user: String, jpeg: Data?, language: String?, recordID: Int64?) async -> Outcome? {
+    static func judge(_ ai: NemotronClient, user: String, jpeg: Data?, language: String?, recordID: Int64?,
+                      toolbox: ReadToolbox? = nil) async -> Outcome? {
         let image = jpeg.map { NemotronClient.ImagePart(jpeg: $0) }
+        // The same agent loop as the user's turn: the judge may look things up (the memory,
+        // the log, a thing's last state, what was said) before it speaks or stays silent.
         let reply = await withTimeoutResult(seconds: 25) {
-            try await ai.chatTools(system: system, user: user, tools: tools, image: image, maxTokens: 500, background: true)
+            try await LaneKind.$current.withValue(.notice) {
+                try await AgentLoop.run(ai, system: system, user: user, decide: tools, reads: AgentLoop.judgeReads, toolbox: toolbox,
+                                        image: image, maxTokens: 500, background: true)
+            }
         }
         switch reply {
-        case .success(let turn): return outcome(from: turn, language: language, recordID: recordID)
+        case .success(let loop):
+            var out = outcome(from: loop.reply, language: language, recordID: recordID)
+            out.lookedUp = loop.shown
+            if !loop.lookedUp.isEmpty { Trace.note("agent looked up: " + loop.lookedUp.joined(separator: ", ")) }
+            return out
         case .failure(let error):
             Log.pipeline.info("agent judge failed: \(String(describing: error).prefix(120), privacy: .public)")
             return nil

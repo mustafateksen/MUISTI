@@ -156,7 +156,13 @@ Telefonda (gözlükle) `silence→sound` ölçümü henüz yapılmadı.
 - **İkinci arama turu:** ilk cevap "görmedim" ise model bir kez daha sorulur (`TurnTools.againTools`: başka sözcüklerle `search_memory` ya da `give_up`). Yeni arama ilk turda gösterilmemiş bir kayıt getirirse cevap yeniden üretilir; getirmezse ilk cevap kalır. Kullanıcının söylediği yer ve zaman aralığı ikinci turda değiştirilemez. `--no-second-search` ile kapatılır.
 - **"En yakın sonuç" yok:** "görmedim" cevabıyla birlikte artık kare gösterilmez (önceden sıralamanın ilk karesi "en yakın eşleşme" diye gösteriliyordu); cevap istemi de yerine başka bir şey önermemeyi söyler. Kartın etiketi "Görülmedi" / "Emin değilim".
 - **"Yaptım mı?" doğrulaması:** eylem görülen güvenlik bakışında o anın önceki kareleri (en çok 7, maskelenmiş) kanıt karesinin yanına kaydedilir (`SafetyStore.saveStrip`). Cevap bir günlük kaydına dayanıyorsa bu kareler sırayla modele bir kez daha gösterilir (`QueryEngine.doneCheck`, çoklu resim; uç 400 verirse 4'lük tek sayfa). Kareler iddiayı göstermiyorsa cevap, karelerin gösterdiği şeye çevrilir ("kapıda olduğunu gördüm ama kilitlediğini görmedim") ve "emin değilim" etiketi alır. Kareler cevapla birlikte kanıt olarak gösterilir. Kullanıcının sözle bildirdiği kayıtların karesi yoktur, onlar denetlenmez.
+- **Kare gelmezse:** model bakmak isteyip gözlükten kare gelmediğinde tur artık sabit "göremiyorum" cümlesiyle bitmiyor; bu, modele bakışın sonucu olarak yazılıyor ve soru bellek, konum ve harita sonuçlarıyla cevaplanıyor (yalnız bakarak cevaplanabilecek soruda tek cümleyle kameranın görüntü göndermediği söylenir). Tur istemine kameranın o an görüntü gönderip göndermediği de yazılıyor.
+- **Çevre soruları:** "yakında kafe var mı", "buralarda eczane" gibi sorular `search_memory` + `place: here` olur; aynı anda Apple Haritalar'a da sorulur (`Places.search`, 800 m, en çok 1,5 s, harita araması ayarı açıksa) ve sonuçlar "haritada var, gözlük görmedi" diye ayrı verilir. Cevap "görmedim, ama harita 600 m ötede … gösteriyor" biçimindedir; etiket "Görülmedi" kalır.
+- **Desteksiz "gördüm":** cevabın dayandığı kayıtların hiçbiri sıralayıcıdan −3,1 üstü puan almadıysa, alıntı tutsa bile kare bir kez daha modele gösterilir (`QueryEngine.unsupportedLogit`).
+- **Eylem testi (`actiontest`):** gerçek eylem kareleriyle (açık lisanslı ışık anahtarı ve çaydanlık videolarından saniyede bir kare; `tools/samples/action/`, kaynaklar `CREDITS.txt`) şerit bakışı ve "yaptım mı" doğrulaması ölçülür.
 - **Eylem şeridi 8 kare:** eller görünürken güvenlik bakışına son 12 saniyenin en çok 8 karesi ayrı resimler olarak gider; uç birden fazla resmi reddederse son 4 kare tek sayfada gönderilir.
+
+**Ölçüm (14 Kasım gece, simülatör, 73 kayıt, yeni uçlar; tek birleşik koşu):** eski 68 soruluk set 66/68, eski negatifler 11/11, recall@1 64/74, p50 3,3 s, p90 5,5 s; sohbet 27/29; ajan 52/52 (rutin adımları dahil); bakış/matematik 11/11. Yer soruları (14 soru: İstanbul / Stockholm / Tampere'de hiç kayıt yok, Helsinki, Otaniemi, "burada" iki ayrı konumdan) düzeltmelerden sonra 13/14; tek hata yer süzgeciyle ilgisiz: "zebra nerede gördüm" sorusuna bir koşuda uydurma "gördüm" cevabı (önceki iki koşuda doğru). "Görmedim" cevapları ikinci arama turu yüzünden 4–6 s sürüyor (tek turda ~3 s). Bakıştan sonra görsel doğrulama (look again) bu koşularda üç doğru cevabı geri çekti (kadın yüzü, yemek kamyonunun yeri, berber): bilinen dalgalanma. "Yaptım mı" doğrulaması ve 8 karelik şerit gerçek eylem görüntüsüyle ölçülmedi; rutinler yalnız uydurma günlükle (ajan testinin 13. adımı) denendi.
 
 ## 7b. Yeni model uçları (14 Kasım akşamı)
 
@@ -171,6 +177,41 @@ Ekibin kendi Verda kapsayıcıları (`NemotronClient.muistiChatBase`, `muistiRet
 | Resimli kısa cevap, 512 / 1024 / 1792 px | 0,5 / 0,6 / 0,85 s | NVIDIA 2–4 s |
 
 Vektörler NVIDIA'daki modelle aynı çıktı (metin kosinüs 1,0000, görsel 0,9999): kayıtlı vektörler geçerli, yeniden işleme yok. Kayıtlı ayarlar ilk açılışta yeni uçlara taşınır. Anahtar, depoya girmeyen `Muisti/Resources/Secrets.plist` dosyasından derlemeye gömülür ve ilk açılışta Keychain'e yazılır.
+
+## 9. Pipeline v2 (15 Kasım): kayıpsız, kalıcı bağlamlı, okuyabilen ajan
+
+Kaynak belge: depo kökündeki `todo.md`. Sunucu artık ekibin kendi kapsayıcısı (tek çağrı 0,1–0,9 s, 128 eşzamanlı görüntülü istek); "tek iş, kıt sunucu" varsayımıyla yazılmış kilitler ve iptaller kaldırıldı.
+
+| Ne | Önce | Şimdi | Nerede |
+|---|---|---|---|
+| Soru başlayınca arka plan | bütün arka plan istekleri iptal ediliyor, zenginleştirme soru bitene kadar duruyordu | hiçbir şey iptal edilmiyor; her iş türü kendi şeridinde (lane) bekler: güvenlik 6, kullanıcı 8, hakem 6, arka plan 12 eşzamanlı sohbet isteği. Embedding ve sıralama ayrı kapsayıcıda, şeritsiz | `NemotronClient` (`LaneKind`, `Lane`, görev-yerel `LaneKind.current`) |
+| NVIDIA'ya kaçış | Verda yavaşsa görüntülü çağrılar dahil NVIDIA build | varsayılan kapalı (`Settings.allowNvidiaFallback`); açık olsa da resim içeren istek asla gitmez | `fallbackAvailable`, `chat`, `chatTools` |
+| Yeniden deneme | soru 429'da beklemezdi, diğerleri 6·n s | kendi kapsayıcıda 429/5xx için 0,5–1–2 s | `post` |
+| Hakem meşgulken gelen kayıt | yalnız en yenisi tutulur, aradakiler kaybolurdu | sırayla hepsi (en çok 40 bekleyen); taşan kayıt nedeniyle günlüğe yazılır | `AgentCenter.noticed`, `waitingNotices` |
+| Güvenlik bakışı sürerken gelen kare | atılırdı | aynı bakış türü için bekler, daha yenisi yerine geçer (birleşir), bakış bitince işlenir; `maxPerMinute` 60 | `SafetyMonitor.consider`, `waitingFrames` |
+| Zenginleştirme | tek işçi, en yeni önce, soru sırasında durur | 6 işçi, eskiden yeniye; son 3 saniyenin karesi sırayı atlar; soru sırasında durmaz; aynı kayıt iki işçiye gitmez | `EnrichmentWorker.run/work`, `MemoryStore.pendingOldest` |
+| Konuşma | RAM'de 6 tur, isteme son 15 dk'nın 4 turu | `dialog.sqlite`: iki yönlü bütün turlar (kullanıcı, cevap, kendiliğinden söylenen, susma kararı), yuvarlanan özetler, modelin kendi kısa notları (süreli), olay günlüğü. İsteme özetler + notlar + bugünün son 12 turu girer; uygulama yeniden açılınca kalır; "yeni sohbet" yalnız birebir turları boşaltır | `Agent/Dialog.swift`, `Agent/ContextBuilder.swift`, `QueryEngine.dialogLines` |
+| Hakemin konuşmayı görmesi | görmezdi | aynı bağlamı okur ("toplantıdayım", "aldım", "rahatsız etme") | `AgentCenter.situationWithTalk` |
+| Konuşmada söylenene dayanan cevap | kanıt kuralı sayıyı reddederdi | konuşma satırları gösterilmiş sayılır; cevap "bana söylemiştin" diye verilir | `QueryEngine.run`, `MemoryPrompts.answerUser` |
+| Karar öncesi okuma | hakemin ve tur kararının okuma aracı yoktu | ortak ajan döngüsü (en çok 3 model çağrısı): önce bakma araçları — `recall_dialog`, `object_state`, `safety_log`, `route_status`, `calendar`, `places`, `note_to_self`, hakemde ayrıca `find_in_memory` — sonra karar araçları; son adımda yalnız karar araçları. Bakılanlar kanıt denetiminde gösterilmiş sayılır | `Agent/ReadTools.swift` (`AgentLoop`, `ReadToolbox`), `QueryEngine.decide`, `Notice.judge` |
+| Kare analizi şeması | yalnız bellek alanları + `attention` | aynı çağrıda `object_states`, `allergens_seen`, `actions`, `landmarks`, `hold_items`; kaydın aranabilir metnine yazılır. İzlenen nesnelerin durumu, o an güvenlik bakışı yapılmadıysa durum makinesine "enrichment" kaynağıyla girer | `Extraction.swift`, `SafetyMonitor.noteEnriched` |
+| Arka planda çekilen kareler | güvenlik ve ajana girmezdi | diğer kareler gibi zenginleşir; durumları çekildiği saatle durum makinesine girer; hakem "o zamandan bir kare" notuyla bakar, canlı uyarı olarak söylenmez | `CaptureController.ingestBackgroundSegment`, `AgentCenter.noticed` |
+| Düşünme (thinking) | her yerde kapalı | bakış turunda tur kararı `reasoning_needed` derse açık (çok adımlı hesap, denklem, birim fiyat); geri kalan her çağrıda kapalı | görev-yerel `Reasoning.on`, `look_now` aracı |
+| Periyodik bakış | 10 dk | 2 dk (yalnız durum değiştiyse) | `AgentCenter.reviewEvery` |
+| Çağırma | dokunuş ve gözlük uyandırma sözcüğü ayrı yollar | tek giriş: `VoiceAssistant.summon(Summon(source:text:))`; yeni bir uyandırma yolu yalnız yeni bir üreticidir | `VoiceAssistant` |
+
+Sonradan eklenenler (ölçüme göre):
+- **Soru önceliği, iptalsiz:** yük testinde 12 kare analizi aynı anda koşarken tur kararı 0,6–0,8 s yerine 5,0 s sürdü (sunucu kimseyi reddetmeden herkesi yavaşlatıyor). Arka plan şeridi 8'e indirildi ve bir soru cevaplanırken en çok 2 yeni arka plan isteği başlatıyor (`Lane.answering`, `LaneKind.backgroundWhileAnswering`); koşan istekler iptal edilmiyor. Aynı testte tur kararı ortanca 1,8 s, p90 3,3 s (hedef 2,5 s'nin üstünde). Zenginleştirme 5 işçi.
+- **Okunamayan bakış:** bakış turunda sorulan şey karede var ama okunamayacak kadar küçükse (masanın öbür ucundaki ekranda bir problem) cevap şeması `too_small` der; gözlükten tam çözünürlüklü fotoğraf alınır (`CaptureController.sharpView`, 2560 px) ve soru o fotoğrafla yeniden cevaplanır. Sahada denenmedi.
+- **Tur için okuma araçları:** `object_state` ve `safety_log` yalnız hakemde; tur kararına açıkken "ocak açık mı?" sorusu bakmak yerine günlükten `say` ile, denetimsiz cevaplandı.
+
+Bilerek farklı yapılanlar ve yapılmayanlar:
+- Ayrı bir `MuistiBrain` actor'ü ve genel bir olay yolu (event bus) yazılmadı: karar veren yerler aynı kaldı (soru hattı, hakem, güvenlik durum makinesi), ama artık aynı bağlamı ve aynı okuma araçlarını kullanıyor ve tek konuşma kapısından çıkıyorlar. Olay günlüğü (`dialog.sqlite` › `events`) yalnız hakeme giden kayıtları ve birleşen güvenlik karelerini yazar; algı kuyruğundan düşen kareler (A3) yazılmıyor.
+- `search_memory` ve `look_now` tur için bitiş kararı olarak kaldı: arama → kanıtlı cevap → denetim hattı döngünün içine alınmadı (ölçülmüş doğruluğu korumak için). `verify_action` ayrı araç değil; "yaptım mı" doğrulaması cevap hattında (`doneCheck`).
+- `user_model` tablosu yok: kullanıcının kendisi hakkında söyledikleri `agent.sqlite` › `facts` içinde kalıyor ve bağlama oradan giriyor. `open_threads` tablosu açıldı ama kullanılmıyor (bekleyen evet/hayır hâlâ güvenlik ve ajan tarafında tutuluyor).
+- Canlı bakış karesi takip sorusu için hâlâ yalnız bir sonraki turda ve 90 saniye içinde yeniden veriliyor (10 tur değil).
+- Zenginleştirmede "işleniyor" durumu veritabanına yazılmıyor; sahiplenme bellekte tutuluyor (yeniden başlatmada kayıt yeniden bekleyen olur).
+- Akıtma yok (geçit yanıtı tek parça veriyor); ilk cümleyi önden söyleme eklenmedi.
 
 ## 8. Bilinen açıklar
 

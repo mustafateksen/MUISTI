@@ -45,6 +45,8 @@ enum EvalRunner {
         var outcomes: [Outcome] = []
         for c in cases {
             let negative = c.expect.isEmpty && c.must == nil
+            // Every question stands alone here (a real conversation is the conversation test's business).
+            await controller.queryEngine.resetConversation()
             let fix = c.at.flatMap { $0.count == 2 ? LocationFix(CLLocation(latitude: $0[0], longitude: $0[1])) : nil }
             let result = await controller.queryEngine.ask(c.q, location: fix,
                                                           position: fix.map { String(format: "%.5f, %.5f", $0.latitude, $0.longitude) })

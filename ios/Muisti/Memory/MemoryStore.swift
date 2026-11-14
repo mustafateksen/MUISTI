@@ -398,6 +398,13 @@ actor MemoryStore {
         if let vector, model == embedModel { imageIndex.upsert(id, vector) } else { imageIndex.remove(id) }
     }
 
+    /// The backlog in the order it was seen: worked off oldest first, so nothing waits at the
+    /// back of a busy walk (the agent's "tell me when you see…" depends on every frame).
+    func pendingOldest(limit: Int) -> [MemoryRecord] {
+        rows("WHERE status = 0 ORDER BY seen_at ASC LIMIT \(limit)")
+    }
+
+    /// The newest pending records (the fast slot: what the user is looking at now).
     func pending(limit: Int) -> [MemoryRecord] {
         // Newest first: what the user is looking at now is understood within seconds (safety
         // rules, "what is this"); a backlog from a busy walk fills in behind it.
