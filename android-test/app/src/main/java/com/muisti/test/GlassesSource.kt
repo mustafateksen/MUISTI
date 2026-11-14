@@ -48,7 +48,10 @@ class GlassesSource(private val activity: ComponentActivity, private val state: 
     private var camera: Camera? = null
     private var job: Job? = null
     private var initialized = false
-    private var cameraGranted = activity.getPreferences(android.content.Context.MODE_PRIVATE).getBoolean("glassesCam", false)
+    // read lazily: the activity is not ready for preferences while it is being constructed
+    private val prefs by lazy { activity.getSharedPreferences("glasses", android.content.Context.MODE_PRIVATE) }
+    private val cameraGrantedSaved get() = prefs.getBoolean("glassesCam", false)
+    private var cameraGranted = false
 
     private var btCont: CancellableContinuation<Boolean>? = null
     private val btLauncher = activity.registerForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
@@ -87,13 +90,14 @@ class GlassesSource(private val activity: ComponentActivity, private val state: 
             //    and stays empty while the glasses are in the case / asleep / connected to another phone).
             val dev = waitForGlasses() ?: return@launch
             // 5. Camera permission (granted inside Meta AI) - asked once; later Try agains don't ask again
+            if (!cameraGranted) cameraGranted = cameraGrantedSaved
             if (!cameraGranted) {
                 status("Checking camera permission…")
                 val current = Wearables.checkPermissionStatus(Permission.CAMERA).getOrNull()
                 cameraGranted = current == PermissionStatus.Granted ||
                     suspendCancellableCoroutine<PermissionStatus> { permCont = it; permLauncher.launch(Permission.CAMERA) } == PermissionStatus.Granted
                 if (!cameraGranted) { status("Camera permission denied in Meta AI"); return@launch }
-                activity.getPreferences(android.content.Context.MODE_PRIVATE).edit().putBoolean("glassesCam", true).apply()
+                prefs.edit().putBoolean("glassesCam", true).apply()
             }
             // 6. Session -> 7. stream (a few tries: the link can still be settling right after it connects)
             status("Connecting to $dev…")
@@ -178,7 +182,7 @@ class GlassesSource(private val activity: ComponentActivity, private val state: 
                     stream.errorStream.collect {
                         if (it.description.contains("permission", ignoreCase = true)) {   // revoked in Meta AI: ask again next time
                             cameraGranted = false
-                            activity.getPreferences(android.content.Context.MODE_PRIVATE).edit().putBoolean("glassesCam", false).apply()
+                            prefs.edit().putBoolean("glassesCam", false).apply()
                         }
                         status("Stream error: ${it.description}")
                     }
