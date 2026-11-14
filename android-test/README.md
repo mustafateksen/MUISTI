@@ -32,3 +32,24 @@ share the APK outside the team.
 Meta AI app -> Settings -> App Info -> tap the version 5 times -> Developer mode on. In MUISTI tap
 "Glasses": it registers with Meta AI, asks for the camera permission there, and streams 720x1280.
 If it says the glasses need an update, use the "Update glasses" button, then "Try again".
+
+## What is real today (Nov 14, 2026)
+
+`docs/CHECKLIST.md` is the source of truth (status, evidence, commit per task); `docs/BASELINE.md` has the baseline.
+Packages: `engine/` (pure Kotlin), `privacy/`, `capture/`, `ui/`, app code in `test/`.
+
+- Privacy: one fail-closed image exit (`Llm.imagePart` -> `PrivacyGate`); bathroom + nudity locked on; other scene
+  classes, sensitive-OCR blocking (default off, team decision) and plate blur (default on) in Settings -> Privacy;
+  no-record zones checked before OCR / model / network; resumable old-memory scan (WorkManager).
+- Keys: debug builds use `local.properties`; release builds carry no key and pair with the token proxy
+  (`nemotron/token_proxy.py` on `omer/nemotron-scene`, not deployed yet).
+- Network: offline frames wait on disk and drain one by one after reconnect.
+- Capture: adaptive window (motion, GPS speed, battery, heat; pauses when too hot).
+- Memory: episodes, verified one-call summaries, Timeline screen, notes ("note it"), visual search (on-phone
+  MobileCLIP text encoder; the build downloads 43 MB), hybrid retrieval (RRF + tie-only rerank).
+- Agent: confirm-before-acting tools (no-record zone, safety rule), Agent Center (calendar, notes at places,
+  closing hours; max one alert per 15 min, quiet hours), safety monitor.
+- Not done: voice barge-in / glasses mic, shortcuts and QS tile, glasses photo capture, Phase 3 (except the
+  Timeline), integration tests. No on-device check was possible this session (no phone attached).
+
+Tests: `./gradlew testDebugUnitTest` (JVM). Live checks against Nemotron: add `-Dmuisti.fixture=1`.
