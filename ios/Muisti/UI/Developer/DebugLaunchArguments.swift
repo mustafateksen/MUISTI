@@ -122,6 +122,7 @@ enum DebugLaunchArguments {
                 // `--conv=<folder in Documents>`: multi-turn conversations, tool use, live view.
                 let folder = ProcessInfo.processInfo.arguments.first { $0.hasPrefix("--conv=") }.map { String($0.dropFirst(7)) } ?? "conv"
                 await ConversationEval.run(controller: controller, folder: folder)
+            case "agenteval": await AgentEval.run(controller: controller)
             case "safetydemo": await SafetyDemo.run(controller.safety)
             case "safetyeval":
                 // `--safety=<folder in Documents>`: Muisti Turva scenarios, photos, conversation.

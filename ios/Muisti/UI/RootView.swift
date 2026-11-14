@@ -7,6 +7,9 @@ struct RootView: View {
     let config: AppConfig
     let wearables: WearablesController
     @State private var tab: AppTab = .assistant
+    /// First run: ask once for a natural voice (Ava Premium), see `VoiceSetupSheet`.
+    @AppStorage("voiceSetupOffered") private var voiceSetupOffered = false
+    @State private var showVoiceSetup = false
     @Environment(\.scenePhase) private var scenePhase
     private var signals: AppSignals { AppSignals.shared }
 
@@ -25,6 +28,9 @@ struct RootView: View {
         }
         // One palette everywhere: toggles, pickers and links follow the brand colour too.
         .tint(.brand)
+        .sheet(isPresented: $showVoiceSetup) {
+            VoiceSetupSheet { await controller.voice.previewVoice(language: "en") }
+        }
         .onChange(of: signals.pendingListen) { _, pending in
             if pending { handleListenRequest() }
         }
@@ -43,10 +49,21 @@ struct RootView: View {
             }
             #endif
             handleListenRequest()
+            offerVoiceSetup()
         }
         #if DEBUG
         .task { await DebugLaunchArguments.run(controller: controller, config: config, wearables: wearables) }
         #endif
+    }
+
+    private func offerVoiceSetup() {
+        guard !voiceSetupOffered else { return }
+        #if DEBUG
+        // Scripted and UI-test launches must not be covered by a sheet.
+        if ProcessInfo.processInfo.arguments.contains(where: { $0.hasPrefix("--") }) { return }
+        #endif
+        voiceSetupOffered = true
+        if !VoicePicker.hasPremiumAva { showVoiceSetup = true }
     }
 
     private func handleListenRequest() {

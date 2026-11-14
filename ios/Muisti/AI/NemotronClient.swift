@@ -292,16 +292,21 @@ actor NemotronClient {
     /// `tools` is the OpenAI `tools` array as JSON text. The model must call one of them
     /// (`required`): with `auto` it answered memory questions out of its head ("I don't have
     /// that in your memory") instead of searching — 9 of 29 eval turns, 14 Nov.
-    func chatTools(system: String, user: String, tools: String, maxTokens: Int = 400, temperature: Double = 0,
-                   route requested: Route? = nil) async throws -> ToolReply {
+    func chatTools(system: String, user: String, tools: String, image: ImagePart? = nil, maxTokens: Int = 400,
+                   temperature: Double = 0, route requested: Route? = nil, background: Bool = false) async throws -> ToolReply {
         let route = requested ?? preferredRoute()
         let baseURL = route == .primary ? settings.baseURL : Provider.nvidia.baseURL
         guard let toolList = try? JSONSerialization.jsonObject(with: Data(tools.utf8)) else {
             throw NemotronError.badResponse("tools are not JSON")
         }
+        var content: Any = user
+        if let image {
+            content = [["type": "text", "text": user],
+                       ["type": "image_url", "image_url": ["url": "data:image/jpeg;base64,\(image.jpeg.base64EncodedString())"]]] as [[String: Any]]
+        }
         let body: [String: Any] = [
             "model": route == .primary ? settings.chatModel : Provider.nvidia.chatModel,
-            "messages": [["role": "system", "content": system], ["role": "user", "content": user]],
+            "messages": [["role": "system", "content": system], ["role": "user", "content": content]],
             "tools": toolList,
             "tool_choice": "required",
             "max_tokens": maxTokens,
@@ -314,7 +319,7 @@ actor NemotronClient {
         var completed = false
         defer { noteLatency(route, seconds: (ContinuousClock.now - sent).seconds, completed: completed) }
         let data = try await post(baseURL.appendingPathComponent("chat/completions"), json: body,
-                                  key: route == .primary ? settings.apiKey : settings.effectiveRerankKey)
+                                  key: route == .primary ? settings.apiKey : settings.effectiveRerankKey, background: background)
         completed = true
         guard
             let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],

@@ -19,6 +19,8 @@ struct AskResult: Sendable, Identifiable {
     var ranked: [[Int64]] = []
     /// Muisti Turva command carried by this reply (run by the voice assistant).
     var safety: SafetyCommand?
+    /// Agent command carried by this reply (an intent, a destination, a mute…), run the same way.
+    var agent: AgentCommand?
     /// A command reply (rule, forget, log) rather than an answer about something seen.
     var isCommand = false
     /// Evidence frames from the safety log the reply relies on.
@@ -183,13 +185,15 @@ actor QueryEngine {
         switch decision {
         case .reply: out.trace.append("turn: reply \(decideMs) ms")
         case .look: out.trace.append("turn: tool look_now \(decideMs) ms")
-        case .search(let query): out.trace.append("turn: tool search_memory \(decideMs) ms" + (query.map { " “\($0.prefix(60))”" } ?? ""))
+        case .search(let query, let from, let to):
+            out.trace.append("turn: tool search_memory \(decideMs) ms" + (query.map { " “\($0.prefix(60))”" } ?? "")
+                             + (from != nil || to != nil ? " span \(from.map(Cue.stamp) ?? "…")–\(to.map(Cue.stamp) ?? "now")" : ""))
         case .forget: out.trace.append("turn: tool forget_recent \(decideMs) ms")
-        case .command(_, _, let tool): out.trace.append("turn: tool \(tool) \(decideMs) ms")
+        case .command(_, _, let tool), .agent(_, _, let tool): out.trace.append("turn: tool \(tool) \(decideMs) ms")
         case nil: out.trace.append("turn: no decision \(decideMs) ms")
         }
         switch decision {
-        case .reply, .forget, .command:
+        case .reply, .forget, .command, .agent:
             findTask.cancel()     // nothing to look up
             searchTask?.cancel()
             return out
@@ -204,6 +208,16 @@ actor QueryEngine {
         case .search, nil:
             break
         }
+        // The user named a span of time: the search is done again inside it (what was started
+        // before the model said so looked at everything).
+        if case .search(let own, let from, let to) = decision, from != nil || to != nil, !Task.isCancelled {
+            searchTask?.cancel()
+            let query = own ?? trimmed
+            let ranked = await reranked(await find(query, location: location, from: from, to: to), query: query)
+            out.groups = ranked.groups
+            out.trace += ranked.trace
+            return out
+        }
         if let searchTask {
             let found = await withTaskCancellationHandler { await searchTask.value } onCancel: { searchTask.cancel() }
             out.groups = found.groups
@@ -215,7 +229,7 @@ actor QueryEngine {
         // judges all of it against that query.
         var found = await findTask.value
         var query = trimmed
-        if case .search(let own?) = decision, own.caseInsensitiveCompare(trimmed) != .orderedSame, !Task.isCancelled {
+        if case .search(let own?, _, _) = decision, own.caseInsensitiveCompare(trimmed) != .orderedSame, !Task.isCancelled {
             let second = await find(own, location: location)
             found = (Self.interleave(second.groups, found.groups), found.trace + second.trace.map { "query: " + $0 })
             query = own
@@ -227,7 +241,7 @@ actor QueryEngine {
     }
 
     /// Query vector → search on the phone → one entry per sign/object.
-    private func find(_ text: String, location: LocationFix?) async -> (groups: [MemoryHit], trace: [String]) {
+    private func find(_ text: String, location: LocationFix?, from: Date? = nil, to: Date? = nil) async -> (groups: [MemoryHit], trace: [String]) {
         var trace: [String] = []
         let ai = self.ai
         // 1. Query vector (~0.3–0.9 s; skipped when embeddings are off or slow).
@@ -239,6 +253,8 @@ actor QueryEngine {
         search.keywords = [text]
         search.limit = 60
         search.embedding = embedding
+        search.from = from
+        search.to = to
         let hits = await store.search(search)
         // 3. One entry per sign/object: repeated and partial reads collapse into one group.
         let groups = Self.group(hits).map { Self.withDistance($0, from: location) }
@@ -357,6 +373,15 @@ actor QueryEngine {
                            (Self.detectLanguage(reply) ?? Self.detectLanguage(trimmed))?.code, trace)
             r.safety = command
             r.isCommand = true
+            return r
+        case .agent(let command, let reply, let tool):
+            // An intent, a destination, a place, a mute: kept by the agent, run by the caller.
+            trace.add("agent: \(tool)")
+            var r = result(trimmed, reply, .seen, [], true, started, nil,
+                           (Self.detectLanguage(reply) ?? Self.detectLanguage(trimmed))?.code, trace)
+            r.agent = command
+            r.isCommand = true
+            r.expectsReply = reply.last.map { $0 == "?" || $0 == "？" } ?? false
             return r
         case .look:
             isLook = true

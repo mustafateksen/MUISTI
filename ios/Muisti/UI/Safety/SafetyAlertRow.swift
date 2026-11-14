@@ -28,7 +28,7 @@ struct SafetyAlertRow: View {
             if let done {
                 Button("Got it", systemImage: "checkmark.circle.fill", action: done)
                     .labelStyle(.iconOnly)
-                    .font(.title2)
+                    .font(.title3)
                     .foregroundStyle(.tint)
                     .buttonStyle(.borderless)
             }

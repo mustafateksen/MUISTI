@@ -124,6 +124,12 @@ final class LocationProvider: NSObject, CLLocationManagerDelegate {
         return latest
     }
 
+    /// A position that did not come from this provider's own updates: the one that woke the app
+    /// in the background (`BackgroundRuntime`), or a made-up one in the agent evaluation.
+    func inject(_ location: CLLocation) {
+        accept([LocationFix(location)])
+    }
+
     private func accept(_ fixes: [LocationFix]) {
         for fix in fixes where fix.accuracy > 0 {
             latest = fix

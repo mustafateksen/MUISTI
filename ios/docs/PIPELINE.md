@@ -136,11 +136,23 @@ Son sohbet koşusundaki iki "hata"da cevap doğru; bakıştan hemen sonraki taki
 
 Telefonda (gözlükle) `silence→sound` ölçümü henüz yapılmadı.
 
-## 7. Bilinen açıklar
+## 7. 14 Kasım'da sonradan eklenenler
 
-- Güvenlik kareleri algının OCR + kafa tespitini yeniden çalıştırıyor (`SafetyFrame.prepare`); paylaşılmıyor.
-- `checkEnriched` kuralları sırayla değerlendiriyor (kural sayısı az olduğu sürece küçük maliyet).
-- Sesle araya girme yok (yalnız dokunuşla): gözlük hoparlörünün yankısı mikrofona giriyor.
+- **Ortak kare analizi:** güvenlik kareleri algının OCR + kafa tespitini yeniden çalıştırmıyor; `PerceptionEngine.FrameAnalysis.shared` aynı okumayı paylaştırıyor.
+- **Kurallar yan yana:** `SafetyMonitor.checkEnriched` kuralları `TaskGroup` ile aynı anda değerlendiriyor.
+- **Sesle araya girme:** cevap okunurken cevabın metninde olmayan yaklaşık 3 kelime duyulursa konuşma kesilir (`VoiceAssistant.listenWhileSpeaking`; `voiceBargeIn` ayarı).
+- **Görsel kanal:** keyframe'ler de aynı uzayda embed edilir ve aramaya ayrı bir sıra olarak girer.
+- **Konum:** her anıya çevre bilgisi (bina/semt/şehir, varsa kat) yazılır; şu anki sokak, çevre ve koordinat hem tur kararına hem cevaba verilir.
+- **Zaman aralığı:** `search_memory` aracı `from` / `to` alır; kullanıcı "dün", "bu sabah" derse arama yalnız o aralıktaki kayıtlarda yapılır (`MemorySearch.from/to`).
+- **Dikkat işareti:** zenginleştirme şeması `attention` ve `attention_reason` alanlarını da doldurur; ajan bunları okur (bkz. `AGENT.md`).
+- **Tek konuşma kapısı:** güvenlik uyarıları dahil kendiliğinden söylenen her şey `InterventionPolicy` üzerinden geçer; bekleyen uyarı kuyruğunda güvenlik en öndedir.
+- **Etkinlik ve bağlantı düğmeleri:** anı ekranında tarih, web adresi, e-posta ve adres de algılanır (`UI/Memory/MemoryDetections.swift`).
+- **Ajan:** kendiliğinden devreye giren taraf ayrı belgede: `AGENT.md`.
+
+## 8. Bilinen açıklar
+
 - Bakıştan sonraki takip sorusunda model bazen yeniden bakmak yerine az önceki kareyi kaynak gösteriyor (cevap doğru, yol farklı).
 - Cevap tek parça okunuyor; cümle cümle akıtma şemalı cevap tek parça geldiği için kazanç sağlamıyor.
-- Arka planda kaydedilen video bölümleri öne gelince işlenir; bu kareler durum/tehlike kontrolüne girmez (yalnız metin kuralları).
+- Arka planda kaydedilen video bölümleri öne gelince işlenir; bu kareler durum/tehlike kontrolüne girmez, ajan da bunlar için en çok bildirim atar.
+- Telefonda gözlükle `silence→sound` süresi hâlâ ölçülmedi.
+- 640 / 896 resim hücresi, `[unsure]` ve ikinci bakış ayrı ayrı ölçüldü ama o gün uç yavaştı ve iki koşu kesintiye denk geldi; sonuçlar karar vermeye yetmiyor (hepsi açık 63/68, `[unsure]` kapalı 66/68, görsel kanal kapalı 63/68, hücre 640 62/68; görsel set hepsi açık 16–17/18, görsel kanal kapalı 15/18).

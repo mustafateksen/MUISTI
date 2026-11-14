@@ -2,6 +2,10 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array>
+		<string>fi.junction.powerpuffboys.muisti.agent.refresh</string>
+	</array>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
 	<key>CFBundleDisplayName</key>
@@ -54,10 +58,16 @@
 	<array>
 		<string>_bonjour._tcp</string>
 	</array>
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>Lets Muisti know what is next in your day, so it can remind you in time. Only if you turn it on.</string>
+	<key>NSCalendarsWriteOnlyAccessUsageDescription</key>
+	<string>Needed to add an event you asked Muisti to put in your calendar.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>Used as the capture source when your glasses aren't available.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Lets your iPhone find your glasses over Wi-Fi.</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>Lets Muisti remind you when you arrive at a place even when the app is closed. Only if you turn it on.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>Needed to save where you saw things and to decide when to capture a frame.</string>
 	<key>NSMicrophoneUsageDescription</key>
@@ -82,6 +92,7 @@
 		<string>bluetooth-peripheral</string>
 		<string>audio</string>
 		<string>location</string>
+		<string>fetch</string>
 	</array>
 	<key>UIFileSharingEnabled</key>
 	<true/>

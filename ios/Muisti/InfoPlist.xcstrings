@@ -82,6 +82,52 @@
         }
       }
     },
+    "NSCalendarsFullAccessUsageDescription" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lets Muisti know what is next in your day, so it can remind you in time. Only if you turn it on."
+          }
+        },
+        "fi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Kertoo Muistille, mitä päivässäsi on seuraavaksi, jotta se voi muistuttaa ajoissa. Vain jos otat sen käyttöön."
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Muisti'nin gününde sırada ne olduğunu bilip sana zamanında hatırlatmasını sağlar. Sadece açarsan."
+          }
+        }
+      }
+    },
+    "NSCalendarsWriteOnlyAccessUsageDescription" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Needed to add an event you asked Muisti to put in your calendar."
+          }
+        },
+        "fi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tarvitaan tapahtuman lisäämiseen, jonka pyysit Muistia lisäämään kalenteriisi."
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Muisti'den takvimine eklemesini istediğin etkinliği eklemek için gerekli."
+          }
+        }
+      }
+    },
     "NSCameraUsageDescription" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -124,6 +170,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "iPhone'unun gözlüğünü Wi-Fi üzerinden bulmasını sağlar."
+          }
+        }
+      }
+    },
+    "NSLocationAlwaysAndWhenInUseUsageDescription" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lets Muisti remind you when you arrive at a place even when the app is closed. Only if you turn it on."
+          }
+        },
+        "fi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Antaa Muistin muistuttaa sinua, kun saavut paikkaan, vaikka sovellus olisi suljettu. Vain jos otat sen käyttöön."
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Uygulama kapalıyken bile bir yere vardığında Muisti'nin sana hatırlatma yapmasını sağlar. Sadece açarsan."
           }
         }
       }

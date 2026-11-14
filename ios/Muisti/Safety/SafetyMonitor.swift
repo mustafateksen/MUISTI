@@ -66,6 +66,12 @@ final class SafetyMonitor {
     /// Speaks an alert or question through the glasses (set by the controller).
     @ObservationIgnored var announce: (_ text: String, _ language: String?, _ expectsReply: Bool, _ frame: URL?) async -> Void = { _, _, _, _ in }
 
+    /// The last few frames at home (raw, in memory only, at most 12 s old): when a look is sent
+    /// while the user's hands are in view, the ones just before it go along as a time strip, so
+    /// the model can see something being done (a knob turned, a pill taken), not just a state.
+    @ObservationIgnored private var recentFrames: [(jpeg: Data, at: Date)] = []
+    static let stripFrames = 4
+    static let stripSeconds: TimeInterval = 12
     @ObservationIgnored private var lastSent: Date?
     @ObservationIgnored private var sentTimes: [Date] = []
     @ObservationIgnored private var inFlight = false
@@ -172,6 +178,14 @@ final class SafetyMonitor {
         // is sent for them); only rules about an object's state need frames of their own.
         let hasAllergenRules = false
         let hasAwayRules = rules.contains { $0.enabled && $0.trigger.type == .event && $0.trigger.state != nil }
+        if home {
+            recentFrames.removeAll { now.timeIntervalSince($0.at) > Self.stripSeconds }
+            // At least 0.7 s apart: the same instant twice shows no movement.
+            if recentFrames.last.map({ frame.capturedAt.timeIntervalSince($0.at) >= 0.7 }) ?? true {
+                recentFrames.append((frame.jpeg, frame.capturedAt))
+                if recentFrames.count > 8 { recentFrames.removeFirst() }
+            }
+        }
         // Fast path decided without any image work.
         if home, since < tuning.homeHandsEvery { return }
         if !home, !hasAllergenRules, !hasAwayRules { return }
@@ -180,6 +194,7 @@ final class SafetyMonitor {
         let jpeg = frame.jpeg
         let tuning = self.tuning
         let allergens = watchedAllergens
+        let earlier = recentFrames.filter { $0.at < frame.capturedAt.addingTimeInterval(-0.5) }.suffix(Self.stripFrames - 1)
         Task {
             defer { self.inFlight = false }
             // Hands first (cheap); the privacy copy (OCR + head masking) only for frames that are due.
@@ -193,22 +208,34 @@ final class SafetyMonitor {
             guard let copy = await Task.detached(priority: .utility, operation: { SafetyFrame.prepare(jpeg) }).value else { return }
             self.lastSent = Date()
             self.sentTimes.append(Date())
-            await self.observe(copy, frame: frame, watched: watched, allergens: allergens)
+            // Hands at work: the frames just before this one, masked the same way, as a strip.
+            var strip: (jpeg: Data, count: Int, seconds: Int)?
+            if hands, !earlier.isEmpty {
+                let before = await Task.detached(priority: .utility) {
+                    earlier.compactMap { SafetyFrame.prepare($0.jpeg, maxPixel: 768)?.jpeg }
+                }.value
+                if !before.isEmpty, let picture = QueryEngine.montage(jpegs: before + [copy.jpeg], cell: 768) {
+                    strip = (picture, before.count + 1, max(1, Int(frame.capturedAt.timeIntervalSince(earlier.first?.at ?? frame.capturedAt).rounded())))
+                }
+            }
+            await self.observe(copy, frame: frame, watched: watched, allergens: allergens, strip: strip)
         }
     }
 
-    private func observe(_ copy: SafetyFrame.Prepared, frame: CapturedFrame, watched: [String], allergens: [String]) async {
+    private func observe(_ copy: SafetyFrame.Prepared, frame: CapturedFrame, watched: [String], allergens: [String],
+                         strip: (jpeg: Data, count: Int, seconds: Int)? = nil) async {
         let observation: SafetyObservation
         do {
             let ai = ai
             let started = ContinuousClock.now
             observation = try await Self.afterQuestions(ai) {
                 try await ai.chatJSON(SafetyObservation.self, system: SafetyPrompts.observeSystem,
-                                      user: SafetyPrompts.observeUser(watched: watched, allergens: allergens, ocr: copy.ocr),
-                                      image: .init(jpeg: copy.jpeg), jsonSchema: SafetyPrompts.observeSchema,
+                                      user: SafetyPrompts.observeUser(watched: watched, allergens: allergens, ocr: copy.ocr)
+                                        + (strip.map { SafetyPrompts.stripNote(frames: $0.count, seconds: $0.seconds) } ?? ""),
+                                      image: .init(jpeg: strip?.jpeg ?? copy.jpeg), jsonSchema: SafetyPrompts.observeSchema,
                                       schemaName: "observation", maxTokens: 600, temperature: 0, background: true)
             }
-            Trace.note("safety look: \((ContinuousClock.now - started).milliseconds) ms, frame \(String(format: "%.1f", Date().timeIntervalSince(frame.capturedAt))) s old")
+            Trace.note("safety look\(strip.map { " (strip of \($0.count), \($0.seconds) s)" } ?? ""): \((ContinuousClock.now - started).milliseconds) ms, frame \(String(format: "%.1f", Date().timeIntervalSince(frame.capturedAt))) s old")
         } catch {
             Log.pipeline.info("safety observe failed: \(String(describing: error), privacy: .public)")
             return
@@ -359,7 +386,7 @@ final class SafetyMonitor {
         askedConfirm[object] = at
         pending = .action(object: object, action: "took", frame: frameFile, seenAt: at)
         let name = object.split(separator: ":").last.map(String.init) ?? object
-        let question = rule.confirmQuestion ?? "Did you take your \(name)?"
+        let question = rule.confirmQuestion ?? String(localized: "Did you take your \(name)?")
         await announce(question, rule.language, true, frameFile.map(store.frameURL))
     }
 
@@ -472,7 +499,7 @@ final class SafetyMonitor {
         if contextEvent == "left_home", autoHazards() {
             for st in await store.states().map(staled) where st.active && st.state != "unknown" {
                 guard !said.contains(where: { $0.lowercased().contains(st.object.lowercased()) }) else { continue }
-                let text = "I last saw the \(Self.spoken(st.object)) \(st.state) at \(Self.clock(st.lastStateSeen)) and did not see it turned off."
+                let text = String(localized: "I last saw the \(Self.spoken(st.object)) \(st.state) at \(Self.clock(st.lastStateSeen)) and did not see it turned off.")
                 if await fireAuto(id: "auto.left.\(st.object)", text: text, frame: st.evidenceFrame, severity: .high,
                                   cooldown: 30, at: at, speak: speak) { said.append(text) }
             }
@@ -504,7 +531,7 @@ final class SafetyMonitor {
                 && now.timeIntervalSince(st.lastSeen) >= 20 * 60 && now.timeIntervalSince(st.lastSeen) < 3 * 3600 {
                 let minutes = Int(now.timeIntervalSince(st.lastStateSeen) / 60)
                 await fireAuto(id: "auto.idle.\(st.object)",
-                               text: "The \(Self.spoken(st.object)) may still be \(st.state): I last saw it \(st.state) at \(Self.clock(st.lastStateSeen)), \(minutes) minutes ago.",
+                               text: String(localized: "The \(Self.spoken(st.object)) may still be \(st.state): I last saw it \(st.state) at \(Self.clock(st.lastStateSeen)), \(minutes) minutes ago."),
                                frame: st.evidenceFrame, severity: .high, cooldown: 30, at: now, speak: true)
             }
         }
@@ -729,7 +756,7 @@ final class SafetyMonitor {
         await store.save(st)
         if h.immediate, st.active {
             await fireAuto(id: "auto.now.\(h.object)",
-                           text: "Careful: I see the \(Self.spoken(h.object)) \(h.state)" + (st.place.map { ", \($0)" } ?? "") + ".",
+                           text: String(localized: "Careful: I see the \(Self.spoken(h.object)) \(h.state)") + (st.place.map { ", \($0)" } ?? "") + ".",
                            frame: frameFile, severity: .high, cooldown: 10, at: at, speak: true)
         }
     }
@@ -783,7 +810,7 @@ final class SafetyMonitor {
             text = Self.defaultMessage(rule, values: filled.values) ?? text
         }
         if let label, label.source == "front", !label.ingredients_visible {
-            text += " I only saw the front of the package; check the ingredients."
+            text += " " + String(localized: "I only saw the front of the package; check the ingredients.")
         }
         let alert = SafetyAlert(at: at, ruleID: rule.id, message: text, evidenceFrame: filled.frame ?? frameFile, severity: rule.severity)
         await store.insert(alert)
@@ -865,8 +892,8 @@ final class SafetyMonitor {
 
     static func defaultMessage(_ rule: SafetyRule, values: [String: String]) -> String? {
         if let allergens = values["allergens"], !allergens.isEmpty {
-            let product = values["product"].flatMap { $0.isEmpty ? nil : $0 } ?? "This product"
-            return "Careful: \(product) seems to contain \(allergens)."
+            let product = values["product"].flatMap { $0.isEmpty ? nil : $0 } ?? String(localized: "This product")
+            return String(localized: "Careful: \(product) seems to contain \(allergens).")
         }
         return nil
     }

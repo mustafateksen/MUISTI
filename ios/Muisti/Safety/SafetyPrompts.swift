@@ -77,6 +77,21 @@ enum SafetyPrompts {
      "required":["room","hands_visible","objects","actions","hazards","label"]}
     """#
 
+    /// Added to the look when several frames go in one picture.
+    static func stripNote(frames: Int, seconds: Int) -> String {
+        """
+
+
+        The picture holds \(frames) frames from the last \(seconds) seconds in time order, numbered \
+        1 (oldest) to \(frames) (now). States, the room and the text below are those of the last \
+        frame. Use the earlier frames for what was done: report an action only when the frames \
+        show it happening — the same object in one state and then the other with the user's hand \
+        on it (a knob turned, a switch flipped, a door locked), or something taken from where it \
+        was (a pill leaving its blister and going to the mouth). An object that merely looks \
+        different in two frames because the view moved is not an action.
+        """
+    }
+
     static func observeUser(watched: [String], allergens: [String], ocr: String) -> String {
         """
         Watched objects: \(watched.isEmpty ? "(none)" : watched.joined(separator: ", "))

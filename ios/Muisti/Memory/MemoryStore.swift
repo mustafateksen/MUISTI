@@ -75,6 +75,9 @@ struct MemorySearch: Sendable {
     var embedding: [Float]?
     /// Candidates handed to grouping + reranking.
     var limit = 40
+    /// Only records seen in this span ("yesterday", "this morning"), when the model named one.
+    var from: Date?
+    var to: Date?
 }
 
 /// Why a record was retrieved (for ranking, the debug trace and tests).
@@ -436,26 +439,35 @@ actor MemoryStore {
             }
         }
 
-        let fts = keywordRanking(query.keywords, limit: 80)
+        // A time span: every channel only sees the records inside it.
+        var allowed: Set<Int64>?
+        if query.from != nil || query.to != nil {
+            allowed = Set(ids(seenFrom: query.from ?? .distantPast, to: query.to ?? .distantFuture))
+        }
+        func inSpan(_ ids: [Int64]) -> [Int64] { allowed.map { span in ids.filter(span.contains) } ?? ids }
+
+        let fts = inSpan(keywordRanking(query.keywords, limit: allowed == nil ? 80 : 400))
         add(fts, weight: 1) { $0.ftsRank = $1 }
 
         if let embedding = query.embedding {
-            let nearest = index.search(embedding, k: 80)
+            let nearest = index.search(embedding, k: 80, allowed: allowed)
             add(nearest.map(\.id), weight: 1) { $0.vectorRank = $1 }
             for hit in nearest { signals[hit.id]?.cosine = hit.cosine }
             // The keyframes themselves, same space: what was seen but never written down
             // ("the red car", "where I put my keys").
-            let pictures = EvalSwitch.noImageChannel ? [] : imageIndex.search(embedding, k: 80)
+            let pictures = EvalSwitch.noImageChannel ? [] : imageIndex.search(embedding, k: 80, allowed: allowed)
             add(pictures.map(\.id), weight: 1) { $0.imageRank = $1 }
             for hit in pictures { signals[hit.id]?.imageCosine = hit.cosine }
         }
 
         // OCR often reads a sign half-way ("TEEKKI" for "APTEEKKI"); FTS prefix search misses that.
         if fts.isEmpty {
-            add(fuzzyRanking(query.keywords), weight: 0.8) { s, _ in s.fuzzy = true }
+            add(inSpan(fuzzyRanking(query.keywords)), weight: 0.8) { s, _ in s.fuzzy = true }
         }
 
-        add(recentIDs(limit: 20), weight: 0.5) { _, _ in }
+        // In a span the newest records of the span stand in for "recent".
+        add(allowed == nil ? recentIDs(limit: 20) : Array(ids(seenFrom: query.from ?? .distantPast, to: query.to ?? .distantFuture).prefix(20)),
+            weight: 0.5) { _, _ in }
 
         let top = fused.sorted { $0.value > $1.value }.prefix(query.limit)
         let byID = Dictionary(records(top.map(\.key)).map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
@@ -475,6 +487,17 @@ actor MemoryStore {
             if hits > 0 { scored.append((record.id, hits)) }
         }
         return scored.sorted { $0.1 > $1.1 }.prefix(40).map(\.0)
+    }
+
+    /// Ids of the records seen in a span, newest first.
+    private func ids(seenFrom from: Date, to: Date) -> [Int64] {
+        guard let stmt = prepare("SELECT id FROM memories WHERE seen_at >= ? AND seen_at <= ? ORDER BY seen_at DESC LIMIT 5000") else { return [] }
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_double(stmt, 1, max(from.timeIntervalSince1970, 0))
+        sqlite3_bind_double(stmt, 2, min(to.timeIntervalSince1970, 4_102_444_800))
+        var ids: [Int64] = []
+        while sqlite3_step(stmt) == SQLITE_ROW { ids.append(sqlite3_column_int64(stmt, 0)) }
+        return ids
     }
 
     private func recentIDs(limit: Int) -> [Int64] {

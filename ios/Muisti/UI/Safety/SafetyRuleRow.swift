@@ -18,8 +18,8 @@ struct SafetyRuleRow: View {
                 Image(systemName: rule.triggerSymbol)
                     .font(.body.weight(.semibold))
                     .foregroundStyle(.white)
-                    .frame(width: 52, height: 52)
-                    .background(isOn ? AnyShapeStyle(.tint) : AnyShapeStyle(.gray.opacity(0.45)), in: .rect(cornerRadius: 12))
+                    .frame(width: 40, height: 40)
+                    .background(isOn ? AnyShapeStyle(.tint) : AnyShapeStyle(.gray.opacity(0.45)), in: .rect(cornerRadius: 10))
                     .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 3) {
                     Text(rule.summary)

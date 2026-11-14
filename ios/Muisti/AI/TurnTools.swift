@@ -12,8 +12,9 @@ enum TurnTools {
     static let system = """
     You are Muisti, an assistant that lives in the user's camera glasses. The glasses photograph \
     what the user looks at while they go about their day, and the phone keeps it as their \
-    memory; you can also look through the glasses right now, and you keep safety rules for the \
-    user (Muisti Turva). The user talks to you, usually by voice, so a message may contain \
+    memory; you can also look through the glasses right now, you keep safety rules for the user \
+    (Muisti Turva), and you keep what they ask you to remind them of, where they are going and \
+    what they tell you about themselves, bringing it up by yourself when its moment comes. The user talks to you, usually by voice, so a message may contain \
     speech-recognition errors: read it for what was most likely meant, using the conversation.
 
     Every turn is exactly one tool call; the tool descriptions say which. By yourself you know \
@@ -30,14 +31,14 @@ enum TurnTools {
         Conversation so far (oldest first):
         \(conversation.isEmpty ? "(new conversation)" : conversation.joined(separator: "\n"))
         \(lookedSecondsAgo.map { "Your last reply looked through the glasses \($0) seconds ago.\n" } ?? "")
-        Muisti Turva (safety rules, watched objects, safety log, pending yes/no):
-        \(safety.isEmpty ? "(no safety rules)" : safety)
+        What Muisti keeps (Muisti Turva: safety rules, watched objects, safety log, pending yes/no; then its own notes: intents, destination, places, what the user told it):
+        \(safety.isEmpty ? "(nothing yet)" : safety)
 
         Message: \(question)
         """
     }
 
-    private static let reply = #"{"type":"string","description":"What Muisti says to the user: one short spoken sentence in the user's language."}"#
+    private static let reply = #"{"type":"string","description":"What Muisti says to the user: one short spoken sentence in the language of the user's message (a Turkish message gets a Turkish reply, whatever the conversation was in before)."}"#
 
     private static func tool(_ name: String, _ description: String, properties: [String] = [], required: [String] = []) -> String {
         let escaped = (try? JSONSerialization.data(withJSONObject: [description]))
@@ -73,7 +74,9 @@ enum TurnTools {
              exactly?" about something already looked at): the answer is checked against the evidence \
              there, which the conversation alone cannot do.
              """,
-             properties: [#""query":{"type":"string","description":"What to look for, complete by itself: replace \"it\", \"there\", \"that place\" with what the conversation was about."}"#],
+             properties: [#""query":{"type":"string","description":"What to look for, complete by itself: replace \"it\", \"there\", \"that place\" with what the conversation was about."}"#,
+                          #""from":{"type":["string","null"],"description":"Only when the user named a span of time (\"yesterday\", \"this morning\", \"between 2 and 3\"): its start in local time, yyyy-MM-dd HH:mm, worked out from the current local time. Otherwise null."}"#,
+                          #""to":{"type":["string","null"],"description":"The end of that span, yyyy-MM-dd HH:mm; null when there is none or it runs until now."}"#],
              required: ["query"]),
         tool("forget_recent", """
              Delete recent memories. Only when the user explicitly asks to forget or delete what the \
@@ -84,9 +87,11 @@ enum TurnTools {
                           "\"reply\":" + reply],
              required: ["minutes", "reply"]),
         tool("create_rule", """
-             The user asks to be warned, reminded or watched over in the future ("warn me if…", \
-             "remind me…", in any language), also when it mentions things bought or seen. Never from \
-             a question about the past. The reply reads the rule back in one sentence and asks \
+             A safety rule: the user asks to be warned or watched over about a household object's \
+             state (stove, iron, door, keys, wallet), a medicine they take, or a food allergen ("warn \
+             me if I leave the stove on", "remind me of my pill every morning", "tell me when \
+             something contains nuts", in any language). Anything else they want to be reminded of is \
+             remember_intent. Never from a question about the past. The reply reads the rule back in one sentence and asks \
              whether it is right; nothing needs to have been seen yet.
 
              """ + SafetyPrompts.ruleGuide,
@@ -122,18 +127,90 @@ enum TurnTools {
         tool("set_home", "The user says this place is their home. The reply is a short acknowledgement.",
              properties: ["\"reply\":" + reply], required: ["reply"]),
         tool("snooze_warning", """
-             "Not now", "later", "I know", "stop warning me for a while" right after a warning (see the \
-             last warning and the conversation). The reply says Muisti will stay quiet about it for 30 minutes.
+             "Not now", "later", "I know", "stop warning me for a while" right after a warning or after \
+             something Muisti brought up by itself (see the last warning, the last thing Muisti brought \
+             up and the conversation). The reply says Muisti will stay quiet about it for 30 minutes.
              """, properties: ["\"reply\":" + reply], required: ["reply"]),
+        tool("remember_intent", """
+             The user wants to be reminded of something or says what they intend to do: an errand, \
+             something to buy, a call to make, a thing to ask about ("remind me to…", "I need to buy \
+             milk tomorrow", "tell me when we pass a pharmacy", "don't let me forget my umbrella when I \
+             leave", in any language). Muisti keeps it and brings it up by itself when its cue comes. \
+             Not for safety rules (create_rule), and not for something they only mention having done. \
+             The reply confirms in one sentence what will be brought up and when.
+             """,
+             properties: [#""text":{"type":"string","description":"What it is, in the user's own words and language, complete by itself."}"#,
+                          #""say":{"type":"string","description":"The one short sentence Muisti says when the moment comes, in the user's language (\"You wanted to buy milk.\")."}"#,
+                          #""kind":{"type":"string","enum":["reminder","todo","watch"],"description":"todo: something to get or do with no fixed moment (shopping, errands). reminder: tied to a time or a place. watch: tell me whenever you see this, more than once."}"#,
+                          "\"cue\":" + Notice.cueSchema("When to bring it up; null for the parts that do not apply. Fill every part that does: a time the user gave (worked out from the current local time); place, whenever the thing is done at a kind of place even if the user named none (something to buy: the kind of shop that sells it; a prescription: a pharmacy); and sight, what the glasses would see at that moment (the shop's sign or shelves as well as the thing itself)."),
+                          "\"reply\":" + reply],
+             required: ["text", "say", "kind", "cue", "reply"]),
+        tool("set_destination", """
+             The user says where they are going now ("I'm going to the pharmacy", "take me to hall 3", \
+             "I need to find gate B12"). Muisti follows along and speaks up if they walk away from it \
+             or reach it. The reply acknowledges in a few words.
+             """,
+             properties: [#""place":{"type":"string","description":"The place as a name or as words a map search understands, or one of the user's named places exactly as listed."}"#,
+                          "\"reply\":" + reply],
+             required: ["place", "reply"]),
+        tool("cancel_destination", "The user is no longer going to the destination shown in the message, or has arrived and says so.",
+             properties: ["\"reply\":" + reply], required: ["reply"]),
+        tool("complete_intent", "The user says an open intent listed in the message is done (\"I bought the milk\", \"done\", \"got it\" right after Muisti brought it up).",
+             properties: [#""intent_id":{"type":"string","description":"The id of that intent, from the open intents in the message."}"#,
+                          "\"reply\":" + reply],
+             required: ["intent_id", "reply"]),
+        tool("drop_intent", "The user no longer wants an open intent listed in the message (\"forget the milk\", \"never mind that reminder\").",
+             properties: [#""intent_id":{"type":"string","description":"The id of that intent, from the open intents in the message."}"#,
+                          "\"reply\":" + reply],
+             required: ["intent_id", "reply"]),
+        tool("remember_fact", """
+             The user tells Muisti something lasting about themselves or their things for it to keep \
+             ("my car is a blue Toyota", "I'm vegetarian", "my hotel room is 412", "my sister's name \
+             is Elif"). Not an errand (remember_intent), not something they did (log_event).
+             """,
+             properties: [#""text":{"type":"string","description":"The fact as one sentence in the user's language, in the third person about the user."}"#,
+                          "\"reply\":" + reply],
+             required: ["text", "reply"]),
+        tool("name_place", "The user gives the place they are at right now a name (\"this is my office\", \"I parked here\", \"remember this spot as the meeting point\"). For their home use set_home.",
+             properties: [#""name":{"type":"string","description":"A short lower-case name: work, car, or what the user called it."}"#,
+                          "\"reply\":" + reply],
+             required: ["name", "reply"]),
+        tool("mute_topic", """
+             The user does not want to be told this kind of thing again ("don't tell me that again", \
+             "stop telling me about prices", "enough with that reminder"), usually right after \
+             something Muisti brought up by itself (see the last thing Muisti brought up). Not for a \
+             short pause (snooze_warning).
+             """,
+             properties: [#""topic":{"type":["string","null"],"description":"The topic to mute, exactly as shown in the last thing Muisti brought up or in the muted list; null when it is about one intent."}"#,
+                          #""intent_id":{"type":["string","null"],"description":"The intent to stop reminding about, or null."}"#,
+                          #""minutes":{"type":["integer","null"],"description":"For how long, when the user gave a span; null = for good."}"#,
+                          "\"reply\":" + reply],
+             required: ["topic", "intent_id", "minutes", "reply"]),
+        tool("summarize_day", "The user asks for a summary of their day (\"how was my day\", \"what did I do today\", \"sum up today\"). Muisti writes it from the day's records.",
+             properties: [], required: []),
+        tool("add_to_calendar", """
+             The user asks to put an event into their calendar, with a date and time they said or that \
+             the conversation just established from something seen ("add that concert to my calendar"). \
+             The reply says it was added, with the date.
+             """,
+             properties: [#""title":{"type":"string"}"#,
+                          #""start":{"type":"string","description":"yyyy-MM-dd HH:mm, local time, worked out from the current local time."}"#,
+                          #""minutes":{"type":["integer","null"],"description":"Length in minutes if known, else null."}"#,
+                          #""location":{"type":["string","null"]}"#,
+                          "\"reply\":" + reply],
+             required: ["title", "start", "minutes", "location", "reply"]),
     ].joined(separator: ",") + "]"
 
     /// What the model decided for this turn.
     enum Decision: Sendable {
         case reply(String)
         case look
-        case search(String?)
+        /// `from`/`to`: the span of time the user named, if any.
+        case search(String?, from: Date? = nil, to: Date? = nil)
         case forget(minutes: Int?, reply: String)
         case command(SafetyCommand, reply: String, tool: String)
+        /// Something for the agent side: an intent, a destination, a place, a mute.
+        case agent(AgentCommand, reply: String, tool: String)
     }
 
     private struct Arguments: Decodable {
@@ -146,6 +223,17 @@ enum TurnTools {
         var object: String?
         var kind: String?
         var value: String?
+        var say: String?
+        var cue: Cue?
+        var place: String?
+        var intent_id: String?
+        var name: String?
+        var topic: String?
+        var title: String?
+        var start: String?
+        var location: String?
+        var from: String?
+        var to: String?
 
         init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -158,9 +246,23 @@ enum TurnTools {
             object = c.lenientString(.object)
             kind = c.lenientString(.kind)
             value = c.lenientString(.value)
+            say = c.lenientString(.say)
+            cue = (try? c.decodeIfPresent(Cue.self, forKey: .cue)) ?? nil
+            place = c.lenientString(.place)
+            intent_id = c.lenientString(.intent_id)
+            name = c.lenientString(.name)
+            topic = c.lenientString(.topic)
+            title = c.lenientString(.title)
+            start = c.lenientString(.start)
+            location = c.lenientString(.location)
+            from = c.lenientString(.from)
+            to = c.lenientString(.to)
         }
 
-        enum CodingKeys: String, CodingKey { case query, text, minutes, reply, rule, rule_id, object, kind, value }
+        enum CodingKeys: String, CodingKey {
+            case query, text, minutes, reply, rule, rule_id, object, kind, value
+            case say, cue, place, intent_id, name, topic, title, start, location, from, to
+        }
     }
 
     /// Reads the model's turn. Arguments are checked here (a model may send a call with missing
@@ -168,7 +270,7 @@ enum TurnTools {
     /// which answers from evidence instead of acting on a guess.
     static func decision(from turn: NemotronClient.ToolReply) -> Decision {
         var looked = false
-        var search: String??
+        var search: (query: String?, from: Date?, to: Date?)?
         for call in turn.calls {
             let args = call.decode(Arguments.self)
             let reply = args?.reply ?? turn.text
@@ -176,7 +278,9 @@ enum TurnTools {
             case "say":
                 if let text = args?.text { return .reply(text) }
             case "look_now": looked = true
-            case "search_memory": search = .some(args?.query)
+            case "search_memory":
+                let now = Date()
+                search = (args?.query, args?.from.flatMap { Cue(at: $0).nextDue(after: now) }, args?.to.flatMap { Cue(at: $0).nextDue(after: now) })
             case "forget_recent": return .forget(minutes: args?.minutes, reply: reply)
             case "create_rule":
                 if let rule = args?.rule { return .command(.createRule(rule), reply: reply, tool: call.name) }
@@ -193,11 +297,34 @@ enum TurnTools {
             case "arrived_home": return .command(.arriving, reply: reply, tool: call.name)
             case "set_home": return .command(.setHome, reply: reply, tool: call.name)
             case "snooze_warning": return .command(.snooze, reply: reply, tool: call.name)
+            case "remember_intent":
+                if let text = args?.text {
+                    let kind = Intent.Kind(rawValue: args?.kind?.lowercased() ?? "") ?? .reminder
+                    return .agent(.remember(text: text, say: args?.say, kind: kind, cue: args?.cue ?? Cue()), reply: reply, tool: call.name)
+                }
+            case "set_destination":
+                if let place = args?.place { return .agent(.setDestination(place), reply: reply, tool: call.name) }
+            case "cancel_destination": return .agent(.cancelDestination, reply: reply, tool: call.name)
+            case "complete_intent":
+                if let id = args?.intent_id { return .agent(.complete(id), reply: reply, tool: call.name) }
+            case "drop_intent":
+                if let id = args?.intent_id { return .agent(.drop(id), reply: reply, tool: call.name) }
+            case "remember_fact":
+                if let text = args?.text { return .agent(.rememberFact(text), reply: reply, tool: call.name) }
+            case "name_place":
+                if let name = args?.name { return .agent(.namePlace(name), reply: reply, tool: call.name) }
+            case "mute_topic":
+                return .agent(.mute(topic: args?.topic, intentID: args?.intent_id, minutes: args?.minutes), reply: reply, tool: call.name)
+            case "summarize_day": return .agent(.summarizeDay, reply: reply, tool: call.name)
+            case "add_to_calendar":
+                if let title = args?.title, let start = args?.start {
+                    return .agent(.addToCalendar(title: title, start: start, minutes: args?.minutes, location: args?.location), reply: reply, tool: call.name)
+                }
             default: break
             }
         }
         if looked { return .look }
-        if let search { return .search(search) }
+        if let search { return .search(search.query, from: search.from, to: search.to) }
         // A tool call that could not be used and no words: answer from memory.
         return turn.text.isEmpty ? .search(nil) : .reply(turn.text)
     }

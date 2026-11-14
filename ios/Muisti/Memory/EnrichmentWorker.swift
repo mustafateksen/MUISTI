@@ -33,6 +33,22 @@ actor EnrichmentWorker {
 
     func setOnEnriched(_ handler: @escaping @Sendable (Int64, String?, String, [Float]?, Data?) async -> Void) { onEnriched = handler }
 
+    /// What the agent needs from a freshly enriched record.
+    struct Noticed: Sendable {
+        var recordID: Int64
+        var seenAt: Date
+        var title: String?
+        var passage: String
+        var vector: [Float]?
+        var jpeg: Data
+        /// The enrichment's own flag ("none", "warning", "time_limited", …) and its one-line reason.
+        var attention: String?
+        var reason: String?
+    }
+
+    private var onNoticed: (@Sendable (Noticed) async -> Void)?
+    func setOnNoticed(_ handler: @escaping @Sendable (Noticed) async -> Void) { onNoticed = handler }
+
     init(store: MemoryStore, ai: NemotronClient) {
         self.store = store
         self.ai = ai
@@ -214,6 +230,12 @@ actor EnrichmentWorker {
             let frame = jpeg
             let title = extracted.name ?? extracted.kindLabel
             Task { await onEnriched(record.id, title, passage, vector, frame) }
+        }
+        if let onNoticed {
+            let noticed = Noticed(recordID: record.id, seenAt: record.seenAt, title: extracted.name ?? extracted.kindLabel,
+                                  passage: passage, vector: vector, jpeg: jpeg,
+                                  attention: extracted.attention, reason: extracted.attention_reason)
+            Task { await onNoticed(noticed) }
         }
         // The keyframe vector last: the record is already searchable and safety-checked; this
         // is one more paced embedding slot.

@@ -88,6 +88,14 @@ final class MotionProvider {
         }
     }
 
+    #if DEBUG
+    /// A made-up activity, as if the motion coprocessor had reported it (agent evaluation).
+    func simulate(_ kind: MotionActivityKind) {
+        activity = kind
+        isRunning = true
+    }
+    #endif
+
     func stop() {
         guard isRunning else { return }
         isRunning = false

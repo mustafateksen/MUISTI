@@ -54,6 +54,10 @@ struct ExtractedRecord: Codable, Sendable {
     var caption: String?
     var keywords: [String]?
     var confidence: Double?
+    /// Whether the frame holds something the wearer may need to be told or reminded of
+    /// (`MemoryPrompts.extractionSchema`); read by the agent, not stored.
+    var attention: String?
+    var attention_reason: String?
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -73,6 +77,8 @@ struct ExtractedRecord: Codable, Sendable {
         relations = (try? c.decodeIfPresent([Relation].self, forKey: .relations)) ?? []
         depictions = (try? c.decodeIfPresent([Depiction].self, forKey: .depictions)) ?? []
         caption = c.lenientString(.caption)
+        attention = c.lenientString(.attention)
+        attention_reason = c.lenientString(.attention_reason)
         keywords = c.lenientStrings(.keywords)
         confidence = c.lenientDouble(.confidence)
     }
@@ -305,10 +311,22 @@ extension MemoryPrompts {
     - useful=false only if the frame shows nothing worth remembering (blurred, floor, ceiling, \
     a close-up of a person).
     - confidence: 0..1, how legible and certain the record is.
+    - attention: whether this frame holds something a person walking here might need to be told \
+    now or reminded of later, beyond simply remembering the place: "warning" (a danger or \
+    prohibition that applies to someone passing: wet floor, closed path, do not enter), \
+    "time_limited" (a closing time, deadline, parking limit, last departure, expiry date), \
+    "schedule" (a timetable, departure board, opening days), "price" (a price of a product or \
+    service), "event" (a dated event on a poster or screen), "document" (a ticket, receipt, \
+    card, code, room or booking number), "person_badge" (a name badge or business card), "personal" (a \
+    thing people own, take or can forget, seen up close: medicine in any form — a box, blister, \
+    bottle or pills; keys, a wallet, a phone, glasses, a bag, an umbrella; or something at home \
+    that is on or open: a lit stove or hob, an iron, a running tap, an open door or window); \
+    otherwise "none", which is the usual answer. attention_reason: what exactly, in one short \
+    English sentence, quoting the text it rests on; null when attention is "none".
 
     Return ONLY one JSON object with keys: useful, kind, subtype, name, name_line, phone, \
     phone_line, hours, hours_line, items, other_text, scene, objects, relations, depictions, \
-    caption, keywords, confidence.
+    caption, keywords, confidence, attention, attention_reason.
     """
 
     static func extractionUser(ocr: String) -> String { ExtractionCheck.ocrLines(ocr) }
@@ -330,8 +348,10 @@ extension MemoryPrompts {
       "depictions":{"type":"array","maxItems":4,"items":{"type":"object","properties":{"medium":{"type":"string","enum":["banner","poster","screen","sign","billboard","painting","other"]},"on":{"type":"string"},"content":{"type":"string"},"depicted":{"type":"array","items":{"type":"string"}}},"required":["medium","on","content","depicted"]}},
       "caption":{"type":"string"},
       "keywords":{"type":"array","maxItems":12,"items":{"type":"string"}},
-      "confidence":{"type":"number"}},
-     "required":["useful","kind","subtype","name","name_line","phone","phone_line","hours","hours_line","items","other_text","scene","objects","relations","depictions","caption","keywords","confidence"]}
+      "confidence":{"type":"number"},
+      "attention":{"type":"string","enum":["none","warning","time_limited","schedule","price","event","document","person_badge","personal"]},
+      "attention_reason":{"type":["string","null"]}},
+     "required":["useful","kind","subtype","name","name_line","phone","phone_line","hours","hours_line","items","other_text","scene","objects","relations","depictions","caption","keywords","confidence","attention","attention_reason"]}
     """#
 }
 

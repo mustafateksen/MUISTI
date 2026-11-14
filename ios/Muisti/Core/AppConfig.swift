@@ -129,7 +129,10 @@ final class AppConfig {
     var retentionDays: Int { didSet { save("retentionDays", retentionDays) } }
     /// Question recogniser language: `SpeechLanguage.automatic` (the phone's language) or a
     /// locale id chosen in Settings. Answers are spoken in the language detected in the question.
-    var speechLanguage: String { didSet { save("speechLanguage", speechLanguage) } }
+    /// Default English (US), whatever the phone's language: "Automatic" followed a Turkish phone
+    /// and turned English questions into Turkish-sounding nonsense. New key, so the earlier
+    /// "auto" default doesn't stick.
+    var speechLanguage: String { didSet { save("speechLanguage2", speechLanguage) } }
     var voiceLocale: String { SpeechLanguage.resolve(speechLanguage) }
     var speakAnswers: Bool { didSet { save("speakAnswers", speakAnswers) } }
     var zones: [NoRecordZone] {
@@ -201,7 +204,7 @@ final class AppConfig {
         rerankKey = KeychainStore.read("rerank-api-key") ?? ""
         retentionDays = defaults.object(forKey: "retentionDays") as? Int ?? 7
         speakAnswers = defaults.object(forKey: "speakAnswers") as? Bool ?? true
-        speechLanguage = defaults.string(forKey: "speechLanguage") ?? SpeechLanguage.automatic
+        speechLanguage = defaults.string(forKey: "speechLanguage2") ?? SpeechLanguage.fallback
         if let data = defaults.data(forKey: "zones"), let decoded = try? JSONDecoder().decode([NoRecordZone].self, from: data) {
             zones = decoded
         } else {

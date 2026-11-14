@@ -29,6 +29,8 @@ final class VoiceAssistant {
     let levels = VoiceLevels()
     /// Runs a Muisti Turva command from a reply; may return a reply to say instead.
     @ObservationIgnored var safetyHandler: (SafetyCommand) async -> String? = { _ in nil }
+    /// Runs an agent command (intent, destination, mute…); a returned text replaces the reply.
+    @ObservationIgnored var agentHandler: (AgentCommand) async -> String? = { _ in nil }
     /// Hands-free: the glasses listen for the wake word; a question Muisti asks is answered
     /// there instead of opening the phone mic.
     @ObservationIgnored var glassesListening: () -> Bool = { false }
@@ -54,7 +56,7 @@ final class VoiceAssistant {
     /// The user tapped while Muisti was thinking or speaking: drop that turn and listen.
     @ObservationIgnored private var interrupted = false
     /// Warnings that arrived while a question was being heard or answered: said right after it.
-    @ObservationIgnored private var waitingAnnouncements: [(text: String, language: String?, expectsReply: Bool)] = []
+    @ObservationIgnored private var waitingAnnouncements: [(text: String, language: String?, expectsReply: Bool, urgent: Bool)] = []
     @ObservationIgnored private var recognizers: [String: SFSpeechRecognizer] = [:]
     @ObservationIgnored private var knownNames: [String] = []
     @ObservationIgnored private var knownNamesAt = Date.distantPast
@@ -101,13 +103,17 @@ final class VoiceAssistant {
             let levels = levels
             let session: ListeningSession
             let names = await names()
+            // iOS 26+: Apple's newer speech model when its language model is installed (it is
+            // downloaded in the background on first use); SFSpeechRecognizer until then.
+            let modern = await modernSpeech()
             if let tap = glassesMic, tap.isFlowing {
                 Log.pipeline.info("listening on the glasses mic (camera stream audio)")
-                session = TapSpeechSession(recognizer: recognizer, contextualStrings: names, tap: tap)
+                session = modern?(.glasses(tap), names) ?? TapSpeechSession(recognizer: recognizer, contextualStrings: names, tap: tap)
             } else {
                 try Self.activateAudioSession(glassesMic: prefersGlassesMic())
-                session = SpeechSession(recognizer: recognizer, contextualStrings: names)
+                session = modern?(.microphone, names) ?? SpeechSession(recognizer: recognizer, contextualStrings: names)
             }
+            Log.pipeline.info("speech engine: \(modern == nil ? "SFSpeechRecognizer" : "SpeechAnalyzer", privacy: .public) (\(self.localeIdentifier, privacy: .public))")
             try session.start { [weak self] text, isFinal in
                 Task { @MainActor in self?.handlePartial(text, isFinal: isFinal) }
             } onError: { [weak self] message in
@@ -139,6 +145,17 @@ final class VoiceAssistant {
         maxTask?.cancel()
         prepareTask?.cancel()
         turn.mark("end of question")
+        // The recogniser's final pass, not the last partial guess (it revises words once the
+        // audio ends; usually within a few hundred ms).
+        if let ending = session, !finishing {
+            finishing = true
+            defer { finishing = false }
+            if let final = await ending.finalize(timeout: 0.8)?.trimmingCharacters(in: .whitespacesAndNewlines), !final.isEmpty {
+                if final != transcript { Log.pipeline.info("final transcript revised the partial") }
+                transcript = final
+            }
+            guard phase == .listening else { return }   // cancelled while waiting
+        }
         session?.stop()
         if session === bargeSession { bargeSession = nil }
         session = nil
@@ -232,6 +249,10 @@ final class VoiceAssistant {
             result.answer = reply
             await engine.noteExchange(question: question, answer: reply)
         }
+        if let command = result.agent, let reply = await agentHandler(command) {
+            result.answer = reply
+            await engine.noteExchange(question: question, answer: reply)
+        }
         Log.pipeline.info("ask “\(question, privacy: .public)” → [\(result.label.rawValue, privacy: .public)] \(result.answer, privacy: .public) · evidence \(result.evidence.map(\.record.id), privacy: .public) · \(result.latencyMs) ms · ai \(result.usedAI) · note \(result.note ?? "-", privacy: .public) · \(result.trace ?? "", privacy: .public)")
         lastResult = result
         history.insert(result, at: 0)
@@ -260,8 +281,10 @@ final class VoiceAssistant {
 
     /// Muisti speaks first: a safety warning or a yes/no question. Shown in the chat too; a
     /// question opens the microphone for the answer.
-    func announce(_ text: String, language: String?, expectsReply: Bool, frame: URL? = nil) async {
-        let note = AskResult(question: expectsReply ? String(localized: "Muisti asks") : String(localized: "Safety warning"), answer: text, label: .seen,
+    /// `urgent` (a safety warning) goes ahead of anything else waiting; `title` is its heading in
+    /// the chat (nil: "Safety warning" / "Muisti asks").
+    func announce(_ text: String, language: String?, expectsReply: Bool, frame: URL? = nil, urgent: Bool = true, title: String? = nil) async {
+        let note = AskResult(question: title ?? (expectsReply ? String(localized: "Muisti asks") : String(localized: "Safety warning")), answer: text, label: .seen,
                              evidence: [], usedAI: false, latencyMs: 0, note: nil, language: language,
                              isCommand: true, safetyFrames: frame.map { [$0] } ?? [], spontaneous: true)
         lastResult = note
@@ -271,8 +294,12 @@ final class VoiceAssistant {
         // Never talk over the user or over an answer being read: it is said right after.
         // (Before, a warning that arrived during a question was only written to the history.)
         guard phase == .idle || phase.isFailed else {
-            waitingAnnouncements.append((text, language, expectsReply))
-            if waitingAnnouncements.count > 3 { waitingAnnouncements.removeFirst() }
+            // Safety first, then in the order they came; the oldest non-urgent one gives way.
+            let at = urgent ? (waitingAnnouncements.firstIndex { !$0.urgent } ?? waitingAnnouncements.count) : waitingAnnouncements.count
+            waitingAnnouncements.insert((text, language, expectsReply, urgent), at: at)
+            if waitingAnnouncements.count > 6, let drop = waitingAnnouncements.firstIndex(where: { !$0.urgent }) {
+                waitingAnnouncements.remove(at: drop)
+            }
             Trace.note("warning held until the turn ends: \(text.prefix(60))")
             return
         }
@@ -339,10 +366,30 @@ final class VoiceAssistant {
     func warmUp() {
         _ = recognizer()
         Task { _ = await self.names() }
+        // Starts the newer speech model's download if it isn't on the phone yet.
+        Task { _ = await self.modernSpeech() }
+    }
+
+    /// A factory for `SpeechAnalyzer` sessions when the newer model is ready for the question
+    /// language (iOS 26+), else nil.
+    private func modernSpeech() async -> ((ModernSource, [String]) -> ListeningSession)? {
+        guard #available(iOS 26, *), let prepared = await AnalyzerSpeech.prepared(localeIdentifier) else { return nil }
+        return { source, names in
+            switch source {
+            case .microphone: AnalyzerSpeechSession(prepared: prepared, source: .microphone, contextualStrings: names)
+            case .glasses(let tap): AnalyzerSpeechSession(prepared: prepared, source: .glasses(tap), contextualStrings: names)
+            }
+        }
+    }
+
+    /// Where a `SpeechAnalyzer` session takes its audio from (no iOS 26 type in this signature).
+    enum ModernSource {
+        case microphone
+        case glasses(GlassesMicTap)
     }
 
     private func handlePartial(_ text: String, isFinal: Bool) {
-        guard phase == .listening else { return }
+        guard phase == .listening, !finishing else { return }
         let changed = text != transcript
         transcript = text
         if isFinal {
@@ -413,14 +460,16 @@ final class VoiceAssistant {
         await Self.waitForHighQualityOutput()
         let utterance = AVSpeechUtterance(string: text)
         // `language` is a BCP-47 tag or a bare ISO 639-1 code from Nemotron ("tr", "fi").
-        if let chosen = VoicePicker.chosenVoice(for: language) {
-            // A voice picked in Muisti's settings.
+        if let chosen = VoicePicker.chosenVoice(for: language) ?? VoicePicker.naturalVoice(for: language) {
+            // A voice picked in Muisti's settings, else the best installed Premium / Enhanced
+            // voice (`AVSpeechSynthesisVoice(language:)` returns the robotic compact one).
             utterance.voice = chosen
             utterance.rate = AVSpeechUtteranceDefaultSpeechRate
             utterance.prefersAssistiveTechnologySettings = false
         } else {
-            // Default: exactly the voice, rate and pitch set for Spoken Content in the iPhone's
-            // Accessibility settings (the language hint picks that language's voice there).
+            // Only compact voices installed: exactly the voice, rate and pitch set for Spoken
+            // Content in the iPhone's Accessibility settings (the language hint picks that
+            // language's voice there).
             utterance.voice = AVSpeechSynthesisVoice(language: language) ?? VoicePicker.voice(for: language, fallback: localeIdentifier)
             utterance.prefersAssistiveTechnologySettings = true
         }
@@ -453,6 +502,8 @@ final class VoiceAssistant {
 
     /// The recogniser that listens on the glasses mic while an answer is read.
     @ObservationIgnored private var bargeSession: TapSpeechSession?
+    /// `finishListening` is waiting for the final transcript: callbacks must not end it again.
+    @ObservationIgnored private var finishing = false
     @ObservationIgnored private var bargeEcho: Set<String> = []
     /// Words at the start of the recogniser's text that were Muisti's own voice.
     @ObservationIgnored private var bargeSkip = 0
@@ -690,6 +741,16 @@ final class VoiceAssistant {
         earconPlayer?.play()
     }
 
+    /// Two soft notes: Muisti left something on the phone worth a glance (it does not speak).
+    func chime() {
+        guard phase == .idle || phase.isFailed else { return }
+        try? Self.activatePlaybackSession()
+        chimePlayer = try? AVAudioPlayer(data: Self.earconWAV)
+        chimePlayer?.volume = 0.6
+        chimePlayer?.play()
+    }
+
+    @ObservationIgnored private var chimePlayer: AVAudioPlayer?
     @ObservationIgnored private var earconPlayer: AVAudioPlayer?
     @ObservationIgnored private var waitingPlayer: AVAudioPlayer?
 
@@ -873,10 +934,12 @@ struct TurnTimeline {
     }
 }
 
-private protocol ListeningSession: AnyObject {
+protocol ListeningSession: AnyObject, Sendable {
     func start(onText: @escaping @Sendable (String, Bool) -> Void,
                onError: @escaping @Sendable (String) -> Void,
                onFrame: @escaping @Sendable (SpectrumAnalyzer.Frame) -> Void) throws
+    /// Stops taking audio and waits (up to `timeout`) for the recogniser's final text.
+    func finalize(timeout: Double) async -> String?
     func stop()
 }
 
@@ -886,6 +949,7 @@ private final class TapSpeechSession: ListeningSession, @unchecked Sendable {
     private let request = SFSpeechAudioBufferRecognitionRequest()
     private let tap: GlassesMicTap
     private var task: SFSpeechRecognitionTask?
+    private let final = FinalTranscript()
 
     init(recognizer: SFSpeechRecognizer, contextualStrings: [String], tap: GlassesMicTap) {
         self.recognizer = recognizer
@@ -898,8 +962,9 @@ private final class TapSpeechSession: ListeningSession, @unchecked Sendable {
                onFrame: @escaping @Sendable (SpectrumAnalyzer.Frame) -> Void) throws {
         request.shouldReportPartialResults = true
         if recognizer.supportsOnDeviceRecognition { request.requiresOnDeviceRecognition = true }
-        request.taskHint = .search
+        request.taskHint = .dictation   // whole spoken questions, not search keywords
         let request = request
+        let final = final
         let analyzer = SpectrumAnalyzer()
         tap.setConsumer { buffer in
             request.append(buffer)
@@ -907,11 +972,19 @@ private final class TapSpeechSession: ListeningSession, @unchecked Sendable {
         }
         task = recognizer.recognitionTask(with: request) { @Sendable result, error in
             if let result {
+                if result.isFinal { final.deliver(result.bestTranscription.formattedString) }
                 onText(result.bestTranscription.formattedString, result.isFinal)
             } else if let error {
+                final.deliver(nil)
                 onError(error.localizedDescription)
             }
         }
+    }
+
+    func finalize(timeout: Double) async -> String? {
+        tap.setConsumer(nil)
+        request.endAudio()
+        return await final.wait(timeout: timeout)
     }
 
     func stop() {
@@ -928,6 +1001,7 @@ private final class SpeechSession: ListeningSession, @unchecked Sendable {
     private let audioEngine = AVAudioEngine()
     private let request = SFSpeechAudioBufferRecognitionRequest()
     private var task: SFSpeechRecognitionTask?
+    private let final = FinalTranscript()
 
     init(recognizer: SFSpeechRecognizer, contextualStrings: [String] = []) {
         self.recognizer = recognizer
@@ -941,7 +1015,7 @@ private final class SpeechSession: ListeningSession, @unchecked Sendable {
         if recognizer.supportsOnDeviceRecognition {
             request.requiresOnDeviceRecognition = true   // the question never leaves the phone
         }
-        request.taskHint = .search
+        request.taskHint = .dictation   // whole spoken questions, not search keywords
         let input = audioEngine.inputNode
         // The route may just have switched to the glasses (HFP, 8/16 kHz). Installing a tap with
         // a stale or empty format raises an Objective-C exception that kills the app.
@@ -951,6 +1025,7 @@ private final class SpeechSession: ListeningSession, @unchecked Sendable {
                           userInfo: [NSLocalizedDescriptionKey: String(localized: "The microphone isn't ready. Try again.")])
         }
         let request = request
+        let final = final
         let analyzer = SpectrumAnalyzer()
         input.removeTap(onBus: 0)
         input.installTap(onBus: 0, bufferSize: 1024, format: nil) { @Sendable buffer, _ in
@@ -961,11 +1036,20 @@ private final class SpeechSession: ListeningSession, @unchecked Sendable {
         try audioEngine.start()
         task = recognizer.recognitionTask(with: request) { @Sendable result, error in
             if let result {
+                if result.isFinal { final.deliver(result.bestTranscription.formattedString) }
                 onText(result.bestTranscription.formattedString, result.isFinal)
             } else if let error {
+                final.deliver(nil)
                 onError(error.localizedDescription)
             }
         }
+    }
+
+    func finalize(timeout: Double) async -> String? {
+        audioEngine.inputNode.removeTap(onBus: 0)
+        audioEngine.stop()
+        request.endAudio()
+        return await final.wait(timeout: timeout)
     }
 
     func stop() {

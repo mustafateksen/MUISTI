@@ -1,9 +1,9 @@
 import Foundation
 import Speech
 
-/// Which language the question recogniser listens for. "Automatic" follows the phone's
-/// languages (the first one the recogniser supports); a wrong-language recogniser turns speech
-/// into nonsense, so the user can also pick one in Settings. Answers are spoken in the language
+/// Which language the question recogniser listens for: English (US) by default, or one picked
+/// in Settings. "Automatic" (the phone's first supported language) is only a choice, never the
+/// default: a wrong-language recogniser turns speech into nonsense. Answers are spoken in the language
 /// detected in the question, whatever this is.
 enum SpeechLanguage {
     static let automatic = "auto"
@@ -21,8 +21,12 @@ enum SpeechLanguage {
             let language = Locale(identifier: id).language.languageCode?.identifier
             let region = Locale(identifier: id).region?.identifier
             let sameLanguage = supported.filter { Locale(identifier: $0).language.languageCode?.identifier == language }
+            // Same region if the recogniser has it ("en-GB"); else the language's main locale
+            // ("en-US", "tr-TR", "fi-FI"). Never the alphabetical first: an English phone in
+            // Turkey ("en-TR") used to get the en-AE recogniser.
+            let main = language == "en" ? "en-US" : language.map { "\($0)-\($0.uppercased())" }
             if let match = sameLanguage.first(where: { Locale(identifier: $0).region?.identifier == region })
-                ?? sameLanguage.first(where: { Locale(identifier: $0).region?.identifier == Locale(identifier: $0).language.languageCode?.identifier.uppercased() })
+                ?? sameLanguage.first(where: { $0 == main })
                 ?? sameLanguage.sorted().first {
                 return match
             }

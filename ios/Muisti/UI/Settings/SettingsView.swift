@@ -9,6 +9,7 @@ struct SettingsView: View {
     let wearables: WearablesController
     @Environment(\.dismiss) private var dismiss
     @AppStorage(DeveloperMode.storageKey) private var developerMode = false
+    @State private var showVoiceSetup = false
 
     var body: some View {
         NavigationStack {
@@ -45,6 +46,9 @@ struct SettingsView: View {
                     }
                     .onChange(of: config.speechLanguage) { applySettings() }
                     Toggle("Read answers aloud", isOn: $config.speakAnswers)
+                    if config.speakAnswers, !VoicePicker.hasPremiumAva {
+                        Button("Get a natural voice (Ava)", systemImage: "waveform.badge.plus") { showVoiceSetup = true }
+                    }
                     if config.speakAnswers {
                         AnswerVoicePicker(controller: controller, language: "en", title: String(localized: "English voice"))
                         AnswerVoicePicker(controller: controller, language: "tr", title: String(localized: "Turkish voice"))
@@ -83,6 +87,8 @@ struct SettingsView: View {
                     Text("Muisti looks for things like a stove, iron or candle left on, smoke or running water, and warns you when you leave or forget them. Your own rules (Safety tab) work either way.")
                 }
 
+                AgentSettingsSection(controller: controller)
+
                 PrivacySettingsSection(controller: controller, config: config)
 
                 Section {
@@ -110,6 +116,8 @@ struct SettingsView: View {
                 switch route {
                 case .developer:
                     DeveloperView(controller: controller, config: config, wearables: wearables)
+                case .assistantNotes:
+                    AgentNotesView(controller: controller)
                 }
             }
             .toolbar {
@@ -118,6 +126,9 @@ struct SettingsView: View {
                 }
             }
             .onDisappear(perform: applySettings)
+            .sheet(isPresented: $showVoiceSetup) {
+                VoiceSetupSheet { await controller.voice.previewVoice(language: "en") }
+            }
         }
     }
 
@@ -162,7 +173,7 @@ private struct AnswerVoicePicker: View {
             Button("Play \(title.lowercased())", systemImage: "play.circle") {
                 Task { await controller.voice.previewVoice(language: language) }
             }
-            if !selection.isEmpty, !VoicePicker.hasNaturalVoice(for: language) {
+            if !VoicePicker.hasNaturalVoice(for: language) {
                 Text("Only a basic voice is installed. For a natural one, download a Premium or Enhanced voice in Settings › Accessibility › Spoken Content › Voices, then come back here.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
@@ -175,7 +186,10 @@ private struct AnswerVoicePicker: View {
     }
 
     private var autoLabel: String {
-        String(localized: "Same as iPhone (Spoken Content)")
+        if let best = VoicePicker.naturalVoice(for: language) {
+            return String(localized: "Automatic (\(best.name), best installed)")
+        }
+        return String(localized: "Same as iPhone (Spoken Content)")
     }
 }
 

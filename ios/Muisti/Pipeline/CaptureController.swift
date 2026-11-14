@@ -74,6 +74,8 @@ final class CaptureController {
     @ObservationIgnored let mediaKeys = MediaKeyTrigger()
     /// Muisti Turva: the user's own safety rules over what the glasses see.
     let safety: SafetyMonitor
+    /// The agent side: intents, destination, places, and what Muisti brings up by itself.
+    let agent: AgentCenter
     @ObservationIgnored private let pipeline: MemoryPipeline
     @ObservationIgnored private let pipelineInput: AsyncStream<PipelineItem>.Continuation
     @ObservationIgnored private var tasks: [Task<Void, Never>] = []
@@ -94,12 +96,34 @@ final class CaptureController {
         voice.speakAnswers = config.speakAnswers
         pipeline = MemoryPipeline(recorder: recorder, store: store, worker: worker)
         safety = SafetyMonitor(store: SafetyStore(), ai: ai, location: location)
+        agent = AgentCenter(ai: ai, memory: store, location: location, motion: motion)
         let safety = safety
         let voice = voice
-        safety.announce = { text, language, expectsReply, frame in
-            await voice.announce(text, language: language, expectsReply: expectsReply, frame: frame)
+        let agent = agent
+        // Everything Muisti says unasked goes through one gate (`InterventionPolicy`): safety
+        // warnings are always spoken, the agent's notes only when they are worth it.
+        let policy = agent.policy
+        policy.speak = { text, language, expectsReply, frame, urgent in
+            await voice.announce(text, language: language, expectsReply: expectsReply, frame: frame, urgent: urgent,
+                                 title: urgent ? nil : String(localized: "Muisti noticed"))
         }
-        voice.safetyHandler = { command in await safety.handle(command) }
+        policy.chime = { voice.chime() }
+        safety.announce = { text, language, expectsReply, frame in
+            await policy.submit(Proposal(source: "safety", topic: "safety", urgency: .safety, text: text, language: language,
+                                         expectsReply: expectsReply, frame: frame))
+        }
+        agent.language = { voice.localeIdentifier }
+        voice.safetyHandler = { command in
+            // A yes/no or "not now" may answer something the agent asked or brought up.
+            switch command {
+            case .confirm: if let reply = await agent.resolvePending(true) { return reply }
+            case .cancel: if let reply = await agent.resolvePending(false) { return reply }
+            case .snooze: if let reply = await agent.snoozeLast() { return reply }
+            default: break
+            }
+            return await safety.handle(command)
+        }
+        voice.agentHandler = { command in await agent.handle(command) }
         safety.autoHazards = { config.safetyAuto }
         let enrichment = worker
         let memoryPipeline = pipeline
@@ -107,6 +131,7 @@ final class CaptureController {
             await enrichment.setOnEnriched { id, title, passage, vector, frame in
                 await safety.checkEnriched(recordID: id, title: title, passage: passage, vector: vector, frame: frame)
             }
+            await enrichment.setOnNoticed { noticed in await agent.noticed(noticed) }
             await memoryPipeline.setOnTextStored { id, text, frame in
                 await safety.checkText(recordID: id, text: text, frame: frame)
             }
@@ -157,8 +182,15 @@ final class CaptureController {
         voice.warmUp()
         let safetyStore = safety.store
         let bridge = SafetyBridge(
-            context: { await safety.promptContext() },
-            forget: { since in await safetyStore.delete(since: since) },
+            context: {
+                let rules = await safety.promptContext()
+                let notes = await agent.promptContext()
+                return rules + "\n\n" + notes
+            },
+            forget: { since in
+                await safetyStore.delete(since: since)
+                await agent.forget(since: since)
+            },
             frames: { ids in await safety.frames(forEvents: ids) }
         )
         let engine = queryEngine
@@ -166,6 +198,7 @@ final class CaptureController {
 
         let (pipelineStream, pipelineInput) = AsyncStream.makeStream(of: PipelineItem.self, bufferingPolicy: .bufferingNewest(6))
         self.pipelineInput = pipelineInput
+        agent.isCapturing = { [weak self] in self?.isRunning ?? false }
 
         let pipeline = pipeline
         tasks.append(Task.detached { [weak self] in
@@ -204,6 +237,7 @@ final class CaptureController {
         Task { [weak self] in
             guard let self else { return }
             await self.store.purge(olderThanDays: self.config.retentionDays)
+            await self.agent.purge(retentionDays: self.config.retentionDays)
             await self.store.assignMissingEpisodes()
             await self.refreshCounts()
             await self.applySettings()
@@ -428,6 +462,7 @@ final class CaptureController {
         let since = Date().addingTimeInterval(TimeInterval(-60 * minutes))
         let removed = await store.delete(since: since)
         await safety.forget(since: since)
+        await agent.forget(since: since)
         notice = String(localized: "Deleted \(removed) records from the last \(minutes) minutes.")
         await refreshCounts()
     }
@@ -436,6 +471,7 @@ final class CaptureController {
         let removed = await store.deleteAll()
         await safety.store.deleteAll()
         await safety.reload()
+        await agent.deleteAll()
         notice = String(localized: "Deleted \(removed) records.")
         await refreshCounts()
     }

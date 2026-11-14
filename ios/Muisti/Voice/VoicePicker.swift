@@ -29,6 +29,12 @@ enum VoicePicker {
             }
     }
 
+    /// The best installed Premium or Enhanced voice for the language; nil if only compact
+    /// (robotic) voices are on the phone.
+    static func naturalVoice(for language: String) -> AVSpeechSynthesisVoice? {
+        voices(for: language).first { $0.quality != .default }
+    }
+
     static func hasNaturalVoice(for language: String) -> Bool {
         voices(for: language).contains { $0.quality != .default }
     }
@@ -67,7 +73,22 @@ enum VoicePicker {
         default: quality = 0
         }
         let sameRegion = voice.language.hasSuffix("-" + region) ? 5 : 0
-        return quality + sameRegion
+        // Within a quality level the house voice wins (Ava for English); a Premium voice of
+        // another name still beats an Enhanced Ava.
+        let preferred = isPreferred(voice) ? 8 : 0
+        return quality + sameRegion + preferred
+    }
+
+    /// The voice Muisti recommends per language (asked for in the first-run voice setup).
+    static let preferredNames = ["en": "Ava"]
+
+    static func isPreferred(_ voice: AVSpeechSynthesisVoice) -> Bool {
+        preferredNames[languageCode(voice.language)].map { voice.name.hasPrefix($0) } ?? false
+    }
+
+    /// Ava (Premium) is on the phone: the natural English voice Muisti asks for at first run.
+    static var hasPremiumAva: Bool {
+        AVSpeechSynthesisVoice.speechVoices().contains { languageCode($0.language) == "en" && isPreferred($0) && $0.quality == .premium }
     }
 
     static func languageCode(_ tag: String) -> String {

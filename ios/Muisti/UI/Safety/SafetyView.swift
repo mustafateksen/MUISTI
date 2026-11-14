@@ -1,7 +1,8 @@
 import SwiftUI
 
-/// Muisti Safety as a plain list of small cards, top to bottom: open warnings, what Muisti last
-/// saw of each watched object, the rules, home. Photos are thumbnails that open full screen.
+/// Muisti Safety, one screen without scrolling in normal use: what needs an answer now (pending
+/// question, open warnings or "All clear"), then the rules and home. Past warnings and what
+/// Muisti last saw sit behind the History button. Photos are thumbnails that open full screen.
 /// "+" adds a rule in the user's own words (the AI writes it up); rules can also be spoken.
 struct SafetyView: View {
     let safety: SafetyMonitor
@@ -10,7 +11,6 @@ struct SafetyView: View {
     @AppStorage(DeveloperMode.storageKey) private var developerMode = false
 
     private var openAlerts: [SafetyAlert] { safety.alerts.filter { $0.response == nil } }
-    private var earlierAlerts: [SafetyAlert] { Array(safety.alerts.filter { $0.response != nil }.prefix(5)) }
 
     var body: some View {
         NavigationStack {
@@ -23,9 +23,9 @@ struct SafetyView: View {
                     }
                 }
 
-                Section("Warnings") {
+                Section {
                     if openAlerts.isEmpty {
-                        Label("All clear", systemImage: "checkmark.shield.fill")
+                        Label(allClearText, systemImage: "checkmark.shield.fill")
                             .font(.subheadline.weight(.semibold))
                             .foregroundStyle(.success)
                     }
@@ -40,15 +40,7 @@ struct SafetyView: View {
                     }
                 }
 
-                if !safety.states.isEmpty {
-                    Section("Last seen") {
-                        ForEach(safety.states, id: \.object) { state in
-                            SafetyStateRow(state: state, url: url(state.evidenceFrame))
-                        }
-                    }
-                }
-
-                Section("Rules") {
+                Section {
                     if safety.rules.isEmpty {
                         Button("Add your first rule", systemImage: "plus") { addingRule = true }
                             .font(.subheadline.weight(.semibold))
@@ -59,18 +51,9 @@ struct SafetyView: View {
                                 Button("Delete", systemImage: "trash", role: .destructive) { Task { await safety.delete(rule) } }
                             }
                     }
-                }
-
-                if !earlierAlerts.isEmpty {
-                    Section("Earlier") {
-                        ForEach(earlierAlerts) { alert in
-                            SafetyAlertRow(alert: alert, url: url(alert.evidenceFrame))
-                        }
-                    }
-                }
-
-                Section {
                     SafetyHomeRow(hasHome: safety.home != nil, setHomeHere: safety.setHomeHere)
+                } header: {
+                    Text("Rules")
                 } footer: {
                     Text("Muisti complements a stove guard and smoke alarm; it never replaces them.")
                 }
@@ -84,10 +67,16 @@ struct SafetyView: View {
                     }
                 }
             }
-            .listRowSpacing(Theme.Spacing.xs)
+            .listRowSpacing(4)
+            .listSectionSpacing(.compact)
             .navigationTitle("Safety")
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItemGroup(placement: .topBarTrailing) {
+                    NavigationLink {
+                        SafetyHistoryView(safety: safety)
+                    } label: {
+                        Label("History", systemImage: "clock.arrow.circlepath")
+                    }
                     Button("Add rule", systemImage: "plus") { addingRule = true }
                 }
             }
@@ -105,6 +94,12 @@ struct SafetyView: View {
                 await safety.reload()
             }
         }
+    }
+
+    /// "All clear · 3 rules on": the page's one-line status when nothing is open.
+    private var allClearText: String {
+        let on = safety.rules.filter(\.enabled).count
+        return on == 0 ? String(localized: "All clear") : String(localized: "All clear · \(on) rules on")
     }
 
     private func url(_ frame: String?) -> URL? {
