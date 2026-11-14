@@ -7,12 +7,12 @@ enum MotionActivityKind: String, Sendable, Codable {
 
     var label: String {
         switch self {
-        case .unknown: return "unknown"
-        case .stationary: return "still"
-        case .walking: return "walking"
-        case .running: return "running"
-        case .cycling: return "cycling"
-        case .automotive: return "in vehicle"
+        case .unknown: return String(localized: "unknown", comment: "Motion activity")
+        case .stationary: return String(localized: "still", comment: "Motion activity")
+        case .walking: return String(localized: "walking", comment: "Motion activity")
+        case .running: return String(localized: "running", comment: "Motion activity")
+        case .cycling: return String(localized: "cycling", comment: "Motion activity")
+        case .automotive: return String(localized: "in vehicle", comment: "Motion activity")
         }
     }
 }

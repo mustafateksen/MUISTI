@@ -19,10 +19,10 @@ enum CaptureMode: String, Codable, Sendable, CaseIterable, Identifiable {
 
     var label: String {
         switch self {
-        case .adaptive: return "Adaptive (recommended)"
-        case .stream: return "A · Low-rate stream"
-        case .streamPlusPhoto: return "B · Stream + triggered photo"
-        case .intervalPhoto: return "C · Interval photo"
+        case .adaptive: return String(localized: "Adaptive (recommended)")
+        case .stream: return String(localized: "A · Low-rate stream")
+        case .streamPlusPhoto: return String(localized: "B · Stream + triggered photo")
+        case .intervalPhoto: return String(localized: "C · Interval photo")
         }
     }
 
@@ -39,9 +39,9 @@ enum StreamQuality: String, Codable, Sendable, CaseIterable, Identifiable {
     var id: String { rawValue }
     var label: String {
         switch self {
-        case .high: return "High 720×1280"
-        case .medium: return "Medium 504×896"
-        case .low: return "Low 360×640"
+        case .high: return String(localized: "High 720×1280")
+        case .medium: return String(localized: "Medium 504×896")
+        case .low: return String(localized: "Low 360×640")
         }
     }
 }

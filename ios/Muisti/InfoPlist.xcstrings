@@ -1,259 +1,271 @@
 {
-  "sourceLanguage": "en",
-  "strings": {
-    "CFBundleDisplayName": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Muisti"
+  "sourceLanguage" : "en",
+  "strings" : {
+    "CFBundleDisplayName" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Muisti"
           }
         },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Muisti"
+        "fi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Muisti"
           }
         },
-        "fi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Muisti"
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Muisti"
           }
         }
       }
     },
-    "NSMotionUsageDescription": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Needed to adjust how often frames are captured while you walk, stand still, or ride, to save battery."
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Yürürken, dururken veya araçtayken kare yakalama sıklığını ayarlayıp pil tasarrufu sağlamak için gerekli."
-          }
-        },
-        "fi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Tarvitaan kuvien tallennustiheyden säätämiseen, kun kävelet, seisot tai matkustat, akun säästämiseksi."
+    "CFBundleName" : {
+      "comment" : "Bundle name",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Muisti"
           }
         }
       }
     },
-    "NSCameraUsageDescription": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Used as the capture source when your glasses aren't available."
+    "NSBluetoothAlwaysUsageDescription" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Needed to connect to your glasses."
           }
         },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Gözlüğün kullanılamadığında görüntü kaynağı olarak kullanılır."
+        "fi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tarvitaan yhteyden muodostamiseen laseihisi."
           }
         },
-        "fi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Käytetään kuvalähteenä, kun lasisi eivät ole käytettävissä."
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gözlüğüne bağlanmak için gerekli."
           }
         }
       }
     },
-    "NSMicrophoneUsageDescription": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Needed to ask questions by voice."
+    "NSBluetoothPeripheralUsageDescription" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Needed to connect to your glasses."
           }
         },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Sesle soru sormak için gerekli."
+        "fi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tarvitaan yhteyden muodostamiseen laseihisi."
           }
         },
-        "fi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Tarvitaan kysymysten esittämiseen äänellä."
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gözlüğüne bağlanmak için gerekli."
           }
         }
       }
     },
-    "NSBluetoothPeripheralUsageDescription": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Needed to connect to your glasses."
+    "NSCameraUsageDescription" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Used as the capture source when your glasses aren't available."
           }
         },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Gözlüğüne bağlanmak için gerekli."
+        "fi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Käytetään kuvalähteenä, kun lasisi eivät ole käytettävissä."
           }
         },
-        "fi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Tarvitaan yhteyden muodostamiseen laseihisi."
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gözlüğün kullanılamadığında görüntü kaynağı olarak kullanılır."
           }
         }
       }
     },
-    "NSBluetoothAlwaysUsageDescription": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Needed to connect to your glasses."
+    "NSLocalNetworkUsageDescription" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lets your iPhone find your glasses over Wi-Fi."
           }
         },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Gözlüğüne bağlanmak için gerekli."
+        "fi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Antaa iPhonen löytää lasisi Wi-Fi-verkon kautta."
           }
         },
-        "fi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Tarvitaan yhteyden muodostamiseen laseihisi."
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "iPhone'unun gözlüğünü Wi-Fi üzerinden bulmasını sağlar."
           }
         }
       }
     },
-    "NSLocalNetworkUsageDescription": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Lets your iPhone find your glasses over Wi-Fi."
+    "NSLocationWhenInUseUsageDescription" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Needed to save where you saw things and to decide when to capture a frame."
           }
         },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "iPhone'unun gözlüğünü Wi-Fi üzerinden bulmasını sağlar."
+        "fi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tarvitaan sen tallentamiseen, missä näit asioita, ja sen päättämiseen, milloin kuva otetaan."
           }
         },
-        "fi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Antaa iPhonen löytää lasisi Wi-Fi-verkon kautta."
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bir şeyi nerede gördüğünü kaydetmek ve ne zaman kare yakalanacağına karar vermek için gerekli."
           }
         }
       }
     },
-    "NSPhotoLibraryAddUsageDescription": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Needed to save photos from your memories to your library."
+    "NSMicrophoneUsageDescription" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Needed to ask questions by voice."
           }
         },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Anılarındaki fotoğrafları arşivine kaydetmek için gerekli."
+        "fi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tarvitaan kysymysten esittämiseen äänellä."
           }
         },
-        "fi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Tarvitaan muistojesi kuvien tallentamiseen kirjastoosi."
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sesle soru sormak için gerekli."
           }
         }
       }
     },
-    "NSPhotoLibraryUsageDescription": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Needed to choose a video to feed the simulated glasses."
+    "NSMotionUsageDescription" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Needed to adjust how often frames are captured while you walk, stand still, or ride, to save battery."
           }
         },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Simüle edilen gözlüğe verilecek videoyu seçmek için gerekli."
+        "fi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tarvitaan kuvien tallennustiheyden säätämiseen, kun kävelet, seisot tai matkustat, akun säästämiseksi."
           }
         },
-        "fi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Tarvitaan videon valitsemiseen simuloiduille laseille."
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Yürürken, dururken veya araçtayken kare yakalama sıklığını ayarlayıp pil tasarrufu sağlamak için gerekli."
           }
         }
       }
     },
-    "NSSpeechRecognitionUsageDescription": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Needed to turn your spoken questions into text."
+    "NSPhotoLibraryAddUsageDescription" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Needed to save photos from your memories to your library."
           }
         },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Sesli sorularını metne çevirmek için gerekli."
+        "fi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tarvitaan muistojesi kuvien tallentamiseen kirjastoosi."
           }
         },
-        "fi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Tarvitaan puhuttujen kysymystesi muuttamiseen tekstiksi."
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Anılarındaki fotoğrafları arşivine kaydetmek için gerekli."
           }
         }
       }
     },
-    "NSLocationWhenInUseUsageDescription": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Needed to save where you saw things and to decide when to capture a frame."
+    "NSPhotoLibraryUsageDescription" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Needed to choose a video to feed the simulated glasses."
           }
         },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Bir şeyi nerede gördüğünü kaydetmek ve ne zaman kare yakalanacağına karar vermek için gerekli."
+        "fi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tarvitaan videon valitsemiseen simuloiduille laseille."
           }
         },
-        "fi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Tarvitaan sen tallentamiseen, missä näit asioita, ja sen päättämiseen, milloin kuva otetaan."
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Simüle edilen gözlüğe verilecek videoyu seçmek için gerekli."
+          }
+        }
+      }
+    },
+    "NSSpeechRecognitionUsageDescription" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Needed to turn your spoken questions into text."
+          }
+        },
+        "fi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tarvitaan puhuttujen kysymystesi muuttamiseen tekstiksi."
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sesli sorularını metne çevirmek için gerekli."
           }
         }
       }
     }
   },
-  "version": "1.0"
+  "version" : "1.0"
 }

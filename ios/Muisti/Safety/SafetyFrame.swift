@@ -24,11 +24,14 @@ enum SafetyFrame {
         return !(request.results ?? []).filter { $0.confidence > 0.3 }.isEmpty
     }
 
-    /// OCR + head masking at `maxPixel`. nil when head detection failed (fail-safe: nothing
+    /// OCR + head masking at `maxPixel`. `fromPipeline` false: the picture never goes through
+    /// the memory pipeline (evaluation photos), so there is no reading to wait for. nil when head detection failed (fail-safe: nothing
     /// unmasked leaves the phone).
-    static func prepare(_ jpeg: Data, maxPixel: Int = 1280) -> Prepared? {
+    static func prepare(_ jpeg: Data, maxPixel: Int = 1280, fromPipeline: Bool = true) -> Prepared? {
         guard let image = ImageData.thumbnail(jpeg, maxPixel: maxPixel) else { return nil }
-        let analysis = PerceptionEngine.textAndHeads(image)
+        // The memory pipeline reads the same frame (text + heads): use its reading when it is
+        // there or on its way, and only analyse here when it is not (a frame it dropped as blurry).
+        let analysis = (fromPipeline ? PerceptionEngine.FrameAnalysis.shared.reading(for: jpeg) : nil) ?? PerceptionEngine.textAndHeads(image)
         guard let heads = analysis.heads else { return nil }
         let plates = analysis.lines.filter { PerceptionEngine.looksLikePlate($0.text) }
         let text = analysis.lines.filter { !PerceptionEngine.looksLikePlate($0.text) }

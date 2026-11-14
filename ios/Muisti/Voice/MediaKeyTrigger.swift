@@ -27,7 +27,7 @@ final class MediaKeyTrigger {
         })
         MPNowPlayingInfoCenter.default().nowPlayingInfo = [
             MPMediaItemPropertyTitle: "Muisti",
-            MPMediaItemPropertyArtist: "Double tap to ask",
+            MPMediaItemPropertyArtist: String(localized: "Double tap to ask", comment: "Now Playing subtitle on the Lock Screen"),
             MPNowPlayingInfoPropertyPlaybackRate: 0.0,
         ]
         claimNowPlaying()

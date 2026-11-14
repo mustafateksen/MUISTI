@@ -63,12 +63,12 @@ actor NemotronClient {
 
         var errorDescription: String? {
             switch self {
-            case .missingKey: return "No Nemotron API key (Settings > Nemotron)."
-            case .preempted: return "Deferred for a question."
-            case .http(401, _), .http(403, _): return "Nemotron API key is invalid."
-            case .http(429, _): return "Nemotron rate limit reached; will retry shortly."
-            case .http(let code, let body): return "Nemotron \(code): \(body.prefix(160))"
-            case .badResponse(let why): return "Couldn't read Nemotron response: \(why)"
+            case .missingKey: return String(localized: "No Nemotron API key (Settings > Nemotron).")
+            case .preempted: return String(localized: "Deferred for a question.", comment: "Background AI work was postponed so a question could run first")
+            case .http(401, _), .http(403, _): return String(localized: "Nemotron API key is invalid.")
+            case .http(429, _): return String(localized: "Nemotron rate limit reached; will retry shortly.")
+            case .http(let code, let body): return String(localized: "Nemotron \(code): \(body.prefix(160))")
+            case .badResponse(let why): return String(localized: "Couldn't read Nemotron response: \(why)")
             }
         }
     }
@@ -153,6 +153,7 @@ actor NemotronClient {
         if settings.effectiveEmbedURL != self.settings.effectiveEmbedURL || settings.embedModel != self.settings.embedModel
             || settings.effectiveEmbedKey != self.settings.effectiveEmbedKey {
             embeddingsUnavailable = false
+            imageEmbeddingsUnavailable = false
         }
         self.settings = settings
     }
@@ -387,6 +388,48 @@ actor NemotronClient {
         return vector.map(Float.init)
     }
 
+    /// Set when the host refuses image inputs (not NVIDIA's retriever API, or an older model).
+    private var imageEmbeddingsUnavailable = false
+
+    var imageEmbeddingsEnabled: Bool {
+        embeddingsEnabled && !imageEmbeddingsUnavailable && settings.effectiveEmbedURL.host?.hasSuffix("nvidia.com") == true
+    }
+
+    /// A keyframe as a passage vector. nemotron-3.5-embed-1b puts images in the same space as
+    /// its text passages and (text-only) queries, so a question finds the picture itself, not
+    /// only what the extraction happened to write about it.
+    func embedImage(_ jpeg: Data) async throws -> [Float] {
+        guard imageEmbeddingsEnabled else { throw NemotronError.badResponse("image embeddings off") }
+        // The model's default longest edge is 1120 px.
+        let image = ImageData.downscaledJPEG(jpeg, maxPixel: 1024, quality: 0.8)
+        let url = settings.effectiveEmbedURL.appendingPathComponent("embeddings")
+        let key = settings.effectiveEmbedKey
+        // Verified on the live endpoint: images need input_type "passage" ("" is a 400).
+        let body: [String: Any] = [
+            "model": settings.embedModel,
+            "input": ["data:image/jpeg;base64,\(image.base64EncodedString())"],
+            "modality": ["image"],
+            "input_type": "passage",
+            "encoding_format": "float",
+            "truncate": "END",
+        ]
+        let data: Data
+        do {
+            data = try await post(url, json: body, key: key, paced: true)
+        } catch NemotronError.http(let status, let message) where status == 404 {
+            // No such endpoint/model here. A 400 is about this one picture: the worker skips it.
+            imageEmbeddingsUnavailable = true
+            Log.net.info("image embeddings unavailable on this host (\(status)); text vectors only")
+            throw NemotronError.http(status, message)
+        }
+        guard
+            let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let items = root["data"] as? [[String: Any]],
+            let vector = items.first?["embedding"] as? [Double]
+        else { throw NemotronError.badResponse("missing image embedding") }
+        return vector.map(Float.init)
+    }
+
     // MARK: Reranking
 
     /// Cross-encoder relevance of each passage to the query: one logit per passage, same order.
@@ -521,7 +564,7 @@ actor NemotronClient {
 
 struct TimeoutError: Error, LocalizedError {
     let seconds: Double
-    var errorDescription: String? { "No response within \(Int(seconds)) s" }
+    var errorDescription: String? { String(localized: "No response within \(Int(seconds)) s") }
 }
 
 /// A question call raced over both hosts (`NemotronClient.questionPlan`): the first host starts

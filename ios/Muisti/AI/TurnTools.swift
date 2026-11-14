@@ -23,9 +23,10 @@ enum TurnTools {
     what you just asked or warned about, so read the conversation and the pending yes/no first.
     """
 
-    static func user(question: String, now: Date, conversation: [String], safety: String, lookedSecondsAgo: Int?) -> String {
+    static func user(question: String, now: Date, conversation: [String], safety: String, lookedSecondsAgo: Int?, position: String? = nil) -> String {
         """
         Current local time: \(QueryEngine.promptTime(now))
+        User position now: \(position ?? "unknown")
         Conversation so far (oldest first):
         \(conversation.isEmpty ? "(new conversation)" : conversation.joined(separator: "\n"))
         \(lookedSecondsAgo.map { "Your last reply looked through the glasses \($0) seconds ago.\n" } ?? "")

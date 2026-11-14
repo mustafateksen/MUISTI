@@ -11,8 +11,8 @@ enum SafetyRuleWriter {
 
         var errorDescription: String? {
             switch self {
-            case .noKey: "Add an API key in Settings first. Muisti needs it to write the rule."
-            case .notARule: "Muisti couldn't turn that into a rule. Say what to watch and when."
+            case .noKey: String(localized: "Add an API key in Settings first. Muisti needs it to write the rule.")
+            case .notARule: String(localized: "Muisti couldn't turn that into a rule. Say what to watch and when.")
             }
         }
     }

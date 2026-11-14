@@ -72,6 +72,7 @@ actor EnrichmentWorker {
             signaled = false
             guard status.online, status.hasKey, let next = await store.pending(limit: 1).first else {
                 if status.online, await backfillEmbedding() { continue }
+                if status.online, await backfillImageEmbedding() { continue }
                 if status.online, status.hasKey, await summarizeEpisode() { continue }
                 await waitForWork(timeout: .seconds(30))
                 continue
@@ -111,6 +112,34 @@ actor EnrichmentWorker {
         return true
     }
 
+    /// Adds a keyframe vector to one older record (frames from before image vectors, or a model
+    /// change). Returns whether it did any work.
+    private func backfillImageEmbedding() async -> Bool {
+        guard await ai.imageEmbeddingsEnabled, let record = await store.missingImageEmbeddings(limit: 1).first else { return false }
+        return await embedImage(of: record)
+    }
+
+    /// Embeds a record's stored (blurred) keyframe. Returns whether it did any work.
+    private func embedImage(of record: MemoryRecord, jpeg: Data? = nil) async -> Bool {
+        guard await ai.imageEmbeddingsEnabled else { return false }
+        let model = await ai.embedModelName
+        guard let data = jpeg ?? (try? Data(contentsOf: store.frameURL(record))) else {
+            await store.setImageEmbedding(id: record.id, nil, model: model)   // frame file gone
+            return true
+        }
+        do {
+            await store.setImageEmbedding(id: record.id, try await ai.embedImage(data), model: model)
+            return true
+        } catch NemotronClient.NemotronError.http(let status, _) where (400..<500).contains(status) && status != 429 {
+            // This picture was refused (and the host still takes images): don't retry it forever.
+            guard await ai.imageEmbeddingsEnabled else { return false }
+            await store.setImageEmbedding(id: record.id, nil, model: model)
+            return true
+        } catch {
+            return false   // offline, rate limit, a question went first: the backfill tries again
+        }
+    }
+
     /// Title + summary for one settled episode whose frames changed. Returns whether it worked.
     private func summarizeEpisode() async -> Bool {
         guard let (episode, records) = await store.episodeNeedingSummary(settle: 90) else { return false }
@@ -135,7 +164,7 @@ actor EnrichmentWorker {
     }
 
     static func passage(for r: MemoryRecord) -> String {
-        [r.kind, r.name, r.caption, r.otherText, r.visual, r.keywords, r.street, r.ocrText]
+        [r.kind, r.name, r.caption, r.otherText, r.visual, r.keywords, r.street, r.area, r.ocrText]
             .compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: "\n")
     }
 
@@ -174,7 +203,7 @@ actor EnrichmentWorker {
         extracted = ExtractionCheck.verify(extracted, ocr: record.ocrText)
 
         let passage = [extracted.kindLabel, extracted.name, extracted.caption, extracted.other_text, extracted.visualText,
-                       extracted.searchKeywords.joined(separator: " "), record.street, record.ocrText]
+                       extracted.searchKeywords.joined(separator: " "), record.street, record.area, record.ocrText]
             .compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: "\n")
         let model = await ai.embedModelName
         let extractedAt = ContinuousClock.now
@@ -186,6 +215,9 @@ actor EnrichmentWorker {
             let title = extracted.name ?? extracted.kindLabel
             Task { await onEnriched(record.id, title, passage, vector, frame) }
         }
+        // The keyframe vector last: the record is already searchable and safety-checked; this
+        // is one more paced embedding slot.
+        _ = await embedImage(of: record, jpeg: jpeg)
         Log.pipeline.info("enriched \(record.id): \(extracted.kindLabel ?? "-", privacy: .public) / \(extracted.name ?? "-", privacy: .public) · \(extracted.objects.count) things, \(extracted.depictions.count) pictures")
     }
 

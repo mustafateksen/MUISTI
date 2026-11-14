@@ -23,11 +23,11 @@ enum DropReason: String, Sendable, CaseIterable {
 
     var label: String {
         switch self {
-        case .blurry: return "blurry"
-        case .duplicate: return "duplicate"
-        case .noRecordZone: return "no-record zone"
-        case .noText: return "no text"
-        case .unreadable: return "unreadable"
+        case .blurry: return String(localized: "blurry", comment: "Reason a frame was dropped")
+        case .duplicate: return String(localized: "duplicate", comment: "Reason a frame was dropped")
+        case .noRecordZone: return String(localized: "no-record zone", comment: "Reason a frame was dropped")
+        case .noText: return String(localized: "no text", comment: "Reason a frame was dropped")
+        case .unreadable: return String(localized: "unreadable", comment: "Reason a frame was dropped")
         }
     }
 }
@@ -71,7 +71,7 @@ actor PerceptionEngine {
         _ = HeadBlur.heads(in: image)
     }
 
-    func process(_ frame: CapturedFrame, street: String?) -> PerceptionResult {
+    func process(_ frame: CapturedFrame, street: String?, area: String? = nil) -> PerceptionResult {
         if let lat = frame.latitude, let lon = frame.longitude, zones.contains(where: { $0.contains(latitude: lat, longitude: lon) }) {
             return .drop(.noRecordZone)
         }
@@ -93,10 +93,17 @@ actor PerceptionEngine {
 
         // OCR and head detection in parallel on the same ~2400 px copy (12 MP is slower and not
         // more legible for Vision). Heads are only used if the frame is kept below.
-        let parallel = Self.textAndHeads(ocrImage)
+        let parallel = FrameAnalysis.shared.run(for: frame.jpeg) { Self.textAndHeads(ocrImage) }
         let lines = parallel.lines
-        let plates = lines.filter { Self.looksLikePlate($0.text) }
-        let textLines = lines.filter { !Self.looksLikePlate($0.text) }
+        // A plate-shaped line is only treated as a plate (masked, never stored as text) when it
+        // really can be one: the hyphenated Finnish form always; "LA 10", "BUS 55", "EUR 15"
+        // only when the frame shows a vehicle. Signs and price tags keep their text.
+        let candidates = lines.indices.filter { Self.looksLikePlate(lines[$0].text) }
+        let loose = candidates.filter { !Self.isHyphenatedPlate(lines[$0].text) }
+        let plateIndices = Set(candidates.filter { Self.isHyphenatedPlate(lines[$0].text) })
+            .union(loose.isEmpty || !Self.showsVehicle(analysis) ? [] : loose)
+        let plates = plateIndices.sorted().map { lines[$0] }
+        let textLines = lines.indices.filter { !plateIndices.contains($0) }.map { lines[$0] }
         let ocrText = Self.visualRows(textLines).joined(separator: "\n")
 
         let manual = frame.trigger == .manual
@@ -145,6 +152,7 @@ actor PerceptionEngine {
             accuracy: frame.horizontalAccuracy,
             heading: frame.headingDegrees,
             street: street,
+            area: area,
             ocrText: ocrText,
             frameJPEG: keyframe
         )
@@ -171,6 +179,66 @@ actor PerceptionEngine {
             if i == 0 { box.lines = recognizeText(image) } else { box.heads = HeadBlur.heads(in: image) }
         }
         return (box.lines, box.heads)
+    }
+
+    /// The OCR lines and head boxes of the frames just analysed, so the safety check and the
+    /// live look use the memory pipeline's reading of the same frame instead of running text
+    /// recognition and head detection on it a second time (boxes are normalised, so they fit
+    /// any size of the picture). Only the memory pipeline writes here: its reading is made on
+    /// the largest copy.
+    final class FrameAnalysis: @unchecked Sendable {
+        static let shared = FrameAnalysis()
+        typealias Reading = (lines: [TextLine], heads: [CGRect]?)
+        private let condition = NSCondition()
+        private var inFlight: Set<Int> = []
+        private var done: [(key: Int, reading: Reading)] = []
+
+        /// A cheap identity for one JPEG: its size and a sample of its bytes.
+        static func key(_ jpeg: Data) -> Int {
+            var hasher = Hasher()
+            hasher.combine(jpeg.count)
+            let step = max(1, jpeg.count / 64)
+            jpeg.withUnsafeBytes { bytes in
+                var i = 0
+                while i < bytes.count { hasher.combine(bytes[i]); i += step }
+            }
+            return hasher.finalize()
+        }
+
+        /// The memory pipeline's analysis of a frame; others can wait for it.
+        func run(for jpeg: Data, _ analyse: () -> Reading) -> Reading {
+            let key = Self.key(jpeg)
+            condition.lock()
+            inFlight.insert(key)
+            condition.unlock()
+            let reading = analyse()
+            condition.lock()
+            inFlight.remove(key)
+            // A failed head detection is not kept: nobody may mask with it.
+            if reading.heads != nil {
+                done.append((key, reading))
+                if done.count > 6 { done.removeFirst(done.count - 6) }
+            }
+            condition.broadcast()
+            condition.unlock()
+            return reading
+        }
+
+        /// The pipeline's reading of this frame if it exists or arrives in time: waits up to
+        /// `grace` s for the pipeline to pick the frame up, and for a reading in progress.
+        func reading(for jpeg: Data, grace: TimeInterval = 0.25) -> Reading? {
+            let key = Self.key(jpeg)
+            let start = Date()
+            condition.lock()
+            defer { condition.unlock() }
+            while true {
+                if let hit = done.last(where: { $0.key == key }) { return hit.reading }
+                let waited = Date().timeIntervalSince(start)
+                let limit = inFlight.contains(key) ? 4.0 : grace
+                guard waited < limit else { return nil }
+                condition.wait(until: Date().addingTimeInterval(min(0.05, limit - waited)))
+            }
+        }
     }
 
     struct TextLine: Sendable {
@@ -345,6 +413,26 @@ actor PerceptionEngine {
         }
         return rows.map { row in row.sorted { $0.box.minX < $1.box.minX }.map(\.text).joined(separator: "  ") }
     }
+
+    /// The Finnish plate as printed ("ABC-123"): masked even without a vehicle in view.
+    static func isHyphenatedPlate(_ text: String) -> Bool {
+        let t = text.uppercased().trimmingCharacters(in: .whitespaces)
+        return t.range(of: #"^[A-ZÅÄÖ]{2,3}-[0-9]{1,3}$"#, options: .regularExpression) != nil
+    }
+
+    /// Vision's on-device classifier sees a vehicle (any of these labels at ≥ 0.1; on the
+    /// 73-photo eval set every frame with a car scored 0.12–0.91). Fails safe: an error counts
+    /// as a vehicle, so a possible plate stays masked.
+    static func showsVehicle(_ image: CGImage) -> Bool {
+        let request = VNClassifyImageRequest()
+        do { try VNImageRequestHandler(cgImage: image, options: [:]).perform([request]) } catch { return true }
+        return (request.results ?? []).contains { vehicleLabels.contains($0.identifier) && $0.confidence >= 0.1 }
+    }
+
+    private static let vehicleLabels: Set<String> = [
+        "automobile", "car", "vehicle", "engine_vehicle", "bus", "truck", "van", "motorcycle", "motorhome",
+        "police_car", "sportscar", "semi_truck", "firetruck", "license_plate", "formula_one_car",
+    ]
 
     /// Finnish / EU style plates: "ABC-123", "AB-1234", "ABC 123". Never stored as text.
     static func looksLikePlate(_ text: String) -> Bool {

@@ -40,7 +40,7 @@ actor MemoryPipeline {
     }
 
     /// Returns the new memory id if the frame was kept.
-    func handle(_ frame: CapturedFrame, street: String?) async -> Int64? {
+    func handle(_ frame: CapturedFrame, street: String?, area: String? = nil) async -> Int64? {
         if recordRaw { await recorder.write(frame) }
         if frame.trigger == .stream {
             // OCR on every 7 fps frame would burn the battery; look at one in N.
@@ -48,7 +48,7 @@ actor MemoryPipeline {
             guard streamCounter % streamEveryN == 0 else { return nil }
         }
         let began = ContinuousClock.now
-        let outcome = await perception.process(frame, street: street)
+        let outcome = await perception.process(frame, street: street, area: area)
         let perceptionMs = (ContinuousClock.now - began).milliseconds
         switch outcome {
         case .drop(let reason):

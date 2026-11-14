@@ -132,7 +132,11 @@ actor QueryEngine {
     /// The user paused: start the turn decision + search + rerank on what was heard so far. If these are
     /// still the words when listening ends, `ask` continues from here instead of starting over
     /// (the wait for the end of speech and the search overlap). Other words: dropped.
-    func prepare(_ question: String, location: LocationFix?) {
+    /// Where the user is now (street, area, floor, coordinates), as text for the model.
+    private var position: String?
+
+    func prepare(_ question: String, location: LocationFix?, position: String? = nil) {
+        self.position = position
         let trimmed = question.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, prepared?.question != trimmed else { return }
         prepared?.task.cancel()
@@ -155,11 +159,12 @@ actor QueryEngine {
         let looked = recent.last?.looked == true ? lastLive.map { Int(now.timeIntervalSince($0.at)) }.flatMap { $0 < 90 ? $0 : nil } : nil
         let safetyBridge = safety
         let hasKey = await ai.hasKey
+        let place = position
         let decideTask = Task { () -> (decision: TurnTools.Decision?, ms: Int) in
             guard hasKey else { return (nil, 0) }
             let safetyText = await safetyBridge?.context() ?? ""
             return await Self.decide(ai, user: TurnTools.user(question: trimmed, now: now, conversation: Array(talk),
-                                                              safety: safetyText, lookedSecondsAgo: looked))
+                                                              safety: safetyText, lookedSecondsAgo: looked, position: place))
         }
         let findTask = Task { await self.find(trimmed, location: location) }
         // A first message is complete by itself: its rerank starts at once. In a conversation
@@ -292,7 +297,8 @@ actor QueryEngine {
         return ((try? outcome.result.get()).map(TurnTools.decision), (ContinuousClock.now - began).milliseconds)
     }
 
-    func ask(_ question: String, location: LocationFix?, now: Date = Date()) async -> AskResult {
+    func ask(_ question: String, location: LocationFix?, position: String? = nil, now: Date = Date()) async -> AskResult {
+        self.position = position
         let started = ContinuousClock.now
         let trimmed = question.trimmingCharacters(in: .whitespacesAndNewlines)
         var trace = Trace()
@@ -382,7 +388,7 @@ actor QueryEngine {
 
         // 5. One model call: understand the question and answer from the records only.
         guard await ai.hasKey else {
-            return offline(trimmed, context, started, note: "No Nemotron key; local search.", trace)
+            return offline(trimmed, context, started, note: String(localized: "No Nemotron key; local search."), trace)
         }
         // Episodes of the best records: the frames seen just before and after them, in order,
         // so the model can answer "what was next to / after / on the same walk as X".
@@ -433,9 +439,19 @@ actor QueryEngine {
         // reading their text (colours, layout, what the OCR missed).
         // The newest frame is always one of them: "what am I looking at", "this is my medicine".
         var pictureRecords = Array(context.prefix(4).map(\.record))
-        if let newest = await self.store.recent(limit: 1).first, !pictureRecords.contains(where: { $0.id == newest.id }) {
-            pictureRecords = Array(pictureRecords.prefix(3)) + [newest]
+        // The keyframe channel's best match is shown too, even when the text reranker put it
+        // lower: what it found may be in the picture only, not in any text the reranker reads.
+        var extras: [MemoryRecord] = []
+        if let pictured = context.filter({ ($0.signals.imageRank ?? .max) <= 3 })
+            .min(by: { ($0.signals.imageRank ?? .max) < ($1.signals.imageRank ?? .max) })?.record,
+           !pictureRecords.contains(where: { $0.id == pictured.id }) {
+            extras.append(pictured)
         }
+        if let newest = await self.store.recent(limit: 1).first, !pictureRecords.contains(where: { $0.id == newest.id }),
+           !extras.contains(where: { $0.id == newest.id }) {
+            extras.append(newest)
+        }
+        pictureRecords = Array(pictureRecords.prefix(4 - extras.count)) + extras
         let store = self.store
         // Right after a look, the live frame stays in view as cell 1 (follow-ups about it); the
         // memory frames fill the rest, so a question about earlier still has them.
@@ -457,7 +473,11 @@ actor QueryEngine {
             pictureCaption = picture == nil ? nil : "a grid of memory frames (NOT the live view): " + cells.joined(separator: ", ")
                 + " (1 top-left, 2 top-right, 3 bottom-left, 4 bottom-right)"
         }
-        var user = MemoryPrompts.answerUser(question: trimmed, language: language, now: now, hasLocation: location != nil,
+        // The position may be said in the answer (a house number in the street name is not a
+        // number read from a sign): it counts as shown to the model for the evidence check.
+        let place = self.position
+        if let place { safetyText += "\n" + place }
+        var user = MemoryPrompts.answerUser(question: trimmed, language: language, now: now, position: place,
                                             records: context.map { Self.describe($0, now: now, position: position[$0.record.id]) },
                                             episodes: episodeText, latest: latest, safety: safetyText, picture: pictureCaption,
                                             conversation: turns.map { "user: \($0.question)\nMuisti: \($0.answer)" + ($0.ids.isEmpty ? "" : " [relied on record ids \($0.ids.map(String.init).joined(separator: ", "))]") })
@@ -491,7 +511,7 @@ actor QueryEngine {
             let cached = taken?.live == nil ? lastLive.flatMap { Date().timeIntervalSince($0.at) < 30 ? $0 : nil } : nil
             guard let live = taken?.live ?? cached else {
                 trace.add("look_now: no live frame")
-                var r = result(trimmed, "I can't see anything right now: the glasses aren't sending images.", .unknown, [], true,
+                var r = result(trimmed, String(localized: "I can't see anything right now: the glasses aren't sending images."), .unknown, [], true,
                                started, nil, language?.code, trace)
                 r.isCommand = true
                 return r
@@ -522,7 +542,7 @@ actor QueryEngine {
         case .failure(let error):
             let why = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
             Log.net.error("answer call failed: \(why, privacy: .public)")
-            return offline(trimmed, context, started, note: "Nemotron didn't answer (\(why)); local search.", trace)
+            return offline(trimmed, context, started, note: String(localized: "Nemotron didn't answer (\(why)); local search."), trace)
         }
         trace.add("answer \((ContinuousClock.now - answerStarted).milliseconds) ms\(image == nil ? "" : " · picture")")
 
@@ -570,6 +590,7 @@ actor QueryEngine {
     /// lists hallucinate now and then (an "aquarium" for a playground net, an elevator next to a
     /// directory); a claim no frame confirms becomes "I don't know". Slow or failed: keep the answer.
     private func lookAgain(_ draft: AnswerDraft, question: String, hits: [MemoryHit], trace: inout Trace) async -> AnswerDraft? {
+        if EvalSwitch.noLookAgain { return nil }
         guard draft.action == .answer, !lookedLive, AnswerLabel(rawValue: draft.label.uppercased()) == .seen,
               draft.found != false, !(draft.used_ids ?? []).isEmpty else { return nil }
         let evidence = Self.evidence(for: draft, in: hits)
@@ -638,11 +659,16 @@ actor QueryEngine {
 
     /// Up to four keyframes (already blurred) in a 2×2 grid, numbered 1–4, as one JPEG: one
     /// picture works on every host, several do not.
-    static func montage(_ urls: [URL], cell: CGFloat = 640) -> Data? {
+    /// Long edge of one frame in the answer picture. Measured with Vision OCR on the 73-photo
+    /// set: of the words legible in the stored 1536 px keyframe, a 640 px cell kept 47 %,
+    /// 896 px 58 %, 1280 px 73 %. 896 px doubles the picture's pixels; check latency in the eval.
+    static let pictureCell: CGFloat = EvalSwitch.pictureCell ?? 896
+
+    static func montage(_ urls: [URL], cell: CGFloat = QueryEngine.pictureCell) -> Data? {
         montage(jpegs: urls.compactMap { try? Data(contentsOf: $0) }, cell: cell)
     }
 
-    static func montage(jpegs: [Data], cell: CGFloat = 640) -> Data? {
+    static func montage(jpegs: [Data], cell: CGFloat = QueryEngine.pictureCell) -> Data? {
         let images = jpegs.prefix(4).compactMap { ImageData.thumbnail($0, maxPixel: Int(cell)) }
         guard !images.isEmpty else { return nil }
         let columns = images.count == 1 ? 1 : 2
@@ -789,6 +815,7 @@ actor QueryEngine {
         var s = "#\(hit.record.id) \(hit.record.name ?? hit.record.kind ?? String(hit.record.ocrText.prefix(14)))"
         if let logit = hit.signals.rerankLogit { s += String(format: " r%.2f", logit) }
         if let cosine = hit.signals.cosine { s += String(format: " c%.2f", cosine) }
+        if let cosine = hit.signals.imageCosine { s += String(format: " i%.2f", cosine) }
         if !hit.related.isEmpty { s += " ×\(hit.related.count + 1)" }
         return s
     }
@@ -902,8 +929,8 @@ actor QueryEngine {
         let time = r.seenAt.formatted(date: .omitted, time: .shortened)
         // Without the model there is no real answer: say so plainly, then the closest frame.
         let answer = text.isEmpty
-            ? "I couldn't reach Nemotron, so I can't answer this properly right now. The closest frame is from \(time)."
-            : "I couldn't reach Nemotron, so I can't answer this properly right now. The closest thing I saw, at \(time), read: \(text)."
+            ? String(localized: "I couldn't reach Nemotron, so I can't answer this properly right now. The closest frame is from \(time).")
+            : String(localized: "I couldn't reach Nemotron, so I can't answer this properly right now. The closest thing I saw, at \(time), read: \(text).")
         return result(question, answer, .unknown, [best], false, started, note, nil, trace)
     }
 
@@ -913,7 +940,7 @@ actor QueryEngine {
                       ids: e.flatMap(\.allRecords).map(\.id), at: Date(), looked: lookedLive))
         return AskResult(question: q, answer: a, label: l, evidence: e, usedAI: ai,
                   latencyMs: (ContinuousClock.now - started).milliseconds,
-                  note: note ?? (lookedLive ? "Looked through the glasses just now." : nil), language: language,
+                  note: note ?? (lookedLive ? String(localized: "Looked through the glasses just now.") : nil), language: language,
                   trace: trace.parts.isEmpty ? nil : trace.parts.joined(separator: " · "),
                   ranked: rankedForResult)
     }
@@ -947,13 +974,14 @@ actor QueryEngine {
             lines.append("Read \(hit.allRecords.count) times between \(promptTime(times.min()!)) and \(promptTime(times.max()!)); other ids: \(hit.related.map { String($0.id) }.joined(separator: ", "))")
         }
         if let street = r.street { lines.append("Street: \(street)") }
+        if let area = r.area { lines.append("Area: \(area)") }
         if let distance = hit.distanceMeters { lines.append("distance_m: \(Int(distance.rounded()))") }
         if let kind = r.kind { lines.append("Type: \(kind)") }
         if let name = r.name { lines.append("Name on sign: \(name)") }
         if let phone = r.phone { lines.append("Phone on sign: \(phone)") }
         if let hours = r.hours { lines.append("Hours on sign: \(hours)") }
         if let other = r.otherText { lines.append("Other text on sign: \(other)") }
-        if let visual = r.visual { lines.append(visual) }
+        if let visual = r.visual { lines.append(EvalSwitch.visual(visual)) }
         if let caption = r.caption { lines.append("Caption: \(caption)") }
         let ocr = mergedOCR(hit)
         lines.append("OCR text: \(ocr.isEmpty ? "(none)" : ocr.replacingOccurrences(of: "\n", with: " | "))")
@@ -985,7 +1013,7 @@ actor QueryEngine {
             if let kind = r.kind { parts.append(kind) }
             if let name = r.name { parts.append("\"\(name)\"") }
             if let street = r.street, street != episode.street { parts.append("street: \(street)") }
-            if let visual = r.visual {
+            if let visual = r.visual.map(EvalSwitch.visual) {
                 let things = visual.split(separator: "\n").filter { $0.hasPrefix("Visible things") || $0.hasPrefix("Spatial") || $0.hasPrefix("PICTURE") }
                 if !things.isEmpty { parts.append(things.joined(separator: "; ")) }
             }
@@ -996,8 +1024,8 @@ actor QueryEngine {
     }
 
     // App UI strings for the paths where the model did not answer.
-    static let emptyText = "I couldn't find anything about that in memory."
-    static let unclearText = "I didn't see that clearly; here's the closest frame."
+    static let emptyText = String(localized: "I couldn't find anything about that in memory.")
+    static let unclearText = String(localized: "I didn't see that clearly; here's the closest frame.")
 }
 
 /// The visual re-check's prompt (see `QueryEngine.lookAgain`).

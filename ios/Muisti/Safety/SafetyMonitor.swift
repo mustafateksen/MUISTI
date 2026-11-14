@@ -222,7 +222,7 @@ final class SafetyMonitor {
     /// Applies one frame's reading. Public for the scenario evaluation (no network).
     func apply(_ obs: SafetyObservation, at: Date, frameFile: String?, latitude: Double? = nil, longitude: Double? = nil) async {
         let summary = obs.objects.filter(\.visible).map { "\($0.name)=\($0.state)" } + obs.actions.map { "\($0.object):\($0.action)" }
-        lastObservationText = "\(obs.room) · " + (summary.isEmpty ? "nothing watched in view" : summary.joined(separator: ", "))
+        lastObservationText = "\(obs.room) · " + (summary.isEmpty ? String(localized: "nothing watched in view") : summary.joined(separator: ", "))
         Log.pipeline.info("safety: \(self.lastObservationText, privacy: .public)")
         let zoneName = zone.rawValue
         func event(_ kind: SafetyEventKind, _ object: String?, _ value: String?, source: SafetySource = .vision, detail: String? = nil) -> SafetyEvent {
@@ -429,7 +429,7 @@ final class SafetyMonitor {
             if let rule = lastAlertRule { snoozedUntil[rule] = now.addingTimeInterval(tuning.snooze) }
             if let last = alerts.first { await store.respond(alert: last.id, .snoozed) }
             alerts = await store.alerts()
-            return lastAlertRule == nil ? nil : "Okay, I'll stay quiet about that for 30 minutes."
+            return lastAlertRule == nil ? nil : String(localized: "Okay, I'll stay quiet about that for 30 minutes.")
         }
         return nil
     }
@@ -551,56 +551,76 @@ final class SafetyMonitor {
             return true
         }
         guard !candidates.isEmpty else { return }
-        for rule in candidates {
-            let query = Self.ruleQuery(rule)
-            var direct = false
-            if rerankGate {
-                var score: Double?
-                if await ai.rerankEnabled { score = try? await ai.rerank(query: query, passages: [passage], paced: true).first }
-                var cosine: Double?
-                if let vector, let q = await queryVector(query) { cosine = Self.cosine(vector, q) }
-                Log.pipeline.info("safety rule check #\(recordID) [\(rule.id.prefix(8), privacy: .public)] rerank \(score.map { String(format: "%.2f", $0) } ?? "-", privacy: .public) cos \(cosine.map { String(format: "%.3f", $0) } ?? "-", privacy: .public)")
-                let t = tuning
-                switch (score, cosine) {
-                case let (s?, c):
-                    direct = s >= t.ruleDirectLogit && (c ?? 1) >= t.ruleDirectCosine
-                    if !direct, s < t.ruleGateLogit, (c ?? 0) < t.ruleGateCosine { continue }
-                case let (nil, c?):
-                    direct = c >= t.ruleDirectCosineAlone
-                    if !direct, c < t.ruleGateCosine { continue }
-                case (nil, nil):
-                    break   // nothing to measure with: the text check decides
+        // The rules are checked side by side (each is one or two network calls); the warnings
+        // are then given one after another, in the rules' order.
+        var matched: [(index: Int, label: SafetyObservation.Label)] = []
+        await withTaskGroup(of: (Int, SafetyObservation.Label?).self) { group in
+            for (index, rule) in candidates.enumerated() {
+                group.addTask {
+                    (index, await self.match(rule, recordID: recordID, title: title, passage: passage, vector: vector, rerankGate: rerankGate))
                 }
             }
-            let label: SafetyObservation.Label
-            if direct {
-                label = SafetyObservation.Label(product: title, ingredients_visible: false, source: "front",
-                                                allergens_found: rule.condition.allergens ?? [], evidence: "close to the rule in meaning")
-            } else {
-                let match: SafetyPrompts.Match
-                do {
-                    let ai = ai
-                    match = try await Self.afterQuestions(ai) {
-                        try await ai.chatJSON(SafetyPrompts.Match.self, system: SafetyPrompts.matchSystem,
-                                              user: "Rule: \(query)\n\nRecord:\n\(passage.prefix(2500))",
-                                              jsonSchema: SafetyPrompts.matchSchema, schemaName: "match", maxTokens: 200,
-                                              temperature: 0, background: true)
-                    }
-                } catch {
-                    continue
-                }
-                Log.pipeline.info("safety rule check #\(recordID): matches \(match.matches) \(match.found, privacy: .public) · \(match.evidence, privacy: .public)")
-                guard match.matches else { continue }
-                let found = match.found.map { $0.lowercased() }
-                label = SafetyObservation.Label(product: match.product ?? title, ingredients_visible: match.from_ingredients,
-                                                source: match.from_ingredients ? "ingredients" : "front",
-                                                allergens_found: found.isEmpty ? (rule.condition.allergens ?? []) : found,
-                                                evidence: match.evidence)
+            for await (index, label) in group {
+                if let label { matched.append((index, label)) }
             }
-            var file: String?
-            if let frame { file = await store.saveFrame(frame) }
-            await fire(rule, at: Date(), label: label, speak: true, frameFile: file)
         }
+        guard !matched.isEmpty else { return }
+        var file: String?
+        if let frame { file = await store.saveFrame(frame) }
+        for hit in matched.sorted(by: { $0.index < $1.index }) {
+            await fire(candidates[hit.index], at: Date(), label: hit.label, speak: true, frameFile: file)
+        }
+    }
+
+    /// Whether one rule applies to a record, as the label to warn with (nil: it does not).
+    private func match(_ rule: SafetyRule, recordID: Int64, title: String?, passage: String, vector: [Float]?,
+                       rerankGate: Bool) async -> SafetyObservation.Label? {
+        let query = Self.ruleQuery(rule)
+        var direct = false
+        if rerankGate {
+            var score: Double?
+            if await ai.rerankEnabled { score = try? await ai.rerank(query: query, passages: [passage], paced: true).first }
+            var cosine: Double?
+            if let vector, let q = await queryVector(query) { cosine = Self.cosine(vector, q) }
+            Log.pipeline.info("safety rule check #\(recordID) [\(rule.id.prefix(8), privacy: .public)] rerank \(score.map { String(format: "%.2f", $0) } ?? "-", privacy: .public) cos \(cosine.map { String(format: "%.3f", $0) } ?? "-", privacy: .public)")
+            let t = tuning
+            switch (score, cosine) {
+            case let (s?, c):
+                direct = s >= t.ruleDirectLogit && (c ?? 1) >= t.ruleDirectCosine
+                if !direct, s < t.ruleGateLogit, (c ?? 0) < t.ruleGateCosine { return nil }
+            case let (nil, c?):
+                direct = c >= t.ruleDirectCosineAlone
+                if !direct, c < t.ruleGateCosine { return nil }
+            case (nil, nil):
+                break   // nothing to measure with: the text check decides
+            }
+        }
+        let label: SafetyObservation.Label
+        if direct {
+            label = SafetyObservation.Label(product: title, ingredients_visible: false, source: "front",
+                                            allergens_found: rule.condition.allergens ?? [], evidence: "close to the rule in meaning")
+        } else {
+            let match: SafetyPrompts.Match
+            do {
+                let ai = ai
+                match = try await Self.afterQuestions(ai) {
+                    try await ai.chatJSON(SafetyPrompts.Match.self, system: SafetyPrompts.matchSystem,
+                                          user: "Rule: \(query)\n\nRecord:\n\(passage.prefix(2500))",
+                                          jsonSchema: SafetyPrompts.matchSchema, schemaName: "match", maxTokens: 200,
+                                          temperature: 0, background: true)
+                }
+            } catch {
+                return nil
+            }
+            Log.pipeline.info("safety rule check #\(recordID): matches \(match.matches) \(match.found, privacy: .public) · \(match.evidence, privacy: .public)")
+            guard match.matches else { return nil }
+            let found = match.found.map { $0.lowercased() }
+            label = SafetyObservation.Label(product: match.product ?? title, ingredients_visible: match.from_ingredients,
+                                            source: match.from_ingredients ? "ingredients" : "front",
+                                            allergens_found: found.isEmpty ? (rule.condition.allergens ?? []) : found,
+                                            evidence: match.evidence)
+        }
+        return label
     }
 
     /// A safety call that a question pushed aside is made again once the question is answered

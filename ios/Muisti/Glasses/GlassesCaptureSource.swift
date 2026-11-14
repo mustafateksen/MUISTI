@@ -188,15 +188,15 @@ final class GlassesCaptureSource: CaptureSource {
     /// What the user should do while we wait for the glasses (brief §7: one next step).
     var waitingHint: String {
         guard hasActiveDevice else {
-            return "Turn on your glasses, unfold them and keep them near your iPhone."
+            return String(localized: "Turn on your glasses, unfold them and keep them near your iPhone.")
         }
-        if device.hinge == .closed { return "Glasses are folded. Unfold them to start a new session." }
-        if device.don == .doffed { return "Glasses aren't on. Put them on to reconnect." }
-        if device.link != .connected { return "Connecting to glasses…" }
+        if device.hinge == .closed { return String(localized: "Glasses are folded. Unfold them to start a new session.") }
+        if device.don == .doffed { return String(localized: "Glasses aren't on. Put them on to reconnect.") }
+        if device.link != .connected { return String(localized: "Connecting to glasses…") }
         if config?.autoReconnect == true, reconnectAttempts >= 3 {
-            return "Couldn't connect yet. Trying again…"
+            return String(localized: "Couldn't connect yet. Trying again…")
         }
-        return "Reconnecting to glasses…"
+        return String(localized: "Reconnecting to glasses…")
     }
 
     /// Battery / heat warning derived from device state (brief §7). The SDK also reports
@@ -218,22 +218,22 @@ final class GlassesCaptureSource: CaptureSource {
     var healthWarning: String? {
         guard hasActiveDevice else { return nil }
         if LocalNetworkPermission.shared.denied {
-            return "Local Network is off for Muisti, so the glasses send photos over slow Bluetooth. Turn it on in Settings › Privacy & Security › Local Network."
+            return String(localized: "Local Network is off for Muisti, so the glasses send photos over slow Bluetooth. Turn it on in Settings › Privacy & Security › Local Network.")
         }
         if slowLink {
-            return "Photos arrive slowly over Bluetooth. Turn on the phone's Wi-Fi and allow Local Network for Muisti (Settings › Privacy & Security › Local Network) so the glasses can use Wi-Fi."
+            return String(localized: "Photos arrive slowly over Bluetooth. Turn on the phone's Wi-Fi and allow Local Network for Muisti (Settings › Privacy & Security › Local Network) so the glasses can use Wi-Fi.")
         }
-        let suggestion = usesPhoto ? "" : " Switching to adaptive mode saves battery and reduces heat."
+        let suggestion = usesPhoto ? "" : String(localized: " Switching to adaptive mode saves battery and reduces heat.", comment: "Appended after a glasses warning; keep the leading space")
         switch device.thermal {
         case .critical, .emergency, .shutdown:
-            return "Glasses are too hot; capture paused. Let them cool down."
+            return String(localized: "Glasses are too hot; capture paused. Let them cool down.")
         case .severe:
-            return "Glasses are warming up; capturing less often." + suggestion
+            return String(localized: "Glasses are warming up; capturing less often.") + suggestion
         default:
             break
         }
         if let battery = device.battery, battery < 15, device.charging != .charging {
-            return "Glasses battery low (\(battery)%); capturing less often." + suggestion
+            return String(localized: "Glasses battery low (\(battery)%); capturing less often.") + suggestion
         }
         return nil
     }
@@ -641,7 +641,7 @@ final class GlassesCaptureSource: CaptureSource {
         }
         do {
             guard let newCamera = try session.addCamera(config: streamConfig) else {
-                lastError = "Couldn't add the camera. Try again."
+                lastError = String(localized: "Couldn't add the camera. Try again.")
                 return
             }
             camera = newCamera
@@ -931,13 +931,13 @@ final class GlassesCaptureSource: CaptureSource {
         switch error {
         case .datAppOnTheGlassesUpdateRequired:
             needsGlassesAppUpdate = true
-            lastError = "The app on your glasses needs an update."
+            lastError = String(localized: "The app on your glasses needs an update.")
         case .noEligibleDevice:
-            lastError = "No compatible glasses found. Are they on, unfolded and nearby?"
+            lastError = String(localized: "No compatible glasses found. Are they on, unfolded and nearby?")
         case .thermalCritical, .thermalEmergency:
-            lastError = "\(error.localizedDescription) Wait for the glasses to cool down."
+            lastError = String(localized: "\(error.localizedDescription) Wait for the glasses to cool down.")
         case .batteryCritical, .peakPowerShutdown:
-            lastError = "\(error.localizedDescription) Charge your glasses."
+            lastError = String(localized: "\(error.localizedDescription) Charge your glasses.")
         case .insufficientSDKVersion:
             blocked = .failed(message: error.localizedDescription)
         case .dwaOutOfStuRange:
@@ -961,11 +961,11 @@ final class GlassesCaptureSource: CaptureSource {
         case .permissionDenied:
             permissionVerified = false
             blocked = .needsPermission
-            lastError = "No camera access. Allow it or switch to the iPhone camera."
+            lastError = String(localized: "No camera access. Allow it or switch to the iPhone camera.")
         case .hingesClosed:
-            lastError = "Glasses were folded or taken off. Unfold them to start a new session."
+            lastError = String(localized: "Glasses were folded or taken off. Unfold them to start a new session.")
         case .thermalHot, .batteryLow, .peakPowerLimit:
-            lastError = "\(error.localizedDescription) Adaptive mode saves battery and reduces heat."
+            lastError = String(localized: "\(error.localizedDescription) Adaptive mode saves battery and reduces heat.")
         case .photoCaptureFailed:
             pendingStreamPhoto.fulfill(nil)   // silent: keep using stream frames
         case .audioStreamingError:
@@ -993,9 +993,9 @@ final class GlassesCaptureSource: CaptureSource {
         case .permissionDenied:
             permissionVerified = false
             blocked = .needsPermission
-            lastError = "No camera access."
+            lastError = String(localized: "No camera access.")
         case .deviceHealthCritical:
-            lastError = "\(error.localizedDescription) Give the glasses a rest."
+            lastError = String(localized: "\(error.localizedDescription) Give the glasses a rest.")
         default:
             break   // capture failures are logged, not shown
         }
@@ -1186,7 +1186,7 @@ final class GlassesCaptureSource: CaptureSource {
         } else if !wantRunning {
             next = .idle
         } else if backgroundPaused {
-            next = .paused(reason: "returned from background")
+            next = .paused(reason: String(localized: "returned from background", comment: "Reason shown after 'Paused:'"))
         } else if session == nil {
             next = .waitingForDevice
         } else {
@@ -1200,7 +1200,7 @@ final class GlassesCaptureSource: CaptureSource {
                 if streamState == .paused || photoState == .started {
                     next = .paused(reason: device.don == .doffed ? Self.doffedReason : Self.tapReason)
                 } else {
-                    next = .paused(reason: "glasses switched to another experience")
+                    next = .paused(reason: String(localized: "glasses switched to another experience", comment: "Reason shown after 'Paused:'"))
                 }
             case .started:
                 next = startedState()
@@ -1211,8 +1211,8 @@ final class GlassesCaptureSource: CaptureSource {
         state = next
     }
 
-    private static let doffedReason = "glasses aren't on; put them on and tap the temple"
-    private static let tapReason = "tap the glasses' temple to resume"
+    private static let doffedReason = String(localized: "glasses aren't on; put them on and tap the temple", comment: "Reason shown after 'Paused:'")
+    private static let tapReason = String(localized: "tap the glasses' temple to resume", comment: "Reason shown after 'Paused:'")
 
     private func startedState() -> CaptureState {
         let doffedReason = Self.doffedReason

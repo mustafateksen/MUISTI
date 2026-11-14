@@ -41,6 +41,12 @@ struct MemoryDetailView: View {
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                     }
+                    // Named place / district / city / floor, when it adds something to the street.
+                    if let area = record.area, !area.isEmpty, area != record.street {
+                        Label(area, systemImage: "building.2")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
                 }
 
                 MemoryQuickActions(record: record, coordinate: coordinate)

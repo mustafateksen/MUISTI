@@ -97,9 +97,9 @@ final class WearablesController {
         switch error {
         case .metaAINotInstalled:
             metaAIMissing = true
-            lastError = "The Meta AI app isn't installed. Install it first to connect your glasses."
+            lastError = String(localized: "The Meta AI app isn't installed. Install it first to connect your glasses.")
         case .networkUnavailable:
-            lastError = "Connecting needs internet. Check your connection and try again."
+            lastError = String(localized: "Connecting needs internet. Check your connection and try again.")
         case .alreadyRegistered:
             lastError = nil
         default:
@@ -129,7 +129,7 @@ final class WearablesController {
         do {
             let status = try await wearables.requestPermission(.camera)
             cameraPermission = status
-            if status != .granted { lastError = "Camera access wasn't granted. You can switch to the iPhone camera." }
+            if status != .granted { lastError = String(localized: "Camera access wasn't granted. You can switch to the iPhone camera.") }
             return status == .granted
         } catch {
             if error == .metaAINotInstalled { metaAIMissing = true }
@@ -158,7 +158,7 @@ final class WearablesController {
         do {
             let status = try await wearables.requestPermission(.microphone)
             microphonePermission = status
-            if status != .granted { lastError = "Glasses microphone wasn't allowed. You can still ask with the phone." }
+            if status != .granted { lastError = String(localized: "Glasses microphone wasn't allowed. You can still ask with the phone.") }
             return status == .granted
         } catch {
             if error == .metaAINotInstalled { metaAIMissing = true }
@@ -205,11 +205,11 @@ final class WearablesController {
 extension RegistrationState {
     var label: String {
         switch self {
-        case .unavailable: return "unavailable"
-        case .available: return "not connected"
-        case .registering: return "connecting"
-        case .registered: return "connected"
-        @unknown default: return "unknown"
+        case .unavailable: return String(localized: "unavailable", comment: "Glasses registration state")
+        case .available: return String(localized: "not connected", comment: "Glasses registration state")
+        case .registering: return String(localized: "connecting", comment: "Glasses registration state")
+        case .registered: return String(localized: "connected", comment: "Glasses registration state")
+        @unknown default: return String(localized: "unknown", comment: "Glasses registration state")
         }
     }
 }

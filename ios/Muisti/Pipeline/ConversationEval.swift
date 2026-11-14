@@ -99,7 +99,7 @@ enum ConversationEval {
             for turn in conversation {
                 if let file = turn.live {
                     if prepared[file] == nil, let raw = try? Data(contentsOf: dir.appendingPathComponent(file)),
-                       let copy = await Task.detached(operation: { SafetyFrame.prepare(raw, maxPixel: 1536) }).value {
+                       let copy = await Task.detached(operation: { SafetyFrame.prepare(raw, maxPixel: 1536, fromPipeline: false) }).value {
                         prepared[file] = (copy.jpeg, copy.ocr)
                     }
                     box.frame = prepared[file].map { ($0.0, $0.1, Date()) }

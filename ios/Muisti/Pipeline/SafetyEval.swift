@@ -221,7 +221,7 @@ enum SafetyEval {
         for c in cases {
             guard let jpeg = try? Data(contentsOf: dir.appendingPathComponent(c.file)) else { log("B missing \(c.file)"); continue }
             let started = ContinuousClock.now
-            guard let copy = await Task.detached(operation: { SafetyFrame.prepare(jpeg) }).value else { log("B \(c.file): privacy copy failed"); continue }
+            guard let copy = await Task.detached(operation: { SafetyFrame.prepare(jpeg, fromPipeline: false) }).value else { log("B \(c.file): privacy copy failed"); continue }
             let obs: SafetyObservation
             do {
                 obs = try await controller.ai.chatJSON(SafetyObservation.self, system: SafetyPrompts.observeSystem,

@@ -21,14 +21,14 @@ enum CaptureState: Equatable, Sendable {
 
     var label: String {
         switch self {
-        case .idle: return "Ready"
-        case .needsRegistration: return "Connect in Meta AI"
-        case .needsPermission: return "Camera access needed"
-        case .waitingForDevice: return "Waiting for glasses"
-        case .starting: return "Starting"
-        case .running: return "Recording"
-        case .paused(let reason): return "Paused: \(reason)"
-        case .failed(let message): return "Error: \(message)"
+        case .idle: return String(localized: "Ready")
+        case .needsRegistration: return String(localized: "Connect in Meta AI")
+        case .needsPermission: return String(localized: "Camera access needed")
+        case .waitingForDevice: return String(localized: "Waiting for glasses")
+        case .starting: return String(localized: "Starting", comment: "Capture status")
+        case .running: return String(localized: "Recording", comment: "Capture status")
+        case .paused(let reason): return String(localized: "Paused: \(reason)")
+        case .failed(let message): return String(localized: "Error: \(message)")
         }
     }
 }
@@ -40,8 +40,8 @@ enum SourceKind: String, Codable, Sendable, CaseIterable, Identifiable {
     var id: String { rawValue }
     var label: String {
         switch self {
-        case .glasses: return "Glasses"
-        case .phone: return "iPhone camera"
+        case .glasses: return String(localized: "Glasses", comment: "Capture source")
+        case .phone: return String(localized: "iPhone camera")
         }
     }
 }

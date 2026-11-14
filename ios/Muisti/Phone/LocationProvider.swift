@@ -9,6 +9,8 @@ struct LocationFix: Sendable, Equatable, Codable {
     let speed: Double        // m/s, < 0 means unknown
     let course: Double       // degrees, < 0 means unknown
     let timestamp: Date
+    /// Floor from the phone's indoor positioning (only in buildings Apple has mapped).
+    var floor: Int?
 
     init(_ location: CLLocation) {
         latitude = location.coordinate.latitude
@@ -17,6 +19,7 @@ struct LocationFix: Sendable, Equatable, Codable {
         speed = location.speed
         course = location.course
         timestamp = location.timestamp
+        floor = location.floor?.level
     }
 
     /// Walking direction is only trusted above 0.5 m/s; a pocketed phone's compass is not.
@@ -41,6 +44,27 @@ final class LocationProvider: NSObject, CLLocationManagerDelegate {
 
     /// Street name from reverse geocoding, refreshed every ~50 m (Apple rate-limits this).
     private(set) var street: String?
+    /// Around the street: the named place or building if the phone knows one, the district and
+    /// the city ("Messukeskus, Pasila, Helsinki"). From the same reverse geocoding.
+    private(set) var area: String?
+
+    /// The area with the floor, as stored with each memory.
+    func areaText(for fix: LocationFix?) -> String? {
+        let floor = fix?.floor.map { "floor \($0)" }
+        let parts = [area, floor].compactMap { $0 }
+        return parts.isEmpty ? nil : parts.joined(separator: ", ")
+    }
+
+    /// Where the user is now, for the answer model: street, area, floor, coordinates.
+    func positionText(maxAge: TimeInterval = 120) -> String? {
+        guard let fix = freshFix(maxAge: maxAge) else { return nil }
+        var parts: [String] = []
+        if let street { parts.append("street: \(street)") }
+        if let area { parts.append("area: \(area)") }
+        if let floor = fix.floor { parts.append("floor \(floor) (phone's indoor positioning)") }
+        parts.append(String(format: "coordinates %.4f, %.4f (±%d m)", fix.latitude, fix.longitude, Int(fix.accuracy.rounded())))
+        return parts.joined(separator: "; ")
+    }
 
     @ObservationIgnored private let manager = CLLocationManager()
     @ObservationIgnored private let geocoder = CLGeocoder()
@@ -127,10 +151,19 @@ final class LocationProvider: NSObject, CLLocationManagerDelegate {
         geocodeInFlight = true
         lastGeocoded = fix
         geocoder.reverseGeocodeLocation(fix.clLocation) { @Sendable [weak self] placemarks, _ in
-            let name = placemarks?.first?.thoroughfare ?? placemarks?.first?.name
+            let place = placemarks?.first
+            let name = place?.thoroughfare ?? place?.name
+            // A named place (station, mall, campus) only when it is not just the street address.
+            let named = (place?.areasOfInterest?.first).flatMap { $0 == name ? nil : $0 }
+            var around: [String] = []
+            for part in [named, place?.subLocality, place?.locality].compactMap({ $0 }) where !around.contains(part) {
+                around.append(part)
+            }
+            let area = around.joined(separator: ", ")
             Task { @MainActor in
                 self?.geocodeInFlight = false
                 if let name { self?.street = name }
+                if !area.isEmpty { self?.area = area }
             }
         }
     }

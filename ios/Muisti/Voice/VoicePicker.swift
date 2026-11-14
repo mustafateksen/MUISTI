@@ -49,9 +49,9 @@ enum VoicePicker {
 
     static func qualityLabel(_ voice: AVSpeechSynthesisVoice) -> String {
         switch voice.quality {
-        case .premium: return "Premium"
-        case .enhanced: return "Enhanced"
-        default: return "Basic"
+        case .premium: return String(localized: "Premium", comment: "Voice quality")
+        case .enhanced: return String(localized: "Enhanced", comment: "Voice quality")
+        default: return String(localized: "Basic", comment: "Voice quality")
         }
     }
 

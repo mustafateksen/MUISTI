@@ -17,17 +17,17 @@ enum AnswerLabel: String, Codable, Sendable {
     /// Sentence-case title for the answer card.
     var title: String {
         switch self {
-        case .seen: return "Seen"
-        case .unsure: return "Not sure"
-        case .unknown: return "Don't know"
+        case .seen: return String(localized: "Seen", comment: "Answer label")
+        case .unsure: return String(localized: "Not sure", comment: "Answer label")
+        case .unknown: return String(localized: "Don't know", comment: "Answer label")
         }
     }
 
     var display: String {
         switch self {
-        case .seen: return "SEEN"
-        case .unsure: return "NOT SURE"
-        case .unknown: return "DON'T KNOW"
+        case .seen: return String(localized: "SEEN", comment: "Answer label, uppercase badge")
+        case .unsure: return String(localized: "NOT SURE", comment: "Answer label, uppercase badge")
+        case .unknown: return String(localized: "DON'T KNOW", comment: "Answer label, uppercase badge")
         }
     }
 }
@@ -167,7 +167,8 @@ enum MemoryPrompts {
     user now asks you something, usually by voice, so the question may contain speech-recognition \
     errors.
 
-    You receive the current local time, whether the user's position is known, the question, and \
+    You receive the current local time, the user's position now when the phone knows it (street, \
+    area = named place, district and city, floor, coordinates), the question, and \
     the memory records most relevant to it. The records were retrieved and ranked for you: the \
     first is the most likely match, but not necessarily the right one, and none may match.
 
@@ -222,7 +223,11 @@ enum MemoryPrompts {
     - Resolve time and place references yourself, using each record's seen time (minutes_ago) \
     and distance_m (metres from the user's current position; only present when the position is \
     known): "just now", "a minute ago", "this morning", "yesterday", "on the street we passed", \
-    "here", "nearby", "where am I now". For "where am I now", use the most recent records. \
+    "here", "nearby", "where am I now". For "where am I now", say the position now (street and \
+    area, like a person would; coordinates only if asked for them) and add what the most recent \
+    records show there; when the position is unknown, use the most recent records. "Area" on a \
+    record is the named place, district and city it was seen in (and the floor, when the phone \
+    knew it): use it for questions about a city, district or building. \
     Prefer records that fit the reference; if none fits, say what you did see and when.
     - "Type" is the specific kind of place or thing (cafe, pharmacy, dentist). Match the kind of \
     thing asked about. If the user asks about a restaurant and the records \
@@ -337,13 +342,13 @@ enum MemoryPrompts {
      "required":["language","found","label","support","answer","used_ids","quotes","observations","unclear_reply","event_ids","expects_reply"]}
     """#
 
-    static func answerUser(question: String, language: (code: String, name: String)?, now: Date, hasLocation: Bool,
+    static func answerUser(question: String, language: (code: String, name: String)?, now: Date, position: String?,
                            records: [String], episodes: [String] = [], latest: [String] = [],
                            safety: String = "", picture: String? = nil, conversation: [String] = []) -> String {
         """
         Answer language: \(language.map { "\($0.name) (\($0.code)), detected from the question" } ?? "the language of the question")
         Current local time: \(QueryEngine.promptTime(now))
-        User position known: \(hasLocation ? "yes" : "no")
+        User position now: \(position ?? "unknown")
         Conversation so far (oldest first):
         \(conversation.isEmpty ? "(new conversation)" : conversation.joined(separator: "\n"))
 

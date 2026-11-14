@@ -86,15 +86,15 @@ final class VoiceAssistant {
         transcript = ""
 
         guard await Self.requestSpeechAuthorization() else {
-            phase = .failed("No access to Speech Recognition. Settings > Muisti > Speech Recognition.")
+            phase = .failed(String(localized: "No access to Speech Recognition. Settings > Muisti > Speech Recognition."))
             return
         }
         guard await AVAudioApplication.requestRecordPermission() else {
-            phase = .failed("No access to the microphone. Settings > Muisti > Microphone.")
+            phase = .failed(String(localized: "No access to the microphone. Settings > Muisti > Microphone."))
             return
         }
         guard let recognizer = recognizer(), recognizer.isAvailable else {
-            phase = .failed("Speech recognition isn't available for this language right now (\(localeIdentifier)).")
+            phase = .failed(String(localized: "Speech recognition isn't available for this language right now (\(localeIdentifier))."))
             return
         }
         do {
@@ -126,8 +126,8 @@ final class VoiceAssistant {
         } catch {
             Log.glasses.info("microphone failed (\(UIApplication.shared.applicationState == .active ? "foreground" : "background", privacy: .public)): \(error.localizedDescription, privacy: .public)")
             phase = .failed(UIApplication.shared.applicationState == .active
-                            ? "Couldn't turn on the microphone: \(error.localizedDescription)"
-                            : "Couldn't turn on the microphone while the phone is locked. Start recording with the glasses, then try again.")
+                            ? String(localized: "Couldn't turn on the microphone: \(error.localizedDescription)")
+                            : String(localized: "Couldn't turn on the microphone while the phone is locked. Start recording with the glasses, then try again."))
             playEndTone()
             Self.deactivateAudioSession()
         }
@@ -140,6 +140,7 @@ final class VoiceAssistant {
         prepareTask?.cancel()
         turn.mark("end of question")
         session?.stop()
+        if session === bargeSession { bargeSession = nil }
         session = nil
         levels.reset()
         let question = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -212,8 +213,8 @@ final class VoiceAssistant {
         phase = .thinking
         interrupted = false
         turn.mark("asking")
-        let engine = engine, fix = location.freshFix(maxAge: 120)
-        let query = Task { await engine.ask(question, location: fix) }
+        let engine = engine, fix = location.freshFix(maxAge: 120), position = location.positionText()
+        let query = Task { await engine.ask(question, location: fix, position: position) }
         queryTask = query
         let waiting = byVoice ? waitingTones() : nil
         var result = await query.value
@@ -237,7 +238,7 @@ final class VoiceAssistant {
         if history.count > 20 { history.removeLast() }
         if speakAnswers {
             phase = .speaking
-            await speak(result.answer, language: result.language ?? localeIdentifier)
+            await speak(result.answer, language: result.language ?? localeIdentifier, listenForUser: true)
         }
         turn.mark("spoken")
         Trace.note("turn “\(question.prefix(60))” · \(turn.summary) · engine \(result.latencyMs) ms · \(result.trace ?? "")")
@@ -260,7 +261,7 @@ final class VoiceAssistant {
     /// Muisti speaks first: a safety warning or a yes/no question. Shown in the chat too; a
     /// question opens the microphone for the answer.
     func announce(_ text: String, language: String?, expectsReply: Bool, frame: URL? = nil) async {
-        let note = AskResult(question: expectsReply ? "Muisti asks" : "Safety warning", answer: text, label: .seen,
+        let note = AskResult(question: expectsReply ? String(localized: "Muisti asks") : String(localized: "Safety warning"), answer: text, label: .seen,
                              evidence: [], usedAI: false, latencyMs: 0, note: nil, language: language,
                              isCommand: true, safetyFrames: frame.map { [$0] } ?? [], spontaneous: true)
         lastResult = note
@@ -355,7 +356,7 @@ final class VoiceAssistant {
             prepareTask = Task { [weak self] in
                 try? await Task.sleep(for: .seconds(Self.prepareAfter))
                 guard !Task.isCancelled, let self, self.phase == .listening else { return }
-                await self.engine.prepare(text, location: self.location.freshFix(maxAge: 120))
+                await self.engine.prepare(text, location: self.location.freshFix(maxAge: 120), position: self.location.positionText())
             }
         }
     }
@@ -406,7 +407,7 @@ final class VoiceAssistant {
         Self.deactivateAudioSession()
     }
 
-    private func speak(_ text: String, language: String) async {
+    private func speak(_ text: String, language: String, listenForUser: Bool = false) async {
         // Answer in A2DP quality: drop the hands-free (mic) route while speaking.
         try? Self.activatePlaybackSession()
         await Self.waitForHighQualityOutput()
@@ -441,8 +442,118 @@ final class VoiceAssistant {
             speechDelegate = delegate
             synthesizer.delegate = delegate
             synthesizer.speak(utterance)
+            if listenForUser { listenWhileSpeaking(text, language: language) }
         }
         speechDelegate = nil
+        // Not interrupted by voice: the session that listened during the answer is over.
+        if session == nil || session !== bargeSession, !bargeTakingOver { stopListeningWhileSpeaking() }
+    }
+
+    // MARK: Speaking over Muisti (voice barge-in)
+
+    /// The recogniser that listens on the glasses mic while an answer is read.
+    @ObservationIgnored private var bargeSession: TapSpeechSession?
+    @ObservationIgnored private var bargeEcho: Set<String> = []
+    /// Words at the start of the recogniser's text that were Muisti's own voice.
+    @ObservationIgnored private var bargeSkip = 0
+    @ObservationIgnored private var bargeTakingOver = false
+    /// Off: `UserDefaults` "voiceBargeIn" = false.
+    private var bargeInEnabled: Bool { UserDefaults.standard.object(forKey: "voiceBargeIn") as? Bool ?? true }
+    /// This many words in a row that Muisti is not saying = the user is talking.
+    static let bargeWords = 3
+
+    /// While the answer plays, the glasses mic (camera stream audio, no route change) keeps
+    /// being transcribed. The glasses' open speakers leak into that mic, so the recogniser
+    /// also hears Muisti: its words are known (the answer text) and are ignored; a run of
+    /// words that are not in the answer is the user speaking. Then the answer stops and those
+    /// words start the next question. Only when the answer is in the recogniser's language
+    /// (a Turkish answer heard by an English recogniser is all "new words").
+    private func listenWhileSpeaking(_ text: String, language: String) {
+        guard bargeInEnabled, let tap = glassesMic, tap.isFlowing,
+              VoicePicker.languageCode(language) == VoicePicker.languageCode(localeIdentifier),
+              SFSpeechRecognizer.authorizationStatus() == .authorized,
+              let recognizer = recognizer(), recognizer.isAvailable else { return }
+        stopListeningWhileSpeaking()
+        let session = TapSpeechSession(recognizer: recognizer, contextualStrings: knownNames, tap: tap)
+        bargeSession = session
+        bargeEcho = Set(Self.spokenWords(text))
+        bargeSkip = 0
+        let levels = levels
+        do {
+            try session.start { [weak self, weak session] heard, isFinal in
+                Task { @MainActor in
+                    guard let self, let session, self.bargeSession === session else { return }
+                    self.heardWhileSpeaking(heard, isFinal: isFinal, session: session)
+                }
+            } onError: { _ in
+            } onFrame: { [weak self] frame in
+                Task { @MainActor in if self?.phase == .listening { levels.update(frame) } }
+            }
+        } catch {
+            bargeSession = nil
+        }
+    }
+
+    private func stopListeningWhileSpeaking() {
+        guard let old = bargeSession else { return }
+        bargeSession = nil
+        if session !== old { old.stop() }
+    }
+
+    private func heardWhileSpeaking(_ heard: String, isFinal: Bool, session: TapSpeechSession) {
+        let words = heard.split(separator: " ").map(String.init)
+        if phase == .listening, self.session === session {
+            // Taken over as the question: Muisti's own words at the start are left out.
+            handlePartial(words.dropFirst(min(bargeSkip, words.count)).joined(separator: " "), isFinal: isFinal)
+            return
+        }
+        guard phase == .speaking, !bargeTakingOver else { return }
+        // The run of words at the end that Muisti is not saying.
+        var own = 0
+        for word in words.reversed() {
+            guard Self.isNew(word, echo: bargeEcho) else { break }
+            own += 1
+        }
+        guard own >= Self.bargeWords else { return }
+        bargeSkip = words.count - own
+        bargeTakingOver = true
+        interrupted = true
+        let said = words.suffix(own).joined(separator: " ")
+        Log.pipeline.info("voice barge-in: “\(said, privacy: .public)”")
+        Trace.note("voice barge-in: “\(said.prefix(60))”")
+        synthesizer.stopSpeaking(at: .immediate)
+        Task {
+            // The interrupted turn unwinds first (it leaves the phase idle).
+            let waitStart = Date()
+            while self.phase == .speaking, Date().timeIntervalSince(waitStart) < 1.5 { try? await Task.sleep(for: .milliseconds(20)) }
+            self.bargeTakingOver = false
+            guard self.bargeSession === session, self.phase == .idle || self.phase.isFailed else {
+                self.stopListeningWhileSpeaking()
+                return
+            }
+            self.interrupted = false
+            self.turn = TurnTimeline()
+            self.turn.mark("mic open")
+            self.session = session
+            self.phase = .listening
+            self.transcript = ""
+            self.handlePartial(said, isFinal: false)
+            self.maxTask = Task { [weak self] in
+                try? await Task.sleep(for: .seconds(15))
+                await self?.finishListening()
+            }
+        }
+    }
+
+    private static func spokenWords(_ text: String) -> [String] {
+        text.lowercased().split(whereSeparator: { !$0.isLetter && !$0.isNumber }).map(String.init)
+    }
+
+    /// A heard word that is not one of the words being spoken (nor a longer or shorter form of one).
+    private static func isNew(_ word: String, echo: Set<String>) -> Bool {
+        guard let w = spokenWords(word).first else { return false }
+        if echo.contains(w) { return false }
+        return !echo.contains { e in min(e.count, w.count) >= 4 && (e.hasPrefix(w) || w.hasPrefix(e)) }
     }
 
     // MARK: Audio session
@@ -837,7 +948,7 @@ private final class SpeechSession: ListeningSession, @unchecked Sendable {
         let format = input.outputFormat(forBus: 0)
         guard format.sampleRate > 0, format.channelCount > 0 else {
             throw NSError(domain: "Muisti.Speech", code: 1,
-                          userInfo: [NSLocalizedDescriptionKey: "The microphone isn't ready. Try again."])
+                          userInfo: [NSLocalizedDescriptionKey: String(localized: "The microphone isn't ready. Try again.")])
         }
         let request = request
         let analyzer = SpectrumAnalyzer()

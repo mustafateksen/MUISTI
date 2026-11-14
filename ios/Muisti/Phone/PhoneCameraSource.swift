@@ -34,16 +34,16 @@ final class PhoneCameraSource: CaptureSource {
             break
         case .notDetermined:
             guard await AVCaptureDevice.requestAccess(for: .video) else {
-                state = .failed(message: "iPhone camera access wasn't granted.")
+                state = .failed(message: String(localized: "iPhone camera access wasn't granted."))
                 return
             }
         default:
-            state = .failed(message: "No iPhone camera access. Turn it on in Settings > Muisti.")
+            state = .failed(message: String(localized: "No iPhone camera access. Turn it on in Settings > Muisti."))
             return
         }
         let emitEvery: Double? = config.mode.usesScheduler ? nil : 1.0 / Double(config.streamFPS)
         let ok = await engine.start(emitInterval: emitEvery, continuation: frameContinuation)
-        state = ok ? .running : .failed(message: "This device has no rear camera (use mock glasses in the simulator).")
+        state = ok ? .running : .failed(message: String(localized: "This device has no rear camera (use mock glasses in the simulator)."))
     }
 
     func stop() async {

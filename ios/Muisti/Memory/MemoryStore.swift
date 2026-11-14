@@ -26,12 +26,14 @@ struct MemoryRecord: Sendable, Identifiable, Hashable {
     var status: Status
     /// The memory episode (one walk / visit) this frame belongs to.
     var episodeID: Int64?
+    /// Named place, district, city and floor around the street, when the phone knew them.
+    var area: String? = nil
 
     var title: String {
         if let name, !name.isEmpty { return kind.map { "\(name) · \($0)" } ?? name }
         if let kind { return kind }
         let firstLine = ocrText.split(separator: "\n").first.map(String.init) ?? ""
-        return firstLine.isEmpty ? "Frame" : firstLine
+        return firstLine.isEmpty ? String(localized: "Frame", comment: "Fallback title of a memory with no text") : firstLine
     }
 }
 
@@ -51,7 +53,7 @@ struct MemoryEpisode: Sendable, Identifiable, Hashable {
     var displayTitle: String {
         if let title, !title.isEmpty { return title }
         let time = startedAt.formatted(date: .omitted, time: .shortened)
-        return street.map { "\($0) · \(time)" } ?? "Memory · \(time)"
+        return street.map { "\($0) · \(time)" } ?? String(localized: "Memory · \(time)", comment: "Fallback title of a memory episode; time of day")
     }
 }
 
@@ -62,6 +64,7 @@ struct NewMemory: Sendable {
     let accuracy: Double?
     let heading: Double?
     let street: String?
+    var area: String? = nil
     let ocrText: String
     let frameJPEG: Data      // blurred, downscaled keyframe
 }
@@ -79,6 +82,9 @@ struct RetrievalSignals: Sendable, Hashable {
     var ftsRank: Int?
     var vectorRank: Int?
     var cosine: Float?
+    /// Rank and cosine in the keyframe (image vector) channel.
+    var imageRank: Int?
+    var imageCosine: Float?
     var fuzzy = false
     var rerankLogit: Double?
 }
@@ -106,6 +112,8 @@ actor MemoryStore {
     private let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
     /// Vectors of `embedModel` only; vectors of another model are re-embedded by the worker.
     private var index = VectorIndex()
+    /// Keyframe vectors of `embedModel` (same space as the text vectors and the query).
+    private var imageIndex = VectorIndex()
     private(set) var embedModel = ""
 
     init() {
@@ -162,6 +170,11 @@ actor MemoryStore {
             CREATE INDEX IF NOT EXISTS idx_episodes_time ON episodes(ended_at);
             CREATE INDEX IF NOT EXISTS idx_memories_episode ON memories(episode_id);
             """, nil, nil, nil)
+        // v5: the keyframe itself as a vector (same embedding model and space as `embedding`).
+        sqlite3_exec(db, "ALTER TABLE memories ADD COLUMN image_embedding BLOB", nil, nil, nil)
+        sqlite3_exec(db, "ALTER TABLE memories ADD COLUMN image_embed_model TEXT", nil, nil, nil)
+        // v6: named place / district / city / floor around the street.
+        sqlite3_exec(db, "ALTER TABLE memories ADD COLUMN area TEXT", nil, nil, nil)
     }
 
     /// Selects the embedding model in use and (re)loads its vectors into the in-memory index.
@@ -169,6 +182,7 @@ actor MemoryStore {
         guard model != embedModel else { return }
         embedModel = model
         index.removeAll()
+        imageIndex.removeAll()
         guard !model.isEmpty, let stmt = prepare("SELECT id, embedding FROM memories WHERE embedding IS NOT NULL AND embed_model = ?") else { return }
         defer { sqlite3_finalize(stmt) }
         bind(stmt, 1, model)
@@ -177,9 +191,17 @@ actor MemoryStore {
             if let vector = Self.vector(stmt, 1) { index.upsert(sqlite3_column_int64(stmt, 0), vector) }
         }
         Log.pipeline.info("vector index: \(self.index.count) × \(self.index.dimension) (\(model, privacy: .public)) in \((ContinuousClock.now - started).milliseconds) ms")
+        if let images = prepare("SELECT id, image_embedding FROM memories WHERE image_embedding IS NOT NULL AND image_embed_model = ?") {
+            defer { sqlite3_finalize(images) }
+            bind(images, 1, model)
+            while sqlite3_step(images) == SQLITE_ROW {
+                if let vector = Self.vector(images, 1) { imageIndex.upsert(sqlite3_column_int64(images, 0), vector) }
+            }
+        }
     }
 
     var indexedVectors: Int { index.count }
+    var indexedImageVectors: Int { imageIndex.count }
 
     // MARK: Write
 
@@ -191,7 +213,7 @@ actor MemoryStore {
             Log.pipeline.error("keyframe write failed: \(error.localizedDescription, privacy: .public)")
             return nil
         }
-        let sql = "INSERT INTO memories(seen_at, lat, lon, accuracy, heading, street, ocr_text, frame_file) VALUES(?,?,?,?,?,?,?,?)"
+        let sql = "INSERT INTO memories(seen_at, lat, lon, accuracy, heading, street, ocr_text, frame_file, area) VALUES(?,?,?,?,?,?,?,?,?)"
         guard let stmt = prepare(sql) else { return nil }
         defer { sqlite3_finalize(stmt) }
         bind(stmt, 1, memory.seenAt.timeIntervalSince1970)
@@ -202,9 +224,11 @@ actor MemoryStore {
         bind(stmt, 6, memory.street)
         bind(stmt, 7, memory.ocrText)
         bind(stmt, 8, file)
+        bind(stmt, 9, memory.area)
         guard sqlite3_step(stmt) == SQLITE_DONE else { return nil }
         let id = sqlite3_last_insert_rowid(db)
-        indexFTS(id: id, ocr: memory.ocrText, kind: nil, name: nil, caption: nil, other: nil, keywords: nil, street: memory.street)
+        indexFTS(id: id, ocr: memory.ocrText, kind: nil, name: nil, caption: nil, other: nil, keywords: nil,
+                 street: Self.whereText(memory.street, memory.area))
         assignEpisode(id: id, seenAt: memory.seenAt, latitude: memory.latitude, longitude: memory.longitude, street: memory.street)
         return id
     }
@@ -239,7 +263,7 @@ actor MemoryStore {
         if let current = self.record(id: id) {
             indexFTS(id: id, ocr: current.ocrText, kind: record.kindLabel, name: record.name,
                      caption: [record.caption, record.visualText].compactMap { $0 }.joined(separator: "\n"),
-                     other: record.other_text, keywords: keywords, street: current.street)
+                     other: record.other_text, keywords: keywords, street: Self.whereText(current.street, current.area))
         }
     }
 
@@ -278,7 +302,7 @@ actor MemoryStore {
         let list = ids.map(String.init).joined(separator: ",")
         exec("DELETE FROM memories WHERE id IN (\(list))")
         exec("DELETE FROM memories_fts WHERE rowid IN (\(list))")
-        ids.forEach { index.remove($0) }
+        ids.forEach { index.remove($0); imageIndex.remove($0) }
         refreshEpisodes()
         for file in files where !file.isEmpty {
             try? FileManager.default.removeItem(at: framesDirectory.appendingPathComponent(file))
@@ -321,6 +345,35 @@ actor MemoryStore {
         sqlite3_bind_int64(stmt, 3, id)
         sqlite3_step(stmt)
         if model == embedModel { index.upsert(id, vector) }
+    }
+
+    /// Structured (or OCR-only) rows whose keyframe has no vector of the current model yet.
+    func missingImageEmbeddings(limit: Int) -> [MemoryRecord] {
+        guard !embedModel.isEmpty, let stmt = prepare(
+            "SELECT id FROM memories WHERE status IN (1, 2) AND image_embed_model IS NOT ? ORDER BY seen_at DESC LIMIT \(limit)"
+        ) else { return [] }
+        bind(stmt, 1, embedModel)
+        var ids: [Int64] = []
+        while sqlite3_step(stmt) == SQLITE_ROW { ids.append(sqlite3_column_int64(stmt, 0)) }
+        sqlite3_finalize(stmt)
+        return records(ids)
+    }
+
+    /// Stores a keyframe vector; `nil` marks the frame as done without one (the host refused
+    /// that picture), so the backfill does not retry it forever.
+    func setImageEmbedding(id: Int64, _ vector: [Float]?, model: String) {
+        guard let stmt = prepare("UPDATE memories SET image_embedding = ?, image_embed_model = ? WHERE id = ?") else { return }
+        defer { sqlite3_finalize(stmt) }
+        if let vector {
+            let data = vector.withUnsafeBufferPointer { Data(buffer: $0) }
+            _ = data.withUnsafeBytes { sqlite3_bind_blob(stmt, 1, $0.baseAddress, Int32(data.count), transient) }
+        } else {
+            sqlite3_bind_null(stmt, 1)
+        }
+        bind(stmt, 2, model)
+        sqlite3_bind_int64(stmt, 3, id)
+        sqlite3_step(stmt)
+        if let vector, model == embedModel { imageIndex.upsert(id, vector) } else { imageIndex.remove(id) }
     }
 
     func pending(limit: Int) -> [MemoryRecord] {
@@ -367,6 +420,7 @@ actor MemoryStore {
     /// no scores of different scales are ever added:
     /// - FTS5 bm25 (name/kind weighted),
     /// - vector cosine (in-memory index),
+    /// - keyframe vector cosine (images in the same space as the question),
     /// - in-word matching for partial OCR reads when FTS finds nothing,
     /// - recency (low weight): time references are resolved by the answer model, which sees
     ///   each record's age, so recent records must be among the candidates.
@@ -389,6 +443,11 @@ actor MemoryStore {
             let nearest = index.search(embedding, k: 80)
             add(nearest.map(\.id), weight: 1) { $0.vectorRank = $1 }
             for hit in nearest { signals[hit.id]?.cosine = hit.cosine }
+            // The keyframes themselves, same space: what was seen but never written down
+            // ("the red car", "where I put my keys").
+            let pictures = EvalSwitch.noImageChannel ? [] : imageIndex.search(embedding, k: 80)
+            add(pictures.map(\.id), weight: 1) { $0.imageRank = $1 }
+            for hit in pictures { signals[hit.id]?.imageCosine = hit.cosine }
         }
 
         // OCR often reads a sign half-way ("TEEKKI" for "APTEEKKI"); FTS prefix search misses that.
@@ -627,7 +686,13 @@ actor MemoryStore {
         sqlite3_step(stmt)
     }
 
-    private static let columns = "id, seen_at, lat, lon, heading, street, ocr_text, kind, name, phone, hours, other_text, caption, keywords, confidence, frame_file, status, visual_text, episode_id"
+    private static let columns = "id, seen_at, lat, lon, heading, street, ocr_text, kind, name, phone, hours, other_text, caption, keywords, confidence, frame_file, status, visual_text, episode_id, area"
+
+    /// Street and area as one searchable text (the keyword index has one "where" column).
+    static func whereText(_ street: String?, _ area: String?) -> String? {
+        let parts = [street, area].compactMap { $0 }
+        return parts.isEmpty ? nil : parts.joined(separator: ", ")
+    }
 
     private func rows(_ tail: String) -> [MemoryRecord] {
         guard let stmt = prepare("SELECT \(Self.columns) FROM memories \(tail)") else { return [] }
@@ -653,7 +718,8 @@ actor MemoryStore {
                 confidence: double(stmt, 14),
                 frameFile: text(stmt, 15) ?? "",
                 status: MemoryRecord.Status(rawValue: Int(sqlite3_column_int(stmt, 16))) ?? .pending,
-                episodeID: sqlite3_column_type(stmt, 18) == SQLITE_NULL ? nil : sqlite3_column_int64(stmt, 18)
+                episodeID: sqlite3_column_type(stmt, 18) == SQLITE_NULL ? nil : sqlite3_column_int64(stmt, 18),
+                area: text(stmt, 19)
             ))
         }
         return result

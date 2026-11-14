@@ -7,6 +7,7 @@ import UIKit
 struct PipelineItem: Sendable {
     let frame: CapturedFrame
     let street: String?
+    var area: String? = nil
 }
 
 struct FrameSummary: Equatable {
@@ -169,7 +170,7 @@ final class CaptureController {
         let pipeline = pipeline
         tasks.append(Task.detached { [weak self] in
             for await item in pipelineStream {
-                let id = await pipeline.handle(item.frame, street: item.street)
+                let id = await pipeline.handle(item.frame, street: item.street, area: item.area)
                 let stats = await pipeline.stats
                 await self?.pipelineDidProcess(kept: id != nil, stats: stats)
             }
@@ -279,12 +280,12 @@ final class CaptureController {
         await applySettings()
 
         if let free = Self.freeDiskBytes(), free < 500_000_000 {
-            notice = "Less than 500 MB free on your iPhone. Memories and recordings may not be saved; free up space."
+            notice = String(localized: "Less than 500 MB free on your iPhone. Memories and recordings may not be saved; free up space.")
         }
         if recordingFolder == nil, config.recordToDisk {
             if let free = Self.freeDiskBytes(), free < 1_000_000_000 {
                 // Raw 12 MP stills are ~1.8 MB each; below 1 GB free, keep the memory but skip raw copies.
-                notice = "Less than 1 GB free on your iPhone; raw frames aren't being saved (memory still works)."
+                notice = String(localized: "Less than 1 GB free on your iPhone; raw frames aren't being saved (memory still works).")
                 await pipeline.configure(recordRaw: false, streamEveryN: config.passthroughEveryN, zones: config.zones)
             } else {
                 recordingFolder = (try? await recorder.begin())?.lastPathComponent
@@ -371,7 +372,7 @@ final class CaptureController {
             frame = await activeSource.requestHighResPhoto()
         }
         guard var frame else {
-            notice = "Couldn't get a frame. Is the source ready?"
+            notice = String(localized: "Couldn't get a frame. Is the source ready?")
             return
         }
         frame.trigger = .manual
@@ -416,7 +417,7 @@ final class CaptureController {
         isCapturing = true
         defer { isCapturing = false }
         guard let frame = await activeSource.requestHighResPhoto() else {
-            notice = "No high-resolution photo arrived."
+            notice = String(localized: "No high-resolution photo arrived.")
             return
         }
         ingest(frame)
@@ -427,7 +428,7 @@ final class CaptureController {
         let since = Date().addingTimeInterval(TimeInterval(-60 * minutes))
         let removed = await store.delete(since: since)
         await safety.forget(since: since)
-        notice = "Deleted \(removed) records from the last \(minutes) minutes."
+        notice = String(localized: "Deleted \(removed) records from the last \(minutes) minutes.")
         await refreshCounts()
     }
 
@@ -435,7 +436,7 @@ final class CaptureController {
         let removed = await store.deleteAll()
         await safety.store.deleteAll()
         await safety.reload()
-        notice = "Deleted \(removed) records."
+        notice = String(localized: "Deleted \(removed) records.")
         await refreshCounts()
     }
 
@@ -569,14 +570,14 @@ final class CaptureController {
     private func tick() async {
         guard !isCapturing else { return }
         guard activeSource.state == .running else {
-            schedulerText = "Source not ready"
+            schedulerText = String(localized: "Source not ready")
             return
         }
         if let retryNotBefore, Date() < retryNotBefore { return }
 
         if config.mode == .intervalPhoto {
             let due = lastFixedCapture.map { Date().timeIntervalSince($0) >= config.intervalSeconds } ?? true
-            schedulerText = due ? "Capturing" : "Fixed interval \(Int(config.intervalSeconds)) s"
+            schedulerText = due ? String(localized: "Capturing") : String(localized: "Fixed interval \(Int(config.intervalSeconds)) s")
             if due { await takeScheduledStill(.fixedInterval, input: nil) }
             return
         }
@@ -591,10 +592,10 @@ final class CaptureController {
             schedulerText = why
         case .capture(let trigger):
             guard !glasses.recordingInBackground || glasses.decodesLive else {
-                schedulerText = "Recording in background (glasses stream saved to file)"
+                schedulerText = String(localized: "Recording in background (glasses stream saved to file)")
                 return
             }
-            schedulerText = "Capturing (\(trigger.label))"
+            schedulerText = String(localized: "Capturing (\(trigger.label))")
             await waitForSteadyMoment(trigger)
             await takeScheduledStill(trigger, input: input)
         }
@@ -609,7 +610,7 @@ final class CaptureController {
             let cap: Double = config.mode.picksStreamFrames ? 2 : 16
             let pause = min(cap, pow(2, Double(failedStills - 1)))
             retryNotBefore = Date().addingTimeInterval(pause)
-            schedulerText = "No frame (\(failedStills)); retrying in \(Int(pause)) s"
+            schedulerText = String(localized: "No frame (\(failedStills)); retrying in \(Int(pause)) s")
             return
         }
         failedStills = 0
@@ -701,7 +702,8 @@ final class CaptureController {
             let image = ImageData.thumbnail(jpeg, maxPixel: 1280).map { UIImage(cgImage: $0) }
             await self?.setPreview(image)
         }
-        pipelineInput.yield(PipelineItem(frame: frame, street: location.street))
+        pipelineInput.yield(PipelineItem(frame: frame, street: location.street,
+                                         area: location.areaText(for: location.fix(near: frame.capturedAt))))
         // Safety rules look at every frame (duplicates included: a stove frame looks the same).
         safety.consider(frame)
     }
@@ -732,17 +734,17 @@ extension HeatLevel {
 extension CaptureTrigger {
     var label: String {
         switch self {
-        case .stream: return "stream"
-        case .firstFrame: return "first frame"
-        case .distance: return "distance"
-        case .heading: return "turn"
-        case .dwell: return "dwell"
-        case .interval: return "time"
-        case .idleRefresh: return "refresh"
-        case .fixedInterval: return "fixed interval"
-        case .followUp: return "follow-up"
-        case .manual: return "manual"
-        case .highRes: return "high-res"
+        case .stream: return String(localized: "stream", comment: "Capture trigger")
+        case .firstFrame: return String(localized: "first frame", comment: "Capture trigger")
+        case .distance: return String(localized: "distance", comment: "Capture trigger")
+        case .heading: return String(localized: "turn", comment: "Capture trigger: the wearer turned")
+        case .dwell: return String(localized: "dwell", comment: "Capture trigger: the wearer stopped moving")
+        case .interval: return String(localized: "time", comment: "Capture trigger: time interval elapsed")
+        case .idleRefresh: return String(localized: "refresh", comment: "Capture trigger")
+        case .fixedInterval: return String(localized: "fixed interval", comment: "Capture trigger")
+        case .followUp: return String(localized: "follow-up", comment: "Capture trigger")
+        case .manual: return String(localized: "manual", comment: "Capture trigger")
+        case .highRes: return String(localized: "high-res", comment: "Capture trigger")
         }
     }
 }

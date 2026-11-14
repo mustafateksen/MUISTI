@@ -32,10 +32,10 @@ enum Movement: String, Sendable {
 
     var label: String {
         switch self {
-        case .unknown: return "unknown"
-        case .still: return "still"
-        case .walking: return "walking"
-        case .fast: return "fast (bike/vehicle)"
+        case .unknown: return String(localized: "unknown", comment: "Motion activity")
+        case .still: return String(localized: "still", comment: "Motion activity")
+        case .walking: return String(localized: "walking", comment: "Motion activity")
+        case .fast: return String(localized: "fast (bike/vehicle)")
         }
     }
 }
@@ -113,7 +113,7 @@ struct AdaptiveScheduler: Sendable {
 
         // Heat first: critical heat on either device pauses capture altogether.
         if input.phoneThermal == .critical || input.glassesHeat == .critical {
-            return .hold("Heat critical; no frames until devices cool down")
+            return .hold(String(localized: "Heat critical; no frames until devices cool down"))
         }
         factor = batteryFactor(input)
 
@@ -121,11 +121,11 @@ struct AdaptiveScheduler: Sendable {
         let elapsed = now.timeIntervalSince(last)
 
         if elapsed < tuning.minInterval * factor {
-            return .wait("Waiting for minimum interval")
+            return .wait(String(localized: "Waiting for minimum interval"))
         }
         let perMinute = max(1, Int(Double(tuning.maxPerMinute) / factor))
         if recent.count >= perMinute {
-            return .hold("Per-minute limit (\(perMinute)) reached")
+            return .hold(String(localized: "Per-minute limit (\(perMinute)) reached"))
         }
         if followUpRequested {
             return .capture(.followUp)
@@ -145,13 +145,13 @@ struct AdaptiveScheduler: Sendable {
             if moved >= tuning.walkingDistance * factor { return .capture(.distance) }
             if let turned, turned >= tuning.headingChange { return .capture(.heading) }
             if elapsed >= tuning.walkingMaxInterval * factor { return .capture(.interval) }
-            return .wait(String(format: "Walking · %.0f/%.0f m", moved, tuning.walkingDistance * factor))
+            return .wait(String(format: String(localized: "Walking · %.0f/%.0f m"), moved, tuning.walkingDistance * factor))
 
         case .fast:
             if moved >= tuning.fastDistance * factor { return .capture(.distance) }
             if let turned, turned >= tuning.headingChange { return .capture(.heading) }
             if elapsed >= tuning.fastMaxInterval * factor { return .capture(.interval) }
-            return .wait(String(format: "Fast · %.0f/%.0f m", moved, tuning.fastDistance * factor))
+            return .wait(String(format: String(localized: "Fast · %.0f/%.0f m"), moved, tuning.fastDistance * factor))
 
         case .still:
             if let stillSince, movedSinceDwell, now.timeIntervalSince(stillSince) >= tuning.dwellSeconds {
@@ -163,13 +163,13 @@ struct AdaptiveScheduler: Sendable {
             // Never goes quiet; after a few refreshes of the same view, refresh more slowly.
             let refresh = tuning.stationaryRefresh * factor * (stationaryStills >= tuning.stationaryMaxStills ? 2.5 : 1)
             if elapsed >= refresh { return .capture(.idleRefresh) }
-            return .wait(String(format: "Still · next in %.0f s", max(0, refresh - elapsed)))
+            return .wait(String(format: String(localized: "Still · next in %.0f s"), max(0, refresh - elapsed)))
 
         case .unknown:
             // No motion data (simulator, permission denied): fall back to distance + timer.
             if moved >= tuning.walkingDistance * factor { return .capture(.distance) }
             if elapsed >= tuning.unknownActivityInterval * factor { return .capture(.interval) }
-            return .wait("No motion data; using timer")
+            return .wait(String(localized: "No motion data; using timer"))
         }
     }
 

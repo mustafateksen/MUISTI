@@ -131,7 +131,10 @@ enum DebugLaunchArguments {
                 // Wait until every frame is structured, embedded and every episode summarised.
                 for _ in 0..<600 {
                     let counts = await controller.store.count()
+                    let imagesOn = await controller.ai.imageEmbeddingsEnabled
+                    let imagesLeft = await controller.store.missingImageEmbeddings(limit: 1).isEmpty == false
                     if counts.pending == 0, await controller.store.missingEmbeddings(limit: 1).isEmpty,
+                       !(imagesOn && imagesLeft),
                        await controller.store.episodeNeedingSummary(settle: 0) == nil { break }
                     try? await Task.sleep(for: .seconds(2))
                 }
