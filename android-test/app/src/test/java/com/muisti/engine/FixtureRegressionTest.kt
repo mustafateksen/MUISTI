@@ -68,6 +68,7 @@ object Fixture {
     fun sightings(): List<JSONObject> =
         JSONObject(Fixture::class.java.getResource("/fixture_memory.json")!!.readText()).arr("sightings").objects()
             .onEach { it.put("frame_dir", "build/no_frames") }
-    fun docs(): List<Doc> = Asker.docsFromSightings(sightings())
+    /** As the app builds them: sighting docs + episode docs. */
+    fun docs(): List<Doc> = sightings().let { s -> Asker.docsFromSightings(s) + Episodes.docs(Episodes.group(s), emptyMap()) }
     fun now(): Long = LocalDateTime.parse("2026-11-14T18:30:00").toEpochSecond(ZoneOffset.UTC) * 1000
 }

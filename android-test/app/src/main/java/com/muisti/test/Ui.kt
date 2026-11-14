@@ -157,7 +157,7 @@ fun MuistiApp(act: MainActivity) {
                     Header(s, t) { showSettings = true }
                     LiveCard(act, s, t, expanded || s.messages.isEmpty(), heroMax) { expanded = !expanded }
                     AnimatedVisibility(expanded || s.messages.isEmpty(), enter = fadeIn() + expandVertically(), exit = fadeOut() + shrinkVertically()) {
-                        StatsRow(s, t) { act.openGallery() }
+                        StatsRow(s, t) { act.openTimeline(0) }
                     }
                     Box(Modifier.weight(1f)) {
                         if (s.messages.isEmpty()) Welcome(t) { act.ask(it, spoken = false) }
@@ -175,6 +175,10 @@ fun MuistiApp(act: MainActivity) {
             if (showSettings) SettingsDialog(s.serverUrl, onPhoto = { showSettings = false; act.pickPhoto() }, onSave = { act.saveServer(it); showSettings = false },
                 onClear = { act.clearChat(); showSettings = false }, onPrivacy = { showSettings = false; s.showPrivacy = true },
                 pairing = !act.engine.devKeys, onPair = { u, c -> act.pair(u, c); showSettings = false }, onDismiss = { showSettings = false })
+            s.timeline?.let { d ->
+                androidx.activity.compose.BackHandler { s.timeline = null }
+                com.muisti.ui.TimelineScreen(d, act.timelineActions)
+            }
             if (s.showPrivacy) {
                 androidx.activity.compose.BackHandler { s.showPrivacy = false }
                 com.muisti.ui.PrivacyScreen(s.privacySettings, s.zone, act.privacyActions)

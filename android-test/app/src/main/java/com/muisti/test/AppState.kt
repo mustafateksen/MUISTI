@@ -81,6 +81,7 @@ class AppState {
 
     var privacySettings by mutableStateOf(com.muisti.privacy.PrivacySettings())
     var showPrivacy by mutableStateOf(false)
+    var timeline by mutableStateOf<com.muisti.ui.TimelineDay?>(null)   // non-null = timeline open
 
     fun toast(text: String) { toastText = text }
 }

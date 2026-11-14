@@ -540,6 +540,58 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    // ---------------- timeline (episodes by day) ----------------
+    private var timelineOffset = 0
+    private val thumbCache = android.util.LruCache<String, androidx.compose.ui.graphics.ImageBitmap>(160)
+
+    /** Opens / moves the timeline: [delta] days from the shown day (0 = today when opening). */
+    fun openTimeline(delta: Int) {
+        timelineOffset = if (state.timeline == null) 0 else minOf(0, timelineOffset + delta)
+        val off = timelineOffset
+        val cal = java.util.Calendar.getInstance().apply {
+            set(java.util.Calendar.HOUR_OF_DAY, 0); set(java.util.Calendar.MINUTE, 0); set(java.util.Calendar.SECOND, 0); set(java.util.Calendar.MILLISECOND, 0)
+            add(java.util.Calendar.DAY_OF_YEAR, off)
+        }
+        val from = cal.timeInMillis; val to = from + 24 * 3600_000L
+        val title = when (off) { 0 -> "Today"; -1 -> "Yesterday"; else -> java.text.SimpleDateFormat("EEE d MMM", Locale.US).format(java.util.Date(from)) }
+        state.timeline = com.muisti.ui.TimelineDay(title, off < 0, null)
+        lifecycleScope.launch {
+            val cards = runCatching { withContext(Dispatchers.IO) {
+                val f = java.text.SimpleDateFormat("HH:mm", Locale.US)
+                engine.episodes().filter { it.start in from until to }.sortedByDescending { it.start }.map { e ->
+                    val span = if (e.end - e.start < 60_000) f.format(java.util.Date(e.start)) else "${f.format(java.util.Date(e.start))}–${f.format(java.util.Date(e.end))}"
+                    com.muisti.ui.EpisodeCard(e.id, span, e.place, engine.summaries[e.id],
+                        com.muisti.engine.Episodes.headline(e).substringAfter("): "), e.members.size, e.keyFrames)
+                }
+            } }
+            if (timelineOffset == off && state.timeline != null)
+                state.timeline = com.muisti.ui.TimelineDay(title, off < 0, cards.getOrNull(), cards.exceptionOrNull()?.let { "Couldn't load: ${it.message?.take(60)}" })
+        }
+    }
+
+    val timelineActions = object : com.muisti.ui.TimelineActions {
+        override fun day(delta: Int) = openTimeline(delta)
+        override suspend fun thumb(frame: String) = thumbCache.get(frame) ?: withContext(Dispatchers.IO) {
+            engine.frameFile(frame).takeIf { it.exists() }?.let { BitmapFactory.decodeFile(it.path, BitmapFactory.Options().apply { inSampleSize = 4 }) }
+                ?.asImageBitmap()?.also { thumbCache.put(frame, it) }
+        }
+        override fun openFrame(frame: String) {
+            lifecycleScope.launch {
+                val shot = withContext(Dispatchers.IO) {
+                    val file = engine.frameFile(frame).takeIf { it.exists() } ?: return@withContext null
+                    val s = engine.store.sightings().firstOrNull { sg -> sg.optJSONArray("frames")?.let { a -> (0 until a.length()).any { a.optString(it) == frame } } == true }
+                    val seen = s?.optLong("seen_at") ?: file.lastModified()
+                    val whenText = java.text.SimpleDateFormat("EEE d MMM, HH:mm", Locale.US).format(java.util.Date(seen))
+                    val img = BitmapFactory.decodeFile(file.path, BitmapFactory.Options().apply { inSampleSize = 2 })?.asImageBitmap() ?: return@withContext null
+                    Shot(img, whenText, s?.optString("street")?.ifEmpty { null }, null, BitmapFactory.decodeFile(file.path)?.asImageBitmap(), detailFor(frame, seen, whenText))
+                }
+                if (shot != null) state.openShot = shot else state.toast("That frame is no longer stored.")
+            }
+        }
+        override fun gallery() { openGallery() }
+        override fun close() { state.timeline = null }
+    }
+
     /** "Ask about this" from the detail sheet. */
     fun askAbout(shot: Shot) {
         state.openShot = null

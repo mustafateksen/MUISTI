@@ -210,8 +210,10 @@ class Agent(private val llm: Llm, private val prompts: Prompts, private val aske
     private fun recent(minutes: Double, docs: List<Doc>, now: Long, ev: (Doc) -> String): String {
         val pool = docs.filter { it.type == "sighting" && it.seenAt <= now && (now - it.seenAt) / 60000.0 <= minutes }.sortedBy { it.seenAt }
         if (pool.isEmpty()) return "Nothing was seen in the last ${minutes.toInt()} minutes."
+        // episodes first (what the user was doing, where), then sampled memories for detail
+        val eps = docs.filter { it.type == "episode" && it.seenAt <= now && (now - it.seenAt) / 60000.0 <= minutes }.sortedBy { it.seenAt }.takeLast(6)
         val step = maxOf(1, pool.size / 12)
-        return pool.filterIndexed { i, _ -> i % step == 0 }.takeLast(12).joinToString("\n") { ev(it) }
+        return (eps + pool.filterIndexed { i, _ -> i % step == 0 }.takeLast(12)).joinToString("\n") { ev(it) }
     }
 
     private fun listNames(minutes: Double, docs: List<Doc>, now: Long, ev: (Doc) -> String): String {
@@ -252,9 +254,12 @@ class Agent(private val llm: Llm, private val prompts: Prompts, private val aske
         // Numbers: every sentence's numbers must appear TOGETHER in one cited item. Checking them against all
         // cited items at once let the model glue "18" from one poster and "12" from another into fake hours.
         val num = Regex("\\d+")
-        val perItem = cited.map { c -> num.findAll(c).map { it.value }.toSet() }
+        // an item's own time ("seen at 08:02", shown to the model with it) is evidence too
+        val hhmm = SimpleDateFormat("HH:mm", Locale.US)
+        val perItem = used.map { d -> num.findAll(d.text + " " + hhmm.format(Date(d.seenAt))).map { it.value }.toSet() }
         val badSentence = text.split(Regex("(?<=[.!?])\\s+")).firstOrNull { sentence ->
-            val ns = num.findAll(sentence).map { it.value }.toSet()
+            // "15:00" for a sign's "9-15" adds no new number: a whole hour's ":00" is not checked
+            val ns = num.findAll(sentence.replace(Regex("""\b(\d{1,2})[:.]00\b"""), "$1")).map { it.value }.toSet()
             ns.isNotEmpty() && perItem.none { it.containsAll(ns) }
         }
         if (badSentence != null)

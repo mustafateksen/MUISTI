@@ -62,6 +62,11 @@ class PhoneEngine(ctx: Context) {
     val store = MemoryStore(File(ctx.filesDir, "memory"))
     /** "note it": things the user explicitly asked to remember (searchable like memories). */
     val notes = com.muisti.engine.NoteStore(File(ctx.filesDir, "memory"))
+    /** Episodes (stretches of the day), recomputed when the sightings change. */
+    val episodes = com.muisti.engine.EpisodeStore(File(ctx.filesDir, "memory"))
+    fun episodes(): List<com.muisti.engine.Episode> = episodes.update(store.sightings())
+    /** Episode id -> AI summary (P2.4); empty until summaries exist. */
+    @Volatile var summaries: Map<String, String> = emptyMap()
     private val recentWords = HashMap<String, Int>()   // like the server's _RECENT_WORDS, for ocr_repair
 
     /** Frames that could not go out while offline (redacted JPEG + OCR), retried after reconnect. */
@@ -111,7 +116,8 @@ class PhoneEngine(ctx: Context) {
         val s = store.sightings()
         if (s !== docsFor || notes.version != notesFor) {
             val old = docsCache.filter { it.vec != null }.associateBy { it.text }
-            docsCache = (Asker.docsFromSightings(s) + notes.docs()).onEach { d -> if (d.vec == null) d.vec = old[d.text]?.vec }
+            docsCache = (Asker.docsFromSightings(s) + notes.docs() + com.muisti.engine.Episodes.docs(episodes.update(s), summaries))
+                .onEach { d -> if (d.vec == null) d.vec = old[d.text]?.vec }
             docsFor = s; notesFor = notes.version
         }
         docsCache
