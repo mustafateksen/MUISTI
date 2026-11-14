@@ -65,8 +65,32 @@ class PhoneEngine(ctx: Context) {
     /** Episodes (stretches of the day), recomputed when the sightings change. */
     val episodes = com.muisti.engine.EpisodeStore(File(ctx.filesDir, "memory"))
     fun episodes(): List<com.muisti.engine.Episode> = episodes.update(store.sightings())
-    /** Episode id -> AI summary (P2.4); empty until summaries exist. */
-    @Volatile var summaries: Map<String, String> = emptyMap()
+    private val summaryStore = com.muisti.engine.SummaryStore(File(ctx.filesDir, "memory"))
+    private val summarizer = com.muisti.engine.EpisodeSummarizer(llm)
+    /** Episode id -> verified AI summary (P2.4). */
+    @Volatile var summaries: Map<String, String> = emptyMap(); private set
+
+    /**
+     * Background: summarises up to [max] CLOSED episodes (nothing joined for 10 min) that have no summary yet,
+     * newest first, one Nemotron call each, from stored text only. Returns how many were written.
+     */
+    fun summarizePending(now: Long, max: Int = 2): Int {
+        val eps = episodes()
+        val todo = eps.filter { now - it.end > com.muisti.engine.Episodes.SETTLE_MS && summaryStore.get(it) == null }.takeLast(max).reversed()
+        if (todo.isEmpty()) { summaries = summaryStore.valid(eps); return 0 }
+        val byKey = store.sightings().associateBy { com.muisti.engine.Episodes.key(it) }
+        var n = 0
+        for (e in todo) {
+            val items = Asker.docsFromSightings(e.members.mapNotNull { byKey[it] }).filter { it.type == "sighting" || it.type == "item" }
+            val text = try { summarizer.summarize(e, items) } catch (x: com.muisti.engine.Unreachable) { break }
+                catch (x: Exception) { android.util.Log.w("MuistiTiming", "summary failed: ${x.message}"); null }
+            summaryStore.put(e, text ?: "")
+            n++
+        }
+        summaries = summaryStore.valid(eps)
+        android.util.Log.i("MuistiTiming", "episode summaries: wrote $n (${summarizer.calls} calls so far)")
+        return n
+    }
     private val recentWords = HashMap<String, Int>()   // like the server's _RECENT_WORDS, for ocr_repair
 
     /** Frames that could not go out while offline (redacted JPEG + OCR), retried after reconnect. */
@@ -107,6 +131,7 @@ class PhoneEngine(ctx: Context) {
     private val docsLock = Any()
     private var docsFor: List<org.json.JSONObject>? = null
     private var notesFor = -1
+    private var summariesFor: Map<String, String>? = null
     private var docsCache: List<com.muisti.engine.Doc> = emptyList()
     @Volatile private var lastWarm = 0L
     @Volatile private var warming = false
@@ -114,11 +139,11 @@ class PhoneEngine(ctx: Context) {
     /** Search docs for the current memory; rebuilt only when the store changed (vectors are kept on the Doc objects). */
     private fun docs(): List<com.muisti.engine.Doc> = synchronized(docsLock) {
         val s = store.sightings()
-        if (s !== docsFor || notes.version != notesFor) {
+        if (s !== docsFor || notes.version != notesFor || summaries !== summariesFor) {
             val old = docsCache.filter { it.vec != null }.associateBy { it.text }
             docsCache = (Asker.docsFromSightings(s) + notes.docs() + com.muisti.engine.Episodes.docs(episodes.update(s), summaries))
                 .onEach { d -> if (d.vec == null) d.vec = old[d.text]?.vec }
-            docsFor = s; notesFor = notes.version
+            docsFor = s; notesFor = notes.version; summariesFor = summaries
         }
         docsCache
     }

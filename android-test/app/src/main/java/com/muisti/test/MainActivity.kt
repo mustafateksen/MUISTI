@@ -249,7 +249,13 @@ class MainActivity : ComponentActivity() {
         cm.registerDefaultNetworkCallback(cb)
         drainJob = lifecycleScope.launch(Dispatchers.IO) {
             val drainer = com.muisti.capture.Drainer(engine.pending)
+            var lastSummary = 0L
             while (isActive) {
+                // closed episodes get their summary in the background (one call each, at most 2 a minute)
+                if (state.network && System.currentTimeMillis() - lastSummary > 60_000) {
+                    lastSummary = System.currentTimeMillis()
+                    runCatching { engine.summarizePending(lastSummary) }
+                }
                 state.queued = engine.pending.size()
                 if (state.network && state.queued > 0) {
                     val n = drainer.drain({ state.network }, engine::ingestPending, maxFrames = 20)
