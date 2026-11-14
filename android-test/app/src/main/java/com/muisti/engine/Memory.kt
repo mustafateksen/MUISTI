@@ -29,12 +29,14 @@ class MemoryStore(private val dir: File) {
         return out
     }
 
-    fun addFrame(seenAtMs: Long, record: JSONObject, ocrLines: List<String>, jpeg: ByteArray, dhash: Long?): Int = synchronized(lock) {
+    fun addFrame(seenAtMs: Long, record: JSONObject, ocrLines: List<String>, jpeg: ByteArray, dhash: Long?,
+                 lat: Double? = null, lon: Double? = null, street: String? = null): Int = synchronized(lock) {
         val all = load()
         val id = (all.maxOfOrNull { it.optInt("id") } ?: 0) + 1
         File(frameDir, "$id.jpg").writeBytes(jpeg)
         val row = JSONObject().put("id", id).put("seen_at", seenAtMs).put("ocr_lines", JSONArray(ocrLines))
             .put("record", record).put("dhash", nullable(dhash))
+            .put("lat", nullable(lat)).put("lon", nullable(lon)).put("street", nullable(street))
         framesFile.appendText(row.toString() + "\n")
         all.add(row)
         cache = null
@@ -50,6 +52,11 @@ class MemoryStore(private val dir: File) {
         val out = Merge.mergeSightings(frames).mapIndexed { i, s ->
             val first = byFile[s.arr("frames").getString(0)]!!
             s.put("id", i + 1).put("seen_at", first.optLong("seen_at")).put("source", "live").put("frame_dir", frameDir.path)
+            // where: the first frame of the sighting that had a fix
+            frames.zip(all).firstOrNull { (fr, row) -> fr.file in s.arr("frames").strings() && !row.isNull("lat") && row.has("lat") }?.second?.let {
+                s.put("lat", it.getDouble("lat")).put("lon", it.getDouble("lon")).put("street", it.opt("street"))
+            }
+            s
         }
         cache = out
         out

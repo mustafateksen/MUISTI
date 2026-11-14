@@ -73,6 +73,12 @@ class MainActivity : ComponentActivity() {
     val engine by lazy { PhoneEngine(applicationContext) }
     /** Ray-Ban Meta camera (created here: it registers activity-result launchers). */
     private val glasses = GlassesSource(this, state) { onGlassesFrame(it) }
+    /** Ahmet's head masking: nothing leaves the phone or is stored unblurred. */
+    private val blurrer by lazy { FaceBlurrer() }
+    private val location by lazy { LocationTracker(applicationContext) }
+    private val locationPermission = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { res ->
+        if (res.values.any { it } && state.recording) { location.start(); state.hasLocation = true }
+    }
     private var cameraProvider: ProcessCameraProvider? = null
     private var phoneUseCases: Array<androidx.camera.core.UseCase> = emptyArray()
     private var glassesFormatLogged = false
@@ -126,7 +132,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
-        statsJob?.cancel(); analysisExec.shutdown(); glasses.disconnect()
+        statsJob?.cancel(); analysisExec.shutdown(); glasses.disconnect(); location.stop()
         speech?.destroy(); tts?.shutdown(); recognizer.close()
         super.onDestroy()
     }
@@ -206,11 +212,27 @@ class MainActivity : ComponentActivity() {
 
     fun openGlassesUpdate() = glasses.openUpdate()
 
+    fun openMap(uri: String) {
+        runCatching { startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(uri))) }
+            .onFailure { state.toast("No maps app found.") }
+    }
+
+    private fun blurJpeg(jpeg: ByteArray): ByteArray? {
+        val bmp = BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size) ?: return null
+        val safe = blurrer.process(bmp) ?: return null
+        return ByteArrayOutputStream().also { safe.image.compress(Bitmap.CompressFormat.JPEG, 85, it) }.toByteArray()
+    }
+
     /** Back from Meta AI (e.g. after updating): try again. */
     fun retryGlasses() { if (state.useGlasses) { glasses.disconnect(); glasses.connect() } }
 
     fun toggleRecording() {
         state.recording = !state.recording
+        if (state.recording) {
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
+                location.start(); state.hasLocation = true
+            } else locationPermission.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION))
+        } else location.stop()
         windowBest = null; windowBestScore = -1.0; windowStart = 0L
     }
 
@@ -394,10 +416,16 @@ class MainActivity : ComponentActivity() {
     }
 
     private suspend fun upload(bmp: Bitmap, dhash: Long) {
-        val obs = readText(bmp)
+        val seenAt = System.currentTimeMillis()
+        val fix = location.fresh()
+        val obs = readText(bmp)                  // text is read from the raw frame, on the phone
+        // privacy: heads are masked BEFORE the frame goes to Nemotron or into memory; on failure drop it
+        val safe = withContext(Dispatchers.Default) { blurrer.process(bmp) }
+        if (safe == null) { state.lastFrame = "Skipped · privacy check failed"; return }
+        state.facesBlurred += safe.faceCount
         val stored = withContext(Dispatchers.IO) {
-            val jpeg = ByteArrayOutputStream().also { bmp.compress(Bitmap.CompressFormat.JPEG, 85, it) }.toByteArray()
-            engine.ingest(jpeg, obs, System.currentTimeMillis(), dhash)
+            val jpeg = ByteArrayOutputStream().also { safe.image.compress(Bitmap.CompressFormat.JPEG, 85, it) }.toByteArray()
+            engine.ingest(jpeg, obs, seenAt, dhash, fix)
         }
         state.online = true
         state.framesSent++
@@ -461,10 +489,17 @@ class MainActivity : ComponentActivity() {
         state.phase = if (spoken) VoicePhase.Thinking else VoicePhase.Idle
         lifecycleScope.launch {
             val answer = runCatching {
-                val r = withContext(Dispatchers.IO) { engine.ask(q, liveJpeg) }
+                // the live frame for "what am I seeing?" is masked too; if masking fails it is not sent
+                val live = withContext(Dispatchers.Default) { liveJpeg?.let { blurJpeg(it) } }
+                val r = withContext(Dispatchers.IO) { engine.ask(q, live) }
                 if (r.label == "FORGOT") state.memories = withContext(Dispatchers.IO) { engine.store.sightings().size }
                 val thumbs = withContext(Dispatchers.IO) { loadThumbs(r) }
-                Msg.Answer(label = r.label, text = r.answer, thumbs = thumbs)
+                val used = r.evidence.filter { it.id in r.used }.ifEmpty { r.evidence.take(1) }
+                val where = used.firstOrNull { it.lat != null }
+                Msg.Answer(label = r.label, text = r.answer, thumbs = thumbs,
+                    place = where?.let { it.street ?: "%.5f, %.5f".format(it.lat, it.lon) }.takeIf { r.label == "SEEN" || r.label == "UNSURE" },
+                    mapUri = where?.let { "geo:${it.lat},${it.lon}?q=${it.lat},${it.lon}(${android.net.Uri.encode(it.street ?: "Seen here")})" }
+                        .takeIf { r.label == "SEEN" || r.label == "UNSURE" })
             }.getOrElse { Msg.Answer(label = "ERROR", text = "I couldn't reach Nemotron (${it.message?.take(80)}).") }
             val i = state.messages.indexOf(pending)
             if (i >= 0) state.messages[i] = answer else state.messages.add(answer)

@@ -13,9 +13,13 @@ class Doc(
     val weak: Boolean, val name: String, val kind: String?, val subtype: String? = null,
     val phone: String? = null, val hours: String? = null, val text: String,
     val support: Int = 1, val uncertain: Boolean = false, val content: String? = null, val medium: String? = null,
-) { var vec: FloatArray? = null }
+) {
+    var vec: FloatArray? = null
+    var lat: Double? = null; var lon: Double? = null; var street: String? = null
+}
 
-class Evidence(val id: String, val text: String, val frame: String?, val seenAt: Long, val score: Double)
+class Evidence(val id: String, val text: String, val frame: String?, val seenAt: Long, val score: Double,
+               val lat: Double? = null, val lon: Double? = null, val street: String? = null)
 
 class Answer(val question: String, val label: String, val answer: String, val used: List<String>,
              val evidence: List<Evidence>, val why: String, val calls: Int, val latencyS: Double, val parsed: JSONObject)
@@ -33,6 +37,7 @@ class Asker(private val llm: Llm, private val prompts: Prompts, private val imag
         fun docsFromSightings(sightings: List<JSONObject>): List<Doc> {
             val docs = ArrayList<Doc>()
             for (s in sightings) {
+                val start = docs.size
                 val seen = s.optLong("seen_at")
                 val frame = s.str("evidence_frame"); val fdir = s.str("frame_dir"); val src = s.str("source") ?: ""
                 val weak = s.bool("weak")
@@ -48,6 +53,7 @@ class Asker(private val llm: Llm, private val prompts: Prompts, private val imag
                     s.str("phone")?.let { "Phone on sign: $it" },
                     s.str("hours")?.let { "Hours on sign: $it" },
                     s.str("other_text")?.let { "Other text on sign: $it" },
+                    s.str("street")?.let { "Street: $it" },
                     s.str("caption")?.let { "Scene: $it" },
                     objects.takeIf { it.isNotEmpty() }?.let { "Visible things: " + it.take(12).joinToString(", ") { o -> o.str("name") ?: "" } })
                 docs.add(Doc("sighting", seen, frame, fdir, src, weak, (listOf(sname ?: "") + variants).joinToString(" / "),
@@ -77,6 +83,9 @@ class Asker(private val llm: Llm, private val prompts: Prompts, private val imag
                         text = "PICTURE (not a real object): ${dp.str("content")}. Shown on: ${dp.str("on") ?: dp.str("medium")} " +
                             "(${dp.str("medium")}), in a $where. Things in the picture: ${depicted.joinToString(", ")}.$hints",
                         support = dp.optInt("support", 1), content = dp.str("content"), medium = dp.str("medium")))
+                }
+                if (s.has("lat") && !s.isNull("lat")) for (d in docs.subList(start, docs.size)) {
+                    d.lat = s.getDouble("lat"); d.lon = s.getDouble("lon"); d.street = s.str("street")
                 }
             }
             return docs
@@ -245,7 +254,7 @@ class Asker(private val llm: Llm, private val prompts: Prompts, private val imag
         var hits: List<Pair<Double, Doc>> = emptyList()
         var parsed = JSONObject()
         fun result(label: String, answer: String, used: List<String> = emptyList(), why: String = ""): Answer {
-            val ev = hits.mapIndexed { i, (s, d) -> Evidence("E${i + 1}", d.text, d.frame, d.seenAt, s) }
+            val ev = hits.mapIndexed { i, (s, d) -> Evidence("E${i + 1}", d.text, d.frame, d.seenAt, s, d.lat, d.lon, d.street) }
             return Answer(question, label, answer, used, ev, why, calls, (System.currentTimeMillis() - t0) / 1000.0, parsed)
         }
 

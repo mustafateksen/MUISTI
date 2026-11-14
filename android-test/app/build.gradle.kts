@@ -75,6 +75,11 @@ dependencies {
     implementation("androidx.camera:camera-lifecycle:$camerax")
     implementation("androidx.camera:camera-view:$camerax")
     implementation("com.google.mlkit:text-recognition:16.0.1")   // on-device, bundled model
+    // privacy (Ahmet's face blur, ported): faces + body pose, on device
+    implementation("com.google.mlkit:face-detection:16.1.7")
+    implementation("com.google.mlkit:pose-detection:18.0.0-beta5")
+    // where each memory was made (Mustafa's LocationProvider, ported)
+    implementation("com.google.android.gms:play-services-location:21.3.0")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     // Ray-Ban Meta glasses camera (Wearables Device Access Toolkit)
     implementation("com.meta.wearable:mwdat-core:1.0.1")

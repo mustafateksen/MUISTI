@@ -17,6 +17,8 @@ sealed class Msg {
         val text: String,
         val thumbs: List<ImageBitmap> = emptyList(),
         val pending: Boolean = false,
+        val place: String? = null,           // street (or coordinates) of the memory used
+        val mapUri: String? = null,          // geo: link to open it in Maps
     ) : Msg()
 }
 
@@ -30,6 +32,8 @@ class AppState {
     var framesSent by mutableIntStateOf(0)
     var lastFrame by mutableStateOf("")
     var blurrySkipped by mutableIntStateOf(0)
+    var facesBlurred by mutableIntStateOf(0)
+    var hasLocation by mutableStateOf(false)
     var sameSkipped by mutableIntStateOf(0)
     var fps by mutableIntStateOf(0)
     var focusX by mutableFloatStateOf(0f)

@@ -130,7 +130,7 @@ fun MuistiApp(act: MainActivity) {
                 Spacer(Modifier.height(12.dp))
                 Box(Modifier.weight(1f)) {
                     if (s.messages.isEmpty()) Welcome(t) { act.ask(it, spoken = false) }
-                    else Transcript(s, t)
+                    else Transcript(act, s, t)
                 }
                 Composer(t, onSend = { act.ask(it, spoken = false) }, onMic = { act.startListening() })
             }
@@ -207,7 +207,8 @@ private fun CameraCard(act: MainActivity, s: AppState, modifier: Modifier) {
                 Spacer(Modifier.width(7.dp))
                 Text(if (s.recording) "REMEMBERING" else "PAUSED", color = Color.White, fontSize = 11.sp,
                     fontWeight = FontWeight.SemiBold, letterSpacing = 1.sp)
-                Text("  ·  ${s.memories} memories" + if (s.recording) "  ·  ${s.fps} fps" else "",
+                Text("  ·  ${s.memories} memories" + (if (s.recording) "  ·  ${s.fps} fps" else "") +
+                    (if (s.recording && s.facesBlurred > 0) "  ·  ${s.facesBlurred} faces blurred" else ""),
                     color = Color.White.copy(alpha = 0.85f), fontSize = 12.sp)
             }
         }
@@ -312,7 +313,7 @@ private fun Welcome(t: Tones, onPick: (String) -> Unit) {
 }
 
 @Composable
-private fun Transcript(s: AppState, t: Tones) {
+private fun Transcript(act: MainActivity, s: AppState, t: Tones) {
     val list = rememberLazyListState()
     LaunchedEffect(s.messages.size, (s.messages.lastOrNull() as? Msg.Answer)?.pending) {
         if (s.messages.isNotEmpty()) list.animateScrollToItem(s.messages.size - 1)
@@ -322,7 +323,7 @@ private fun Transcript(s: AppState, t: Tones) {
         itemsIndexed(s.messages) { _, m ->
             when (m) {
                 is Msg.Question -> QuestionBubble(m.text)
-                is Msg.Answer -> AnswerCard(m, t)
+                is Msg.Answer -> AnswerCard(m, t) { uri -> act.openMap(uri) }
             }
         }
     }
@@ -340,7 +341,7 @@ private fun QuestionBubble(text: String) {
 }
 
 @Composable
-private fun AnswerCard(m: Msg.Answer, t: Tones) {
+private fun AnswerCard(m: Msg.Answer, t: Tones, onMap: (String) -> Unit) {
     Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp, 20.dp, 20.dp, 6.dp)).background(t.card).padding(14.dp)) {
         if (m.pending) {
             ThinkingDots()
@@ -349,6 +350,15 @@ private fun AnswerCard(m: Msg.Answer, t: Tones) {
         LabelPill(m.label)
         Spacer(Modifier.height(8.dp))
         Text(m.text, color = t.text, fontSize = 16.sp, lineHeight = 22.sp)
+        if (m.place != null) {
+            Spacer(Modifier.height(10.dp))
+            Row(Modifier.clip(CircleShape).background(BrandBlue.copy(alpha = 0.14f))
+                .clickable(enabled = m.mapUri != null) { m.mapUri?.let(onMap) }
+                .padding(horizontal = 12.dp, vertical = 7.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text("📍  ${m.place}", color = BrandBlue, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                if (m.mapUri != null) Text("  ·  Open in Maps", color = BrandBlue, fontSize = 13.sp)
+            }
+        }
         if (m.thumbs.isNotEmpty()) {
             Spacer(Modifier.height(10.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

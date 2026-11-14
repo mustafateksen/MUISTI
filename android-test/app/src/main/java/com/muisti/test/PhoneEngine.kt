@@ -47,7 +47,7 @@ class PhoneEngine(ctx: Context) {
     private val recentWords = HashMap<String, Int>()   // like the server's _RECENT_WORDS, for ocr_repair
 
     /** /ingest: lines from the phone's OCR boxes -> repair -> Nemotron -> verify -> store if useful. */
-    fun ingest(jpeg: ByteArray, obs: List<Obs>, seenAtMs: Long, dhash: Long?): Boolean {
+    fun ingest(jpeg: ByteArray, obs: List<Obs>, seenAtMs: Long, dhash: Long?, fix: Fix? = null): Boolean {
         var lines = TextLines.visionToLines(obs)
         if (lines.isNotEmpty()) {
             synchronized(recentWords) {
@@ -57,7 +57,7 @@ class PhoneEngine(ctx: Context) {
         }
         val record = extractor.extract(jpeg, lines)
         if (!record.bool("useful")) return false
-        store.addFrame(seenAtMs, record, lines, jpeg, dhash)
+        store.addFrame(seenAtMs, record, lines, jpeg, dhash, fix?.lat, fix?.lon, fix?.street)
         return true
     }
 
