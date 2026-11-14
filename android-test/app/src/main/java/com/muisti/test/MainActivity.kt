@@ -762,6 +762,8 @@ class MainActivity : ComponentActivity() {
             while (isActive) {
                 runCatching { state.memories = withContext(Dispatchers.IO) { engine.store.sightings().size } }
                 if (location.running) location.fresh(60_000)?.street?.let { state.street = it }
+                android.util.Log.i("MuistiRate", "Nemotron requests in the last minute: ${com.muisti.engine.Llm.perMinute()} " +
+                    "(recording=${state.recording}, source=${if (state.useGlasses) "glasses" else "phone"}, sent frames=${state.framesSent})")
                 delay(6000)
             }
         }

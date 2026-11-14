@@ -99,6 +99,14 @@ class Llm(private val cfg: LlmConfig) {
     fun schemaFormat(name: String, schema: RawJson): RawJson =
         RawJson("{\"type\": \"json_schema\", \"json_schema\": {\"name\": \"$name\", \"schema\": ${schema.text}}}")
 
+    companion object {
+        /** Send times of every HTTP request to Nemotron (retries included), for the requests-per-minute counter. */
+        private val sentAt = java.util.concurrent.ConcurrentLinkedDeque<Long>()
+        private fun mark() { val now = System.currentTimeMillis(); sentAt.addLast(now); while ((sentAt.peekFirst() ?: now) < now - 60_000) sentAt.pollFirst() }
+        /** Requests sent to Nemotron in the last 60 s. */
+        fun perMinute(): Int { val now = System.currentTimeMillis(); while ((sentAt.peekFirst() ?: now) < now - 60_000) sentAt.pollFirst(); return sentAt.size }
+    }
+
     /** One request with backoff on 429/5xx/network errors. Reasoning stays OFF (it eats max_tokens). */
     fun call(messages: JSONArray, responseFormat: RawJson, maxTokens: Int = 800, temperature: Double = 0.2): String {
         val body = JSONObject()
@@ -116,6 +124,7 @@ class Llm(private val cfg: LlmConfig) {
                 val req = Request.Builder().url(cfg.baseUrl.trimEnd('/') + "/chat/completions")
                     .header("Authorization", "Bearer " + cfg.key)
                     .post(bodyText.toRequestBody(jsonType)).build()
+                mark()
                 http.newCall(req).execute().use { resp ->
                     val text = resp.body?.string().orEmpty()
                     if (resp.code == 400) throw BadRequest(text.take(300))
@@ -155,6 +164,7 @@ class Llm(private val cfg: LlmConfig) {
             try {
                 val req = Request.Builder().url(cfg.baseUrl.trimEnd('/') + "/chat/completions")
                     .header("Authorization", "Bearer " + cfg.key).post(text.toRequestBody(jsonType)).build()
+                mark()
                 http.newCall(req).execute().use { resp ->
                     val out = resp.body?.string().orEmpty()
                     if (resp.code == 429 || resp.code >= 500) throw RetryableHttp("HTTP ${resp.code}")

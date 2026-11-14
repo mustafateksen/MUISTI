@@ -142,7 +142,7 @@ class PrivacyGuard(ctx: Context) {
         lastScore = s.priv; lastTextual = s.textual
         recentStop.addLast(s.stop); while (recentStop.size > 3) recentStop.removeFirst()
         // a room: one very clear frame, or three fairly clear ones in a row (~1.5 s); a WC sign glimpsed in passing is not enough
-        val stopNow = s.stop >= 0.8f || (recentStop.size == 3 && recentStop.all { it >= 0.7f })
+        val stopNow = s.stop >= 0.8f || (recentStop.size == 3 && recentStop.all { it >= 0.6f })
         val pinNow = s.pin >= 0.7f
         if (stopNow) {
             val ev = if (!paused) Event.ENTER else if (kind != Kind.STOP) Event.UPGRADE else null
@@ -186,9 +186,10 @@ class PrivacyGuard(ctx: Context) {
         /**
          * Which situations pause recording. First stage: only bathroom / toilet (incl. showers, urinals).
          * Others are ready in the model and the sentence list: "changing", "medical", "pin" (ATM / card terminal).
+         * Current rule: bathroom and nudity are never stored or sent; PIN pads, cards, IBAN may be.
          */
-        val ACTIVE = setOf("bathroom")
-        private val ROOM = mapOf("bathroom" to "a bathroom", "changing" to "a changing room", "medical" to "a medical room")
+        val ACTIVE = setOf("bathroom", "nudity")   // these never leave the phone; PIN pads, cards, IBAN may go to Nemotron
+        private val ROOM = mapOf("bathroom" to "a bathroom", "nudity" to "someone without clothes", "changing" to "a changing room", "medical" to "a medical room")
     }
 }
 

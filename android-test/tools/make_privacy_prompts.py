@@ -18,6 +18,8 @@ CLASSES = {
                            "a bathroom sink and mirror", "a shower cubicle", "inside a toilet stall"]),
     "changing":  ("stop", ["a locker room", "a changing room in a clothing store", "a fitting room with a curtain and mirror",
                            "a sauna dressing room with benches"]),
+    "nudity":    ("stop", ["a naked person", "a person undressing", "a person in underwear", "a topless person",
+                           "a naked body in a mirror"]),
     "medical":   ("stop", ["a doctor's examination room", "a hospital bed with a patient", "a dentist chair"]),
     "pin":       ("drop", ["a hand entering a PIN on an ATM keypad", "an ATM cash machine screen", "a card payment terminal",
                            "a hand typing a code on a keypad"]),
@@ -28,11 +30,14 @@ CLASSES = {
     "street":    ("safe", ["a street with shops", "a city sidewalk", "a bus stop", "a parking lot", "a building entrance"]),
     "shop":      ("safe", ["a supermarket shelf", "a shop sign", "a store interior", "a pharmacy counter", "a cafe counter"]),
     "indoor":    ("safe", ["an office", "a corridor with doors", "a conference hall with booths", "a classroom",
-                           "an elevator lobby", "a staircase", "a kitchen", "a restaurant table", "a living room"]),
+                           "an elevator lobby", "a staircase", "a kitchen", "a restaurant table", "a living room",
+                           "a person standing in an elevator", "a cafe with tables and chairs", "a baby stroller next to a table",
+                           "a self-service ordering kiosk in a fast food restaurant", "a person taking a selfie"]),
     "signs":     ("safe", ["a poster on a wall", "a sign with text", "a direction sign in a building", "a notice on a door",
                            "a restroom sign on a wall in a corridor",
                            "a WC sign with man and woman symbols", "a menu board", "a printed poster with text on a screen"]),
-    "people":    ("safe", ["people talking at an event", "a person at a desk with a laptop", "a crowd of people"]),
+    "people":    ("safe", ["a fully clothed person", "a person wearing a jacket", "people in a swimming pool",
+                           "people talking at an event", "a person at a desk with a laptop", "a crowd of people"]),
 }
 
 
