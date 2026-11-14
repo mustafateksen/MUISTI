@@ -7,3 +7,5 @@ app/src/main/assets/prompts.json
 .claude/
 app/src/main/assets/mobileclip_s0_vision.onnx
 tools/mobileclip/
+app/src/main/assets/mobileclip_s0_text_q.onnx
+app/src/main/assets/clip_tokenizer.json

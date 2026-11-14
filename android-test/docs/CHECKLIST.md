@@ -58,7 +58,7 @@ is absent. Tasks whose "Done when" needs the device or those memories cannot be 
 | P2.2 | No-Record Zones | PARTIAL | ZonesTest (distance, point-in-zone, accuracy cap, clamp); ConfirmTest (create_zone only proposed, yes/no parsing incl. kyllä, no location -> no proposal; live model: 3/3 zone requests -> CONFIRM) | e57134b | Enforced first in considerFrame (fix + geofence), imports refused, Privacy settings list/add/remove, debug 'Simulate here'. On-device mocked-location check: BLOCKED (no device) |
 | P2.3 | Memory Episodes | PARTIAL | EpisodesTest: fixture day -> 7 episodes [3,3,3,1,1,1,3], no sighting in two, shuffled input same result, later sighting leaves closed episodes unchanged; move/scene splits; video-memory variant skips (no results/). Fixture regression with episode docs: 3x 20/20 | be9823f | Rules: <=10 min gap AND <=300 m (iOS), scene change after >=5 min when no GPS. episodes.json stored; agent: episode docs in search_memory, recent lists episodes first. Timeline screen (Memories tile). Verifier fixes found by the run: item's own time and whole-hour ':00' accepted (VerifierTest). Device view: BLOCKED (no device) |
 | P2.4 | AI Episode Summaries | DONE | EpisodeSummaryTest: uncited phone / invented phone / invented hour removed, inline [Mx] citations accepted and stripped; 1 request per summary, text only (no image_url), cache invalid when members change; live: 14 episodes (fixture x2) -> 14 summaries, 14 calls | 3d7173b | Runs in the background loop (closed = 10 min without a new sighting, max 2/min); summaries.json; shown in Timeline and used in episode docs |
-| P2.5 | Image embeddings and visual search | IN PROGRESS | ClipTokenizerTest (20 strings = Python tokenizers); Wikimedia CC set 59 images: option A (on-device MobileCLIP text) top-3 14/14, top-1 14/14 vs B (Nemotron->prompt bank) top-3 14/14, top-1 12/14 | - | Chosen A. Done in working tree (not committed yet): ImageVectors store (deleted with frames), search_visual tool, ClipText, vectors through live/queue/import. Left: unit test for ImageVectors + tool, commit, P3.2 timeline perf |
+| P2.5 | Image embeddings and visual search | PARTIAL | Choice measured (tools/eval/visual_search_eval.py, 59 CC Wikimedia images, 14 queries): A on-phone MobileCLIP text encoder top-3 14/14, top-1 14/14; B Nemotron embed -> prompt bank top-3 14/14, top-1 12/14 (loses colour) -> A. ClipTokenizerTest = Python ids on 20 strings; VisualSearchTest (store/restart/delete with frame, tool keeps close matches as checkable objects, tool in agent list) | next | Image vectors come from the privacy gate's MobileCLIP pass (no extra model, no network), stored per frame and deleted with it; queued frames keep theirs. Text model 43 MB fetched at build (APK grows). 'Top 3 on the test memory' on the phone: BLOCKED (no device / no results) |
 | P2.6 | Advanced hybrid retrieval | TODO | | | |
 | P2.7 | Proactive Agent Center | TODO | | | |
 | P2.8 | Safety Monitor | TODO | | | |
@@ -80,18 +80,17 @@ is absent. Tasks whose "Done when" needs the device or those memories cannot be 
 If the session stops, continue from the top of this list. Branch omer/android-app; nothing is pushed yet
 (backend proxy commit 8f1bc31 is on omer/nemotron-scene, also not pushed).
 
-1. P2.5 finish: ImageVectorsTest (put/search/delete, survives restart) + search_visual tool test with a scripted model; build; commit.
-2. P2.6 hybrid retrieval: RRF (k=60) over lexical, Nemotron text vectors, image vectors, recency; optional rerank via /classify only when top scores are close; gate = fixture regression >= 20/20 with <= calls.
-3. P2.7 Agent Center: InterventionPolicy (1 notice / 15 min, quiet hours, mute per type) + sources (calendar <= 30 min, arrival at a place with a note, sign deadline) + notices screen + Android notifications/TTS; unit tests per source.
-4. P2.8 Safety monitor: built-in rules (fire exit, hazard, do not enter, wet floor) on memory text, image check only on hits, 10-min dedupe, NL rule via agent with preview; JVM eval >= 10 scenes, precision >= 0.8.
-5. P2.9 audio: DAT SDK has Stream.audioStream (AudioFrame) -> try glasses mic, else BT SCO; barge-in during TTS (<= 300 ms, log it).
-6. P2.10 shortcuts.xml (Ask, Start, Pause, Note), QS tile, ACTION_ASSIST / VOICE_COMMAND filter.
-7. P2.11 DAT SDK has Camera.photo.capturePhoto(PhotoResolution.FULL) -> "capture photo" (voice + UI) for OCR.
-8. P3.1 SEEN / INFERRED / UNKNOWN mapping + evidence card badge; "probably" for INFERRED.
-9. P3.3 forget_matching / protect / show_related with the existing confirmation card (PendingAction); delete-by-day removes frames, sightings, vectors, episodes, summaries, notes; JVM test.
-10. P3.4 pattern detection, P3.5 places (+ people consent off by default), P3.6 weekly insights.
-11. P4.1 UI pass, P4.3 scripted integration test, P4.4 README update to match this checklist.
-12. Needs the user: attach the phone (all on-device checks, cold start, MuistiRate, P4.2 battery), nemotron/results for the 31-question run (D3, P1.8), deploy + push decisions.
+1. P2.6 hybrid retrieval: RRF (k=60) over lexical, Nemotron text vectors, image vectors, recency; optional rerank via /classify only when top scores are close; gate = fixture regression >= 20/20 with <= calls.
+2. P2.7 Agent Center: InterventionPolicy (1 notice / 15 min, quiet hours, mute per type) + sources (calendar <= 30 min, arrival at a place with a note, sign deadline) + notices screen + Android notifications/TTS; unit tests per source.
+3. P2.8 Safety monitor: built-in rules (fire exit, hazard, do not enter, wet floor) on memory text, image check only on hits, 10-min dedupe, NL rule via agent with preview; JVM eval >= 10 scenes, precision >= 0.8.
+4. P2.9 audio: DAT SDK has Stream.audioStream (AudioFrame) -> try glasses mic, else BT SCO; barge-in during TTS (<= 300 ms, log it).
+5. P2.10 shortcuts.xml (Ask, Start, Pause, Note), QS tile, ACTION_ASSIST / VOICE_COMMAND filter.
+6. P2.11 DAT SDK has Camera.photo.capturePhoto(PhotoResolution.FULL) -> "capture photo" (voice + UI) for OCR.
+7. P3.1 SEEN / INFERRED / UNKNOWN mapping + evidence card badge; "probably" for INFERRED.
+8. P3.3 forget_matching / protect / show_related with the existing confirmation card (PendingAction); delete-by-day removes frames, sightings, vectors, episodes, summaries, notes; JVM test.
+9. P3.4 pattern detection, P3.5 places (+ people consent off by default), P3.6 weekly insights.
+10. P4.1 UI pass, P4.3 scripted integration test, P4.4 README update to match this checklist.
+11. Needs the user: attach the phone (all on-device checks, cold start, MuistiRate, P4.2 battery), nemotron/results for the 31-question run (D3, P1.8), deploy + push decisions.
 
 ## Privacy truth table (what is actually enforced today)
 | Protection | Enforced where | Default | Tested by |

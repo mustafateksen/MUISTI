@@ -85,7 +85,21 @@ val checkPrivacyPrompts by tasks.registering {
             "Regenerate: python -I tools/make_privacy_prompts.py app/src/main/assets/privacy_prompts.json")
     }
 }
-tasks.named("preBuild") { dependsOn(copyPrompts, fetchPrivacyModel, checkPrivacyPrompts) }
+// Visual search (P2.5): MobileCLIP-S0 text encoder (quantized, 43 MB) + its tokenizer, so a search text is embedded
+// on the phone and compared with the image vectors the privacy gate already computes. Downloaded once, not in git.
+fun fetchOnce(name: String, url: String) = tasks.registering {
+    val out = layout.projectDirectory.file("src/main/assets/$name").asFile
+    outputs.file(out)
+    onlyIf { !out.exists() }
+    doLast {
+        val tmp = File(out.path + ".part")
+        uri(url).toURL().openStream().use { ins -> tmp.outputStream().use { o -> ins.copyTo(o) } }
+        tmp.renameTo(out)
+    }
+}
+val fetchClipText by fetchOnce("mobileclip_s0_text_q.onnx", "https://huggingface.co/Xenova/mobileclip_s0/resolve/main/onnx/text_model_quantized.onnx")
+val fetchClipTokenizer by fetchOnce("clip_tokenizer.json", "https://huggingface.co/Xenova/mobileclip_s0/resolve/main/tokenizer.json")
+tasks.named("preBuild") { dependsOn(copyPrompts, fetchPrivacyModel, checkPrivacyPrompts, fetchClipText, fetchClipTokenizer) }
 
 // Parity tests talk to the real model with the same keys (eval against the Python pipeline).
 tasks.withType<Test>().configureEach {

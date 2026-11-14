@@ -7,7 +7,7 @@ import java.io.File
 
 /** A frame that could not be ingested because the network was down. The JPEG is the already-redacted one. */
 class PendingFrame(val id: String, val jpeg: ByteArray, val obs: List<Obs>, val seenAt: Long, val dhash: Long?,
-                   val lat: Double?, val lon: Double?, val street: String?)
+                   val lat: Double?, val lon: Double?, val street: String?, val vec: FloatArray? = null)
 
 /**
  * Frames waiting for the network, on disk (they survive the app being killed). Oldest first; when full, the oldest
@@ -20,6 +20,7 @@ class PendingQueue(private val dir: File, private val max: Int = 300) {
     fun add(f: PendingFrame) = synchronized(lock) {
         val meta = JSONObject().put("seen_at", f.seenAt).put("dhash", f.dhash ?: JSONObject.NULL)
             .put("lat", f.lat ?: JSONObject.NULL).put("lon", f.lon ?: JSONObject.NULL).put("street", f.street ?: JSONObject.NULL)
+            .put("vec", f.vec?.let { v -> JSONArray(v.map { it.toDouble() }) } ?: JSONObject.NULL)
             .put("obs", JSONArray(f.obs.map { JSONArray().put(it.text).put(it.conf).put(it.x).put(it.y).put(it.w).put(it.h) }))
         val name = "%015d-%s".format(f.seenAt, f.id)
         File(dir, "$name.jpg").writeBytes(f.jpeg)
@@ -39,7 +40,8 @@ class PendingQueue(private val dir: File, private val max: Int = 300) {
                 (0 until o.length()).map { o.getJSONArray(it) }.map { Obs(it.getString(0), it.getDouble(1), it.getDouble(2), it.getDouble(3), it.getDouble(4), it.getDouble(5)) },
                 m.getLong("seen_at"), if (m.isNull("dhash")) null else m.getLong("dhash"),
                 if (m.isNull("lat")) null else m.getDouble("lat"), if (m.isNull("lon")) null else m.getDouble("lon"),
-                if (m.isNull("street")) null else m.getString("street"))
+                if (m.isNull("street")) null else m.getString("street"),
+                m.optJSONArray("vec")?.let { a -> FloatArray(a.length()) { a.getDouble(it).toFloat() } })
         }.getOrElse { remove(n); null }       // a broken entry is dropped, never retried forever
     }
 

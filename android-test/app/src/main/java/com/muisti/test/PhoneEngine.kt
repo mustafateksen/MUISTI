@@ -101,17 +101,17 @@ class PhoneEngine(ctx: Context) {
     /** A queued frame tried again: through the same ingest (so through the privacy gate again). */
     fun ingestPending(f: com.muisti.capture.PendingFrame): com.muisti.capture.Outcome = try {
         val fix = f.lat?.let { Fix(it, f.lon!!, 0f, f.seenAt, f.street) }
-        if (ingest(f.jpeg, f.obs, f.seenAt, f.dhash, fix)) com.muisti.capture.Outcome.SENT else com.muisti.capture.Outcome.DROPPED
+        if (ingest(f.jpeg, f.obs, f.seenAt, f.dhash, fix, f.vec)) com.muisti.capture.Outcome.SENT else com.muisti.capture.Outcome.DROPPED
     } catch (e: com.muisti.engine.Unreachable) { com.muisti.capture.Outcome.RETRY_LATER
     } catch (e: java.io.IOException) { com.muisti.capture.Outcome.RETRY_LATER }
 
     /** /ingest: lines from the phone's OCR boxes -> repair -> Nemotron -> verify -> store if useful. */
-    fun ingest(jpeg: ByteArray, obs: List<Obs>, seenAtMs: Long, dhash: Long?, fix: Fix? = null): Boolean {
+    fun ingest(jpeg: ByteArray, obs: List<Obs>, seenAtMs: Long, dhash: Long?, fix: Fix? = null, imageVec: FloatArray? = null): Boolean {
         ingestSlots.acquire()
-        try { return ingestLimited(jpeg, obs, seenAtMs, dhash, fix) } finally { ingestSlots.release() }
+        try { return ingestLimited(jpeg, obs, seenAtMs, dhash, fix, imageVec) } finally { ingestSlots.release() }
     }
 
-    private fun ingestLimited(jpeg: ByteArray, obs: List<Obs>, seenAtMs: Long, dhash: Long?, fix: Fix?): Boolean {
+    private fun ingestLimited(jpeg: ByteArray, obs: List<Obs>, seenAtMs: Long, dhash: Long?, fix: Fix?, imageVec: FloatArray?): Boolean {
         var lines = TextLines.visionToLines(obs)
         if (lines.isNotEmpty()) {
             synchronized(recentWords) {
@@ -121,7 +121,7 @@ class PhoneEngine(ctx: Context) {
         }
         val record = try { extractor.extract(jpeg, lines) } catch (e: com.muisti.engine.PrivacyBlocked) { return false }
         if (!record.bool("useful")) return false
-        store.addFrame(seenAtMs, record, lines, jpeg, dhash, fix?.lat, fix?.lon, fix?.street)
+        store.addFrame(seenAtMs, record, lines, jpeg, dhash, fix?.lat, fix?.lon, fix?.street, imageVec)
         warmSoon()
         return true
     }
@@ -273,6 +273,16 @@ Rules:
             (System.currentTimeMillis() - t0) / 1000.0, org.json.JSONObject())
     }
 
+    private val clip = ClipText(ctx)
+
+    /** The memory a stored frame belongs to, as a search doc (for visual-search hits). */
+    private fun docForFrame(frame: String): com.muisti.engine.Doc? {
+        val sighting = store.sightings().firstOrNull { s -> s.optJSONArray("frames")?.let { a -> (0 until a.length()).any { a.optString(it) == frame } } == true }
+            ?: return null
+        val ev = sighting.optString("evidence_frame")
+        return docs().firstOrNull { it.type == "sighting" && it.frame == ev }
+    }
+
     /** Runs an action the user confirmed (see PendingAction). Returns what to tell the user. */
     fun execute(action: org.json.JSONObject): String = when (action.optString("type")) {
         "create_zone" -> {
@@ -286,6 +296,7 @@ Rules:
     /** Phone-only agent tools (the exported Python prompts are not changed). */
     private fun tools(liveFrame: ByteArray?, fix: Fix?): List<com.muisti.engine.ExtraTool> = listOf(
         com.muisti.engine.createZoneTool { fix?.let { Triple(it.lat, it.lon, it.street) } },
+        com.muisti.engine.visualSearchTool({ clip.embed(it) }, { store.vectors }, ::docForFrame),
         com.muisti.engine.noteTool { text, withView ->
             // the live frame given to ask() has already passed the privacy gate and been redacted
             notes.add(text, System.currentTimeMillis(), if (withView) liveFrame else null, fix?.lat, fix?.lon, fix?.street)

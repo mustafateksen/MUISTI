@@ -152,6 +152,7 @@ class MainActivity : ComponentActivity() {
                     if (!privacy.available) return@withContext "Not saved: the privacy check isn't available (nothing was sent)."
                     val sc = runCatching { privacy.score(bmp) }.getOrNull()
                         ?: return@withContext "Not saved: the privacy check failed (nothing was sent)."
+                    val importVec = sc.vec
                     android.util.Log.i("MuistiPrivacy", "import: stop %.2f (%s) drop %.2f (%s) text %.2f, %d ms".format(sc.stop, sc.stopClass, sc.pin, sc.dropClass, sc.textual, sc.ms))
                     SceneRules.blockReason(sc.byClass, privacySettings.current)?.let { return@withContext "Not saved: $it (privacy)." }
                     PrivacyText.check(ocr.obs.map { it.text }, sc.hint)?.let { return@withContext "Not saved: it shows $it (privacy)." }
@@ -170,7 +171,7 @@ class MainActivity : ComponentActivity() {
                         ll != null -> Fix(ll[0], ll[1], 0f, taken ?: System.currentTimeMillis(), location.streetAt(ll[0], ll[1]))
                         else -> location.fresh(60_000) ?: if (hasPerm) location.currentFix() else null
                     }
-                    val ok = engine.ingest(jpeg, obs, taken ?: System.currentTimeMillis(), dHash(bmp), fix)
+                    val ok = engine.ingest(jpeg, obs, taken ?: System.currentTimeMillis(), dHash(bmp), fix, importVec)
                     if (ok) { state.memories = engine.store.sightings().size; "Remembered · ${obs.size} text lines" } else "Nothing worth keeping in that photo."
                 }
             }.getOrElse { "Couldn't add the photo: ${it.message?.take(60)}" }
@@ -323,7 +324,7 @@ class MainActivity : ComponentActivity() {
         return decision
     }
     private val MAX_UPLOADS = 3
-    private val uploads = Channel<Pair<Bitmap, Long>>(capacity = 2, onBufferOverflow = BufferOverflow.DROP_OLDEST)
+    private val uploads = Channel<Held>(capacity = 2, onBufferOverflow = BufferOverflow.DROP_OLDEST)
     private val analysisExec = Executors.newSingleThreadExecutor()
     private var windowStart = 0L
     private var windowBest: Bitmap? = null
@@ -365,7 +366,9 @@ class MainActivity : ComponentActivity() {
         override fun close() { state.showPrivacy = false }
     }
     private val DELAY_MS = 3000L                       // frames wait this long on the phone before they may leave it
-    private class Held(val bmp: Bitmap, val hash: Long, val at: Long)
+    private class Held(val bmp: Bitmap, val hash: Long, val at: Long, val vec: FloatArray? = null)
+    /** Image vector of the frame isPrivate() checked last (same thread): kept with the frame for visual search. */
+    @Volatile private var lastVec: FloatArray? = null
     private val held = ArrayDeque<Held>()
 
     /**
@@ -377,6 +380,7 @@ class MainActivity : ComponentActivity() {
     private fun isPrivate(bmp: Bitmap, now: Long = System.currentTimeMillis()): Boolean {
         if (!privacy.available) { state.privacy = state.privacy ?: "an unchecked view (privacy model missing)"; return true }
         val s = runCatching { privacy.score(bmp) }.getOrNull() ?: return true
+        lastVec = s.vec
         state.privacyScore = s.priv
         when (privacy.update(s, now)) {
             PrivacyGuard.Event.ENTER, PrivacyGuard.Event.UPGRADE -> onPrivacyEnter()
@@ -420,7 +424,7 @@ class MainActivity : ComponentActivity() {
                 if (privacy.paused) { state.privacyDropped += held.size; held.clear(); null }
                 else held.firstOrNull()?.takeIf { now - it.at >= DELAY_MS }?.also { held.removeFirst() }
             } ?: return
-            uploads.trySend(h.bmp to h.hash)
+            uploads.trySend(h)
         }
     }
 
@@ -443,7 +447,7 @@ class MainActivity : ComponentActivity() {
         }, ContextCompat.getMainExecutor(this))
         repeat(MAX_UPLOADS) {
             lifecycleScope.launch {
-                for ((bmp, h) in uploads) runCatching { upload(bmp, h) }
+                for (h in uploads) runCatching { upload(h.bmp, h.hash, h.vec) }
                     .onFailure { state.lastFrame = "Nemotron unreachable: ${it.message?.take(60)}"; state.online = false }
             }
         }
@@ -804,6 +808,7 @@ class MainActivity : ComponentActivity() {
     private fun offerFrame(bmp: Bitmap, score: Double) {
         // every frame that could be remembered is checked itself, on the phone, before anything else
         if (isPrivate(bmp)) { state.privacyDropped++; return }   // private: not kept, not sent
+        val vec = lastVec
         if (isBlurry(score)) { state.blurrySkipped++; state.lastFrame = "Skipped · blurry"; return }
         val h = dHash(bmp)
         if (lastSentHash != -1L && java.lang.Long.bitCount(h xor lastSentHash) <= 6) {
@@ -811,7 +816,7 @@ class MainActivity : ComponentActivity() {
         }
         if (lastSentHash != -1L) scheduler.onKept(java.lang.Long.bitCount(h xor lastSentHash))
         lastSentHash = h
-        synchronized(held) { held.addLast(Held(bmp, h, System.currentTimeMillis())); while (held.size > 12) held.removeFirst() }
+        synchronized(held) { held.addLast(Held(bmp, h, System.currentTimeMillis(), vec)); while (held.size > 12) held.removeFirst() }
     }
 
     /** Variance of a 4-neighbour Laplacian on the Y (grey) plane, sampled on a sparse grid. ~1 ms per frame. */
@@ -883,7 +888,7 @@ class MainActivity : ComponentActivity() {
         return sharpHistory.size >= 4 && s < 0.5 * median
     }
 
-    private suspend fun upload(bmp: Bitmap, dhash: Long) {
+    private suspend fun upload(bmp: Bitmap, dhash: Long, vec: FloatArray? = null) {
         val seenAt = System.currentTimeMillis()
         val fix = location.fresh()
         val ocr = readText(bmp)                  // text is read from the raw frame, on the phone
@@ -902,12 +907,12 @@ class MainActivity : ComponentActivity() {
         val jpeg = withContext(Dispatchers.Default) { ByteArrayOutputStream().also { safe.image.compress(Bitmap.CompressFormat.JPEG, 85, it) }.toByteArray() }
         // offline (or Nemotron unreachable after its retries): the redacted frame waits on disk, nothing is lost
         fun queue(): Unit {
-            engine.pending.add(com.muisti.capture.PendingFrame(java.util.UUID.randomUUID().toString().take(8), jpeg, obs, seenAt, dhash, fix?.lat, fix?.lon, fix?.street))
+            engine.pending.add(com.muisti.capture.PendingFrame(java.util.UUID.randomUUID().toString().take(8), jpeg, obs, seenAt, dhash, fix?.lat, fix?.lon, fix?.street, vec))
             state.queued = engine.pending.size(); state.lastFrame = "Offline · frame queued (${state.queued})"
         }
         if (!state.network) { withContext(Dispatchers.IO) { queue() }; return }
         val stored = try {
-            withContext(Dispatchers.IO) { engine.ingest(jpeg, obs, seenAt, dhash, fix) }
+            withContext(Dispatchers.IO) { engine.ingest(jpeg, obs, seenAt, dhash, fix, vec) }
         } catch (e: Exception) {
             if (e is com.muisti.engine.Unreachable || e is java.io.IOException) { withContext(Dispatchers.IO) { queue() }; return }
             throw e

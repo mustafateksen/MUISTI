@@ -17,6 +17,8 @@ import java.util.concurrent.TimeUnit
 class MemoryStore(private val dir: File) {
     private val framesFile = File(dir, "frames.jsonl")
     val frameDir = File(dir, "frames").apply { mkdirs() }
+    /** MobileCLIP image vector per frame id (visual search); deleted with the frame. */
+    val vectors = ImageVectors(File(dir, "image_vectors.bin"))
     private val lock = Any()
     private var rows: MutableList<JSONObject>? = null
     private var cache: List<JSONObject>? = null
@@ -30,7 +32,7 @@ class MemoryStore(private val dir: File) {
     }
 
     fun addFrame(seenAtMs: Long, record: JSONObject, ocrLines: List<String>, jpeg: ByteArray, dhash: Long?,
-                 lat: Double? = null, lon: Double? = null, street: String? = null): Int = synchronized(lock) {
+                 lat: Double? = null, lon: Double? = null, street: String? = null, imageVec: FloatArray? = null): Int = synchronized(lock) {
         val all = load()
         val id = (all.maxOfOrNull { it.optInt("id") } ?: 0) + 1
         File(frameDir, "$id.jpg").writeBytes(jpeg)
@@ -39,6 +41,7 @@ class MemoryStore(private val dir: File) {
             .put("lat", nullable(lat)).put("lon", nullable(lon)).put("street", nullable(street))
         framesFile.appendText(row.toString() + "\n")
         all.add(row)
+        imageVec?.let { vectors.put(id, it) }
         cache = null
         id
     }
@@ -72,6 +75,7 @@ class MemoryStore(private val dir: File) {
         val all = load()
         val gone = all.filter { it.optInt("id") in ids }
         ids.forEach { File(frameDir, "$it.jpg").delete() }
+        vectors.delete(ids)
         if (gone.isEmpty()) return 0
         all.removeAll(gone.toSet())
         framesFile.writeText(all.joinToString("") { it.toString() + "\n" })
@@ -84,6 +88,7 @@ class MemoryStore(private val dir: File) {
         val all = load()
         val gone = all.filter { it.optLong("seen_at") >= sinceMs }
         gone.forEach { File(frameDir, "${it.optInt("id")}.jpg").delete() }
+        vectors.delete(gone.map { it.optInt("id") }.toSet())
         all.removeAll(gone.toSet())
         framesFile.writeText(all.joinToString("") { it.toString() + "\n" })
         cache = null

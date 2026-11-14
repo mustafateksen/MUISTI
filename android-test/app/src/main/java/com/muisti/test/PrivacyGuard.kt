@@ -38,7 +38,8 @@ class PrivacyGuard(ctx: Context, private val settings: () -> PrivacySettings) {
 
     /** Probabilities summed per class over all of its sentences (softmax over every sentence). */
     data class Scores(val byClass: Map<String, Float>, val stop: Float, val pin: Float, val textual: Float,
-                      val stopClass: String, val ms: Long, val keypad: Float = 0f, val dropClass: String = "") {
+                      val stopClass: String, val ms: Long, val keypad: Float = 0f, val dropClass: String = "",
+                      val vec: FloatArray? = null) {   // the frame's unit image vector, kept for visual search
         val priv get() = stop + pin
         val hint get() = SceneHint(textual, keypad)
     }
@@ -108,7 +109,8 @@ class PrivacyGuard(ctx: Context, private val settings: () -> PrivacySettings) {
         for (i in prompts.indices) byClass.merge(prompts[i].first, e[i] / sum, Float::plus)
         // only the classes switched on in the privacy settings count (bathroom + nudity always; the rest optional)
         val m = SceneRules.summarize(byClass, settings())
-        return Scores(byClass, m.stop, m.drop, m.textual, m.stopClass, System.currentTimeMillis() - t0, m.keypad, m.dropClass)
+        return Scores(byClass, m.stop, m.drop, m.textual, m.stopClass, System.currentTimeMillis() - t0, m.keypad, m.dropClass,
+            FloatArray(v.size) { v[it] / n })
     }
 
     /**
