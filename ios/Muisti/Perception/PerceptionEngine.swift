@@ -168,18 +168,55 @@ actor PerceptionEngine {
 
     // MARK: OCR
 
-    /// Text recognition and head detection at the same time (two cores / Neural Engine).
+    /// Text recognition, head detection and the private-scene check at the same time.
+    /// A private scene (a bathroom, a shower) comes back like a failed head detection — `heads`
+    /// nil — which everywhere means the same thing: this frame is not stored and does not leave
+    /// the phone (memory, safety look and live look all go through here).
     static func textAndHeads(_ image: CGImage) -> (lines: [TextLine], heads: [CGRect]?) {
         final class Box: @unchecked Sendable {
             var lines: [TextLine] = []
             var heads: [CGRect]?
+            var isPrivate = false
         }
         let box = Box()
-        DispatchQueue.concurrentPerform(iterations: 2) { i in
-            if i == 0 { box.lines = recognizeText(image) } else { box.heads = HeadBlur.heads(in: image) }
+        DispatchQueue.concurrentPerform(iterations: 3) { i in
+            switch i {
+            case 0: box.lines = recognizeText(image)
+            case 1: box.heads = HeadBlur.heads(in: image)
+            default: box.isPrivate = showsPrivateScene(image)
+            }
+        }
+        if box.isPrivate {
+            Trace.note("frame withheld: private scene")
+            return ([], nil)
         }
         return (box.lines, box.heads)
     }
+
+    /// A bathroom, toilet or shower in view, by the phone's own scene classifier (the idea is
+    /// the Android side's privacy gate; here with Vision instead of a bundled model). Threshold
+    /// from 14 Nov: 8 of 11 bathroom photos scored 0.45–0.97, the highest of 106 ordinary test
+    /// photos was a kitchen at 0.27. Fails closed: if the classifier cannot run, the frame is
+    /// treated as private.
+    static func showsPrivateScene(_ image: CGImage) -> Bool {
+        let request = VNClassifyImageRequest()
+        do {
+            try VNImageRequestHandler(cgImage: image, options: [:]).perform([request])
+        } catch {
+            // The simulator has no scene classifier at all (every frame would be withheld and no
+            // evaluation could run); on a phone a failure withholds the frame.
+            #if targetEnvironment(simulator)
+            return false
+            #else
+            return true
+            #endif
+        }
+        return (request.results ?? []).contains { privateSceneLabels.contains($0.identifier) && $0.confidence >= 0.40 }
+    }
+
+    private static let privateSceneLabels: Set<String> = [
+        "bathroom_room", "bathroom", "bath", "shower", "toilet_seat", "bathrobe", "swimsuit", "sunbathing",
+    ]
 
     /// The OCR lines and head boxes of the frames just analysed, so the safety check and the
     /// live look use the memory pipeline's reading of the same frame instead of running text

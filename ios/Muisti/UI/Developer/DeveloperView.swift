@@ -21,6 +21,9 @@ struct DeveloperView: View {
                     .listRowBackground(Color.clear)
             }
 
+            #if DEBUG
+            RemoteDriverSection(controller: controller)
+            #endif
             DeveloperCaptureSection(controller: controller, config: config)
             NemotronDeveloperSection(controller: controller, config: config)
             CaptureParametersSection(config: config)

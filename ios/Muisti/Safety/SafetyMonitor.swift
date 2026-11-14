@@ -209,13 +209,13 @@ final class SafetyMonitor {
             self.lastSent = Date()
             self.sentTimes.append(Date())
             // Hands at work: the frames just before this one, masked the same way, as a strip.
-            var strip: (jpeg: Data, count: Int, seconds: Int)?
+            var strip: (jpeg: Data, frames: [Data], count: Int, seconds: Int)?
             if hands, !earlier.isEmpty {
                 let before = await Task.detached(priority: .utility) {
                     earlier.compactMap { SafetyFrame.prepare($0.jpeg, maxPixel: 768)?.jpeg }
                 }.value
                 if !before.isEmpty, let picture = QueryEngine.montage(jpegs: before + [copy.jpeg], cell: 768) {
-                    strip = (picture, before.count + 1, max(1, Int(frame.capturedAt.timeIntervalSince(earlier.first?.at ?? frame.capturedAt).rounded())))
+                    strip = (picture, before, before.count + 1, max(1, Int(frame.capturedAt.timeIntervalSince(earlier.first?.at ?? frame.capturedAt).rounded())))
                 }
             }
             await self.observe(copy, frame: frame, watched: watched, allergens: allergens, strip: strip)
@@ -223,17 +223,28 @@ final class SafetyMonitor {
     }
 
     private func observe(_ copy: SafetyFrame.Prepared, frame: CapturedFrame, watched: [String], allergens: [String],
-                         strip: (jpeg: Data, count: Int, seconds: Int)? = nil) async {
+                         strip: (jpeg: Data, frames: [Data], count: Int, seconds: Int)? = nil) async {
         let observation: SafetyObservation
         do {
             let ai = ai
             let started = ContinuousClock.now
-            observation = try await Self.afterQuestions(ai) {
-                try await ai.chatJSON(SafetyObservation.self, system: SafetyPrompts.observeSystem,
-                                      user: SafetyPrompts.observeUser(watched: watched, allergens: allergens, ocr: copy.ocr)
-                                        + (strip.map { SafetyPrompts.stripNote(frames: $0.count, seconds: $0.seconds) } ?? ""),
-                                      image: .init(jpeg: strip?.jpeg ?? copy.jpeg), jsonSchema: SafetyPrompts.observeSchema,
-                                      schemaName: "observation", maxTokens: 600, temperature: 0, background: true)
+            let user = SafetyPrompts.observeUser(watched: watched, allergens: allergens, ocr: copy.ocr)
+                + (strip.map { SafetyPrompts.stripNote(frames: $0.count, seconds: $0.seconds) } ?? "")
+            // The frames as pictures of their own where the host takes several (sharper than one
+            // sheet of small ones); otherwise, or if it refuses, the numbered sheet.
+            let separate = await ai.multiImageChat ? (strip?.frames ?? []).map { NemotronClient.ImagePart(jpeg: $0) } : []
+            func look(_ earlier: [NemotronClient.ImagePart]) async throws -> SafetyObservation {
+                try await Self.afterQuestions(ai) {
+                    try await ai.chatJSON(SafetyObservation.self, system: SafetyPrompts.observeSystem, user: user,
+                                          image: .init(jpeg: earlier.isEmpty ? (strip?.jpeg ?? copy.jpeg) : copy.jpeg), earlierImages: earlier,
+                                          jsonSchema: SafetyPrompts.observeSchema, schemaName: "observation", maxTokens: 600,
+                                          temperature: 0, background: true)
+                }
+            }
+            do {
+                observation = try await look(separate)
+            } catch NemotronClient.NemotronError.http(400, _) where !separate.isEmpty {
+                observation = try await look([])
             }
             Trace.note("safety look\(strip.map { " (strip of \($0.count), \($0.seconds) s)" } ?? ""): \((ContinuousClock.now - started).milliseconds) ms, frame \(String(format: "%.1f", Date().timeIntervalSince(frame.capturedAt))) s old")
         } catch {

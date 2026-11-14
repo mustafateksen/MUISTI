@@ -225,8 +225,10 @@ final class CaptureController {
         })
 
         let locationProvider = location
+        let agentCenter = agent
         location.onFix = { [recorder] fix in
             locationProvider.remember(fix)
+            Task { await agentCenter.navigationFix(fix) }
             Task { await recorder.record(fix) }
         }
         // Glasses video recorded while Muisti was in the background → frames → pipeline.
@@ -710,6 +712,26 @@ final class CaptureController {
     }
 
     // MARK: Ingest
+
+    #if DEBUG
+    /// A frame from the remote driver: the same steps as `ingest` (position, safety, memory
+    /// pipeline), but waiting for the pipeline, so a video fed faster than real time loses no frames.
+    func driverFeed(_ frame: CapturedFrame) async -> Bool {
+        var frame = frame
+        if let fix = location.fix(near: frame.capturedAt) ?? location.freshFix(maxAge: 10, now: frame.capturedAt) {
+            frame.latitude = fix.latitude
+            frame.longitude = fix.longitude
+            frame.horizontalAccuracy = fix.accuracy
+            frame.headingDegrees = fix.validCourse
+            frame.speedMps = fix.validSpeed
+        }
+        capturedCount += 1
+        safety.consider(frame)
+        let id = await pipeline.handle(frame, street: location.street, area: location.areaText(for: location.fix(near: frame.capturedAt)))
+        pipelineDidProcess(kept: id != nil, stats: await pipeline.stats)
+        return id != nil
+    }
+    #endif
 
     private func ingest(_ frame: CapturedFrame) {
         var frame = frame

@@ -61,7 +61,7 @@ enum TurnTools {
         tool("look_now", """
              See what is in front of the user right now through the glasses camera. Call it whenever the \
              message is about the present view, in any words or language: what is this, what do you see, \
-             look, read this, what does it say, what colour is it, is it on, is this the right one, \
+             look, read this, what does it say, what colour is it, is it on, is this the right one, "solve this", \
              "this" or "here" pointing at something, a garbled request about seeing or looking, or a \
              "yes" to your own offer to look. You can always look: never say you cannot see.
              """),

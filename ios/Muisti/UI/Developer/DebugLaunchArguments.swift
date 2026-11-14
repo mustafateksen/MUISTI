@@ -9,6 +9,8 @@ import UIKit
 enum DebugLaunchArguments {
     static func run(controller: CaptureController, config: AppConfig, wearables: WearablesController) async {
         let args = ProcessInfo.processInfo.arguments
+        // `--remote-driver=<port>|<token>`: lets a script or another agent drive the app (see docs/REMOTE_DRIVER.md).
+        RemoteDriver.startIfAsked(controller: controller)
         // `--nemotron-key=…`: store a key in the Keychain on a test device (never in code).
         if let key = args.first(where: { $0.hasPrefix("--nemotron-key=") }) {
             config.apiKey = String(key.dropFirst(15))
@@ -123,6 +125,38 @@ enum DebugLaunchArguments {
                 let folder = ProcessInfo.processInfo.arguments.first { $0.hasPrefix("--conv=") }.map { String($0.dropFirst(7)) } ?? "conv"
                 await ConversationEval.run(controller: controller, folder: folder)
             case "agenteval": await AgentEval.run(controller: controller)
+            case "looktest":
+                // `--look=<folder in Documents>`: questions about photos given as the live view.
+                let folder = ProcessInfo.processInfo.arguments.first { $0.hasPrefix("--look=") }.map { String($0.dropFirst(7)) } ?? "looktest"
+                await ConversationEval.runLookTest(controller: controller, folder: folder)
+            case "privacycheck":
+                // Photos in Documents/agentset: `priv_…` must be withheld, the others prepared.
+                // Touches no stored data; writes Documents/privacy_result.txt.
+                guard let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { break }
+                let files = (try? FileManager.default.contentsOfDirectory(at: documents.appendingPathComponent("agentset"), includingPropertiesForKeys: nil)) ?? []
+                var report: [String] = []
+                var withheld = 0, privateCount = 0, passed = 0, ordinary = 0
+                for file in files.filter({ $0.pathExtension == "jpg" }).sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
+                    guard let raw = try? Data(contentsOf: file), let image = ImageData.thumbnail(raw, maxPixel: 1280) else { continue }
+                    let isPrivate = PerceptionEngine.showsPrivateScene(image)
+                    let prepared = SafetyFrame.prepare(raw, maxPixel: 1280, fromPipeline: false) != nil
+                    if file.lastPathComponent.hasPrefix("priv_") { privateCount += 1; if isPrivate, !prepared { withheld += 1 } }
+                    else { ordinary += 1; if !isPrivate, prepared { passed += 1 } }
+                    report.append("\(file.lastPathComponent): private \(isPrivate), prepared \(prepared)")
+                }
+                report.insert("PRIVACY withheld \(withheld)/\(privateCount) · ordinary through \(passed)/\(ordinary)", at: 0)
+                try? report.joined(separator: "\n").write(to: documents.appendingPathComponent("privacy_result.txt"), atomically: true, encoding: .utf8)
+            case "agentseed":
+                // A few notes and log entries, for looking at the assistant notes screen.
+                let agent = controller.agent
+                await agent.deleteAll()
+                agent.policy.speak = { _, _, _, _, _ in }
+                agent.policy.notify = { _, _, _ in }
+                _ = await agent.handle(.remember(text: "Buy milk", say: "You wanted to buy milk.", kind: .todo, cue: Cue(place: "grocery store", sight: "a grocery store with milk on the shelves")))
+                _ = await agent.handle(.remember(text: "Call the dentist", say: "You wanted to call the dentist.", kind: .reminder, cue: Cue(at: Cue.stamp(Date().addingTimeInterval(18 * 3600)))))
+                _ = await agent.handle(.rememberFact("The user's car is a blue Toyota."))
+                await agent.policy.submit(Proposal(topic: "reminder", urgency: .timely, text: "You wanted to pick up your prescription — there's a CVS pharmacy right here."))
+                await agent.policy.submit(Proposal(topic: "notice", urgency: .fyi, text: "A no-smoking sign in a subway station."))
             case "safetydemo": await SafetyDemo.run(controller.safety)
             case "safetyeval":
                 // `--safety=<folder in Documents>`: Muisti Turva scenarios, photos, conversation.

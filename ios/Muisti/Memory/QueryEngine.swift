@@ -554,11 +554,11 @@ actor QueryEngine {
             image = NemotronClient.ImagePart(jpeg: live.jpeg)
             safetyText += "\n" + live.ocr + "\n" + when
         }
-        var answered = await Self.answer(ai, user: user, image: image, trace: &trace)
+        var answered = await Self.answer(ai, user: user, image: image, looking: lookedLive, trace: &trace)
         if case .failure = answered, image != nil {
             // A host that refuses the picture must not cost the answer: once more, text only.
             trace.add("retry without picture")
-            answered = await Self.answer(ai, user: user, image: nil, trace: &trace)
+            answered = await Self.answer(ai, user: user, image: nil, looking: lookedLive, trace: &trace)
         }
         let draft: AnswerDraft
         switch answered {
@@ -576,8 +576,9 @@ actor QueryEngine {
         if final.action == .answer, let why = Self.rejection(final, hits: pool, extra: safetyText, liveLook: lookedLive && (final.used_ids ?? []).isEmpty) {
             Log.pipeline.info("evidence check failed (\(why, privacy: .public)); asking again")
             let retry = user + "\n\nYour previous reply was rejected by the evidence check: \(why). " +
-                "Answer again following the rules: leave out anything you cannot copy from the records' text."
-            if case .success(let second) = await Self.answer(ai, user: retry, image: image, trace: &trace) {
+                "Answer again following the rules: leave out anything you cannot copy from the records' text. " +
+                "A figure you worked out yourself from what was read (a sum, a product, a solution) is kept: mark it worked_out in figures."
+            if case .success(let second) = await Self.answer(ai, user: retry, image: image, looking: lookedLive, trace: &trace) {
                 final = second
                 trace.add("repair round")
             }
@@ -592,7 +593,7 @@ actor QueryEngine {
                 "Re-read it and its episode. If it answers the question, even in other words, from a sign, plaque or advertisement, " +
                 "or from the order of frames in its episode, give that answer with found true and label GORDUM. " +
                 "If it really does not, keep BILMIYORUM."
-            if case .success(let second) = await Self.answer(ai, user: retry, image: image, trace: &trace),
+            if case .success(let second) = await Self.answer(ai, user: retry, image: image, looking: lookedLive, trace: &trace),
                AnswerLabel(rawValue: second.label.uppercased()) == .seen, second.found != false,
                Self.rejection(second, hits: pool, extra: safetyText, liveLook: lookedLive && (second.used_ids ?? []).isEmpty) == nil {
                 final = second
@@ -623,11 +624,18 @@ actor QueryEngine {
         let readFromText = draft.quotes.contains { !$0.hasPrefix("(") && EvidenceRule.quoteSupported($0, in: ocr) }
             || !EvidenceRule.numberRuns(draft.answer).isEmpty
         guard !readFromText else { return nil }
+        // Every frame the answer cites, not just the first: "what came right after the pharmacy"
+        // cites the pharmacy and the thing after it, and only one of the two photos shows the
+        // thing claimed. (With the first photo alone, such answers were withdrawn as soon as the
+        // check became fast enough to always finish: 4 of 68 on 14 Nov.)
         let used = Set(draft.used_ids ?? [])
-        guard let record = evidence.flatMap(\.allRecords).first(where: { used.contains($0.id) }) ?? evidence.first?.record,
-              let jpeg = try? Data(contentsOf: store.frameURL(record)) else { return nil }
+        var cited = evidence.flatMap(\.allRecords).filter { used.contains($0.id) }
+        if cited.isEmpty, let first = evidence.first?.record { cited = [first] }
+        let frames = cited.prefix(4).compactMap { try? Data(contentsOf: store.frameURL($0)) }
+        guard let record = cited.first, let jpeg = frames.count == 1 ? frames[0] : Self.montage(jpegs: frames) else { return nil }
         let ai = ai
         let user = "Question: \(question)\nClaim: \(draft.answer)"
+            + (frames.count > 1 ? "\nThe picture is a sheet of \(frames.count) photos, numbered." : "")
         let began = ContinuousClock.now
         let verdict = try? await hedged(ai, seconds: 3.5, { host in
             try await ai.chatJSON(LookAgain.Verdict.self, system: LookAgain.system, user: user,
@@ -651,12 +659,16 @@ actor QueryEngine {
     /// The answer call, raced over both hosts of the same model (`hedged`): the host that is
     /// fast right now answers; the other joins after a short wait if the first stays silent.
     /// (Before: Verda got 12 s, then NVIDIA build 20 s, one after the other.)
-    private static func answer(_ ai: NemotronClient, user: String, image: NemotronClient.ImagePart? = nil,
+    private static func answer(_ ai: NemotronClient, user: String, image: NemotronClient.ImagePart? = nil, looking: Bool = false,
                                trace: inout Trace) async -> Result<AnswerDraft, Error> {
         let began = ContinuousClock.now
+        // Looking through the glasses now: working something out from the view is allowed, and
+        // the schema asks which numbers were read and which were calculated.
+        let user = looking ? user + MemoryPrompts.workOutNote : user
+        let schema = looking ? MemoryPrompts.lookAnswerSchema : MemoryPrompts.answerSchema
         let outcome = await hedged(ai, seconds: 20) { host in
             let draft = try await ai.chatJSON(AnswerDraft.self, system: MemoryPrompts.answerSystem, user: user, image: image,
-                                              jsonSchema: MemoryPrompts.answerSchema, schemaName: "answer", maxTokens: 1000,
+                                              jsonSchema: schema, schemaName: "answer", maxTokens: 1000,
                                               temperature: 0, route: host)
             // A reply with no words ("/") is a failed decode, not an answer: the other host's counts.
             guard draft.answer.contains(where: \.isLetter) else {
@@ -868,10 +880,31 @@ actor QueryEngine {
         if !liveLook, let quote = draft.quotes.first(where: { !$0.hasPrefix("(") && !EvidenceRule.quoteSupported($0, in: fullText) }) {
             reasons.append("the quote \"\(quote)\" is not in the text of the records listed in used_ids")
         }
-        let allowed = seenTimes(evidence).union(EvidenceRule.numberRuns(extra).map(EvidenceRule.canonicalNumber))
+        // What the model says it worked out itself (a sum, a solution) is not on any sign. Only
+        // plain figures qualify: nothing with a colon, and nothing as long as a phone number.
+        let worked = draft.derived.flatMap { EvidenceRule.numberRuns($0) }
+            .filter { !$0.contains(":") && EvidenceRule.digits($0).count <= 6 }
+            .map(EvidenceRule.canonicalNumber)
+        let allowed = seenTimes(evidence).union(EvidenceRule.numberRuns(extra).map(EvidenceRule.canonicalNumber)).union(worked)
         let missing = EvidenceRule.unsupportedNumbers(in: draft.answer, ocr: ocr, allowed: allowed)
         if !missing.isEmpty {
             reasons.append("these numbers are not in the OCR text of the records listed in used_ids: \(missing.joined(separator: ", "))")
+        }
+        // Times said together must be written together in one record: opening hours pieced
+        // together from two signs (or from the store's line and the pharmacy's line) are hours
+        // nobody posted. From the Android side, which caught exactly that on the phone.
+        if reasons.isEmpty {
+            let sources = (evidence.map(mergedOCR) + [extra]).map { text -> Set<String> in
+                Set(text.split(whereSeparator: \.isNewline).flatMap { EvidenceRule.numberRuns(String($0)) }.map(EvidenceRule.canonicalNumber))
+            }
+            for clause in draft.answer.split(whereSeparator: { ".!?;\n".contains($0) }) {
+                let times = Set(EvidenceRule.numberRunsDetailed(String(clause))
+                    .filter { $0.inRange || $0.run.contains(":") }
+                    .map { EvidenceRule.canonicalNumber($0.run) }).subtracting(allowed)
+                guard times.count >= 2, !sources.contains(where: { times.isSubset(of: $0) }) else { continue }
+                reasons.append("the times in “\(clause.trimmingCharacters(in: .whitespaces).prefix(60))” are not written together in any one record: give each record's hours as written, separately")
+                break
+            }
         }
         return reasons.isEmpty ? nil : reasons.joined(separator: "; ")
     }
@@ -923,7 +956,9 @@ actor QueryEngine {
             answer = draft.unclear_reply ?? Self.unclearText
             trace.add("evidence rule rejected")
             Log.pipeline.info("evidence rule rejected “\(draft.answer, privacy: .public)”: \(why, privacy: .public)")
-        } else if label == .seen, draft.support == .inferred {
+        } else if label == .seen, draft.support == .inferred, draft.derived.isEmpty {
+            // (An answer whose point is a figure worked out from what was read — a sum, a
+            // solution — keeps its conclusion: that is what was asked for.)
             label = .unsure
             let ocr = evidence.map(Self.mergedOCR).joined(separator: "\n")
             if let observations = draft.observations, !observations.isEmpty,
@@ -1056,14 +1091,15 @@ actor QueryEngine {
 /// The visual re-check's prompt (see `QueryEngine.lookAgain`).
 enum LookAgain {
     static let system = """
-    You check one claim against one photo from the user's camera glasses (faces are blurred). \
-    The claim answers the user's question about something they saw. Decide whether this photo \
-    clearly shows what the claim says was there. A thing only shown in a picture on a poster, \
+    You check one claim against a photo from the user's camera glasses, or a sheet of a few \
+    numbered photos (faces are blurred). The claim answers the user's question about something \
+    they saw. Decide whether the photo, or any one photo on the sheet, clearly shows what the \
+    claim says was there. A thing only shown in a picture on a poster, \
     banner or screen counts only if the claim says it was a picture. Printed things (signs, QR \
     codes, logos) count as what they are. Where and when it was (street, city, place name, \
     time, what came before or after) come from the phone's location, clock and other photos, \
     not from this one: leave that part of the claim out and check only the thing itself. If \
-    the photo does not clearly show the thing, confirmed is false. Output one JSON object: {"confirmed": boolean, "seen": "a few words on what the \
+    no photo clearly shows the thing, confirmed is false. Output one JSON object: {"confirmed": boolean, "seen": "a few words on what the \
     photo shows there"}.
     """
 

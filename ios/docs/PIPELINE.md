@@ -149,6 +149,20 @@ Telefonda (gözlükle) `silence→sound` ölçümü henüz yapılmadı.
 - **Etkinlik ve bağlantı düğmeleri:** anı ekranında tarih, web adresi, e-posta ve adres de algılanır (`UI/Memory/MemoryDetections.swift`).
 - **Ajan:** kendiliğinden devreye giren taraf ayrı belgede: `AGENT.md`.
 
+## 7b. Yeni model uçları (14 Kasım akşamı)
+
+Ekibin kendi Verda kapsayıcıları (`NemotronClient.muistiChatBase`, `muistiRetrievalBase`): sohbet `…/muisti-nemotron/v1`, embedding `…/muisti-retrieval/v2/embed`, sıralama `…/muisti-retrieval/classify` (istek başına bir çift; hepsi aynı anda gönderilir). Tek anahtar ikisinde de geçer.
+
+| Çağrı | Yeni uç | Önceki |
+|---|---|---|
+| Kısa sohbet cevabı | 0,12–0,19 s | 0,2–14 s (paylaşılan kapsayıcı) |
+| Araç çağrısı (kısa) | 0,26 s | ~0,8 s |
+| Embedding | 0,03–0,2 s | 0,3–0,9 s (NVIDIA) |
+| 12–20 kaydın sıralaması | 0,4–0,6 s | 0,4–3,8 s; akşam çoğu 3 s sınırını aştı |
+| Resimli kısa cevap, 512 / 1024 / 1792 px | 0,5 / 0,6 / 0,85 s | NVIDIA 2–4 s |
+
+Vektörler NVIDIA'daki modelle aynı çıktı (metin kosinüs 1,0000, görsel 0,9999): kayıtlı vektörler geçerli, yeniden işleme yok. Kayıtlı ayarlar ilk açılışta yeni uçlara taşınır. Anahtar, depoya girmeyen `Muisti/Resources/Secrets.plist` dosyasından derlemeye gömülür ve ilk açılışta Keychain'e yazılır.
+
 ## 8. Bilinen açıklar
 
 - Bakıştan sonraki takip sorusunda model bazen yeniden bakmak yerine az önceki kareyi kaynak gösteriyor (cevap doğru, yol farklı).

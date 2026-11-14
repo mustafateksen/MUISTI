@@ -17,6 +17,9 @@ struct Proposal: Sendable {
     var expires: Date?
     /// From a frame that was processed long after it was taken (a background recording).
     var late = false
+    /// Something the user started and is waiting for (turn-by-turn directions): spoken whatever
+    /// the daily budget and the gap say. Quiet hours, mutes and the main switch still apply.
+    var expected = false
 }
 
 /// The one gate everything Muisti says unasked goes through — safety warnings and agent
@@ -74,7 +77,7 @@ final class InterventionPolicy {
         var entry = Intervention(at: now, source: p.source, topic: p.topic, urgency: p.urgency, level: level, text: p.text,
                                  language: p.language, intentID: p.intentID, recordID: p.recordID, reason: reason)
         // Can wait and the user is driving: held for the next quiet moment (`release`).
-        if level >= .chime, p.urgency != .safety, activity() == .automotive {
+        if level >= .chime, p.urgency != .safety, !p.expected, activity() == .automotive {
             entry.reason = "held: the user is in a vehicle"
             entry.id = await store.insert(entry)
             held.append((p, now, entry.id))
@@ -141,6 +144,7 @@ final class InterventionPolicy {
         }
         guard level == .spoken else { return (level, reason) }
         if settings.isQuiet(now) { return (.notification, "quiet hours") }
+        if p.expected { return (.spoken, reason) }
         let today = Calendar.current.startOfDay(for: now)
         let spoken = recent.filter { $0.level == .spoken && $0.urgency != .safety && $0.at >= today }
         if spoken.count >= settings.dailySpokenBudget { return (.notification, "today's spoken budget (\(settings.dailySpokenBudget)) is used up") }

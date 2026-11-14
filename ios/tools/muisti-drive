@@ -1,0 +1,173 @@
+#!/usr/bin/env python3
+"""Drive a DEBUG build of Muisti from outside: show it a video or photos as if the glasses saw
+them, talk to it, and read what it answered and what it brought up by itself.
+
+The app must be running with  --remote-driver=<port>|<token>  (see ios/docs/REMOTE_DRIVER.md).
+
+Environment:
+  MUISTI_DRIVER_TOKEN   the token the app was started with (required; never printed)
+  MUISTI_DRIVER_URL     default http://127.0.0.1:8765
+
+Commands:
+  state                         what Muisti keeps and where things stand (JSON)
+  ask "<question>"              ask like a user; prints the answer, label, evidence
+  frame <photo.jpg> [--no-store]  show one photo as what the glasses see now
+  video <file.mp4|.mov> [--step 1.0] [--speed 4] [--track track.json] [--motion walking] [--upload]
+                                play a video as the glasses' view (a frame every STEP s of the
+                                video, SPEED times faster than real time; 0 = as fast as possible)
+                                (the file is uploaded automatically when the app is not on this Mac)
+  evidence <record id> <out.jpg>  save the stored (blurred) frame of a memory record
+  events [--since N] [--all]    what Muisti said or kept to itself since entry N
+  wait [--timeout 180]          until the video is fed and every frame is processed
+  location <lat> <lon> [--course DEG] [--speed M/S]
+  motion <stationary|walking|running|cycling|automotive>
+  reply <yes|no|not_now>        answer Muisti's pending question
+  tick                          let the agent look at the clock and position now
+  reset --yes                   delete all memories, rules and notes in the app
+"""
+import json, os, sys, urllib.request, urllib.error
+
+BASE = os.environ.get("MUISTI_DRIVER_URL", "http://127.0.0.1:8765").rstrip("/")
+TOKEN = os.environ.get("MUISTI_DRIVER_TOKEN", "")
+STATE_FILE = os.path.expanduser("~/.muisti-drive-last-event")
+
+
+def call(method, path, body=None, raw=None, content_type="application/json", timeout=600):
+    if not TOKEN:
+        sys.exit("MUISTI_DRIVER_TOKEN is not set")
+    data = raw if raw is not None else (json.dumps(body).encode() if body is not None else None)
+    request = urllib.request.Request(BASE + path, data=data, method=method)
+    request.add_header("Authorization", "Bearer " + TOKEN)
+    if data is not None:
+        request.add_header("Content-Type", content_type)
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return json.loads(response.read() or b"{}")
+    except urllib.error.HTTPError as error:
+        try:
+            return {"http_error": error.code, **json.loads(error.read() or b"{}")}
+        except Exception:
+            return {"http_error": error.code}
+    except urllib.error.URLError as error:
+        sys.exit(f"cannot reach the app at {BASE}: {error.reason} (is it running with --remote-driver?)")
+
+
+def option(args, name, default=None, cast=str):
+    if name in args:
+        index = args.index(name)
+        value = cast(args[index + 1])
+        del args[index:index + 2]
+        return value
+    return default
+
+
+def flag(args, name):
+    if name in args:
+        args.remove(name)
+        return True
+    return False
+
+
+def show(result):
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+
+
+def print_events(result):
+    for e in result.get("events", []):
+        line = f"#{e['id']} {e['at'][11:19]} [{e['level']}] {e['source']}/{e['topic']}: {e['text']}"
+        if e.get("reason"):
+            line += f"   ({e['reason']})"
+        print(line)
+    return result.get("last", 0)
+
+
+def main():
+    args = sys.argv[1:]
+    if not args or args[0] in ("-h", "--help", "help"):
+        print(__doc__)
+        return
+    command, args = args[0], args[1:]
+    if command == "state":
+        show(call("GET", "/state"))
+    elif command == "ask":
+        result = call("POST", "/ask", {"text": " ".join(args)})
+        if "answer" not in result:
+            show(result)
+            return
+        print(f"[{result['label']}] {result['answer']}")
+        for e in result.get("evidence", []):
+            print(f"   evidence #{e['id']} {e['title']} ({e['seen_at']}) {e['frame']}")
+        print(f"   {result['latency_ms']} ms" + (" · looked through the glasses" if result.get("looked_live") else "")
+              + (" · expects a reply" if result.get("expects_reply") else ""))
+        if "--trace" in sys.argv:
+            print("   " + result.get("trace", ""))
+    elif command == "frame":
+        store = not flag(args, "--no-store")
+        with open(args[0], "rb") as handle:
+            show(call("POST", "/frame" + ("" if store else "?store=0"), raw=handle.read(), content_type="image/jpeg"))
+    elif command == "video":
+        step = option(args, "--step", 1.0, float)
+        speed = option(args, "--speed", 4.0, float)
+        track_file = option(args, "--track")
+        motion = option(args, "--motion")
+        upload = flag(args, "--upload") or not any(h in BASE for h in ("127.0.0.1", "localhost"))
+        path = os.path.abspath(args[0])
+        if upload:
+            query = f"?step={step}&speed={speed}" + (f"&motion={motion}" if motion else "")
+            with open(path, "rb") as handle:
+                kind = "video/quicktime" if path.lower().endswith(".mov") else "video/mp4"
+                show(call("POST", "/video" + query, raw=handle.read(), content_type=kind))
+        else:
+            body = {"path": path, "step": step, "speed": speed}
+            if motion:
+                body["motion"] = motion
+            if track_file:
+                body["track"] = json.load(open(track_file))
+            show(call("POST", "/video", body))
+    elif command == "evidence":
+        if not TOKEN:
+            sys.exit("MUISTI_DRIVER_TOKEN is not set")
+        request = urllib.request.Request(BASE + f"/evidence?id={int(args[0])}")
+        request.add_header("Authorization", "Bearer " + TOKEN)
+        try:
+            with urllib.request.urlopen(request, timeout=60) as response:
+                open(args[1], "wb").write(response.read())
+            print("saved", args[1])
+        except urllib.error.HTTPError as error:
+            sys.exit(f"no frame for record {args[0]} ({error.code})")
+    elif command == "events":
+        since = option(args, "--since", None, int)
+        if since is None:
+            since = 0 if flag(args, "--all") or not os.path.exists(STATE_FILE) else int(open(STATE_FILE).read() or 0)
+        last = print_events(call("GET", f"/events?since={since}"))
+        open(STATE_FILE, "w").write(str(last))
+    elif command == "wait":
+        timeout = option(args, "--timeout", 180, float)
+        show(call("GET", f"/wait-idle?timeout={timeout}", timeout=timeout + 30))
+    elif command == "location":
+        course = option(args, "--course", None, float)
+        speed = option(args, "--speed", None, float)
+        body = {"lat": float(args[0]), "lon": float(args[1])}
+        if course is not None:
+            body["course"] = course
+        if speed is not None:
+            body["speed"] = speed
+        show(call("POST", "/location", body))
+    elif command == "motion":
+        show(call("POST", "/motion", {"kind": args[0]}))
+    elif command == "reply":
+        show(call("POST", "/reply", {"answer": args[0]}))
+    elif command == "tick":
+        show(call("POST", "/tick", {}))
+    elif command == "reset":
+        if "--yes" not in args:
+            sys.exit("this deletes everything in the app; add --yes")
+        show(call("POST", "/reset", {"confirm": "yes"}))
+        if os.path.exists(STATE_FILE):
+            os.remove(STATE_FILE)
+    else:
+        sys.exit(f"unknown command {command}; run with --help")
+
+
+if __name__ == "__main__":
+    main()

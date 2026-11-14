@@ -49,6 +49,10 @@ final class AgentCenter {
     @ObservationIgnored private var judging = false
     @ObservationIgnored private var waitingNotice: EnrichmentWorker.Noticed?
     @ObservationIgnored private var navigator = Navigator()
+    /// The walking route to the destination, when Apple Maps found one.
+    private(set) var route: RouteGuide?
+    @ObservationIgnored private var routeBusy = false
+    @ObservationIgnored private var lastReroute: Date?
     @ObservationIgnored private var placeLookups: [String: (at: CLLocation, when: Date)] = [:]
     @ObservationIgnored private var wasHome: Bool?
     @ObservationIgnored private var drivingSince: Date?
@@ -202,6 +206,11 @@ final class AgentCenter {
                 line += " — not found on the map; watching for its sign"
             }
             lines.append(line)
+            if let route, let fix {
+                var guide = "Walking route (Apple Maps): \(distanceText(route.remainingMeters)) left"
+                if let next = route.upcoming(from: fix.clLocation) { guide += "; next turn in \(distanceText(next.meters)): \(next.instruction)" }
+                lines.append(guide)
+            }
         } else {
             lines.append("Destination: (none)")
         }
@@ -265,10 +274,13 @@ final class AgentCenter {
             await resolvePlace(&intent)
             await save(intent)
             navigator.reset(target: intent.id)
+            route = nil
+            Task { await self.planRoute(announce: true) }
             Trace.note("agent destination “\(name)” → \(intent.coordinate.map { String(format: "%.4f, %.4f", $0.latitude, $0.longitude) } ?? "not found")")
         case .cancelDestination:
             for old in intents where old.kind == .destination { await close(old, as: .dropped) }
             navigator.reset(target: nil)
+            route = nil
         case .complete(let id):
             guard let intent = intents.first(where: { $0.id == id }) else { return nil }
             await close(intent, as: .done)
@@ -556,7 +568,9 @@ final class AgentCenter {
             return memory.frameURL(record)
         }()
         if let offer = outcome.offer, let start = Cue(at: offer.start).nextDue(after: now), start > now {
-            if let why = Notice.check(offer.question, shown: user) {
+            // Only the frame's own text counts for the date: the situation is full of other numbers.
+            let dated = Notice.dateWritten(start, shown: (record ?? "") + "\n" + related.joined(separator: "\n"))
+            if let why = Notice.check(offer.question, shown: user) ?? (dated ? nil : "the event's day and hour are not written in the record") {
                 await logSilent(topic: "calendar_offer", text: offer.question, reason: "refused: \(why)", recordID: recordID)
             } else {
                 pending = .calendar(title: offer.title, start: start, minutes: offer.minutes ?? 60, location: offer.location)
@@ -753,6 +767,9 @@ final class AgentCenter {
                         candidates: [target], expires: now.addingTimeInterval(120), now: now)
             if let current = intents.first(where: { $0.id == target.id }), current.status == .open { await close(current, as: .done) }
             navigator.reset(target: nil)
+            route = nil
+        case .walkingAway where route != nil:
+            break   // with a route, leaving it is handled turn by turn (`navigationFix`)
         case .walkingAway(let meters, let closest, let seconds):
             await judge(happened: "The user said they are going to “\(name)” but has been moving away from it for about \(seconds) seconds: it is now \(distanceText(meters)) away, \(side); the closest they got was \(distanceText(closest)). Tell them which way it is, unless the situation shows they changed their plan.",
                         candidates: [target], expires: now.addingTimeInterval(90), now: now)
@@ -761,6 +778,80 @@ final class AgentCenter {
                 current.snoozeUntil = nil
                 await save(current)
             }
+        }
+    }
+
+    // MARK: Turn by turn
+
+    private static let lengthFormatter: MeasurementFormatter = {
+        let f = MeasurementFormatter()
+        f.unitOptions = .naturalScale
+        f.numberFormatter.maximumFractionDigits = 0
+        return f
+    }()
+
+    private static func spokenDistance(_ meters: Double) -> String {
+        let rounded = meters < 1000 ? (meters / 10).rounded() * 10 : (meters / 100).rounded() * 100
+        return lengthFormatter.string(from: Measurement(value: rounded, unit: UnitLength.meters))
+    }
+
+    /// Asks Apple Maps for a walking route to the destination and, when asked to, says how far
+    /// it is and what to do first.
+    private func planRoute(announce: Bool, rerouting: Bool = false) async {
+        guard settings.navigation, settings.mapSearch, !routeBusy, let target = destination, let coordinate = target.coordinate,
+              let fix = location.freshFix(maxAge: 60) else { return }
+        routeBusy = true
+        defer { routeBusy = false }
+        let name = target.placeName ?? target.text
+        guard let planned = await RouteGuide.plan(from: fix.clLocation.coordinate, to: coordinate, name: name) else {
+            Trace.note("agent route: none to “\(name)”")
+            return
+        }
+        guard destination?.id == target.id else { return }
+        route = planned
+        Trace.note("agent route to “\(name)”: \(Int(planned.meters)) m, \(Int(planned.seconds / 60)) min, \(planned.steps.count) steps")
+        guard announce else { return }
+        let minutes = max(1, Int((planned.seconds / 60).rounded()))
+        let summary = rerouting
+            ? String(localized: "New route: \(Self.spokenDistance(planned.meters)), \(minutes) min.")
+            : String(localized: "\(name): \(Self.spokenDistance(planned.meters)), \(minutes) min on foot.")
+        await policy.submit(Proposal(topic: "navigation", urgency: .timely, text: [summary, planned.firstInstruction].compactMap { $0 }.joined(separator: " "),
+                                     language: language(), intentID: target.id, expected: true))
+    }
+
+    /// Every GPS fix while a route is being followed: the next turn as the user comes up to it,
+    /// a new route when they have left this one, and arrival.
+    func navigationFix(_ fix: LocationFix) async {
+        guard settings.enabled, settings.navigation, let target = destination, let coordinate = target.coordinate else { return }
+        let here = fix.clLocation
+        if here.distance(from: CLLocation(latitude: coordinate.latitude, longitude: coordinate.longitude)) <= Navigator.arriveWithin + 10 {
+            await followDestination(fix, now: fix.timestamp)
+            return
+        }
+        guard fix.accuracy <= 50 else { return }
+        guard var guide = route else {
+            // No route yet (said before there was a GPS fix, or the service did not answer): tried again.
+            if lastReroute.map({ fix.timestamp.timeIntervalSince($0) > 30 }) ?? true {
+                lastReroute = fix.timestamp
+                await planRoute(announce: true)
+            }
+            return
+        }
+        let event = guide.update(here, accuracy: fix.accuracy)
+        route = guide
+        switch event {
+        case .turn(let instruction, let meters):
+            let text = meters > 12 ? String(localized: "In \(Self.spokenDistance(meters)): \(instruction)") : instruction
+            await policy.submit(Proposal(topic: "navigation", urgency: .timely, text: text, language: language(), intentID: target.id,
+                                         expires: fix.timestamp.addingTimeInterval(20), expected: true), now: fix.timestamp)
+        case .offRoute(let meters):
+            guard lastReroute.map({ fix.timestamp.timeIntervalSince($0) > 30 }) ?? true else { return }
+            lastReroute = fix.timestamp
+            Trace.note("agent route: \(Int(meters)) m off the route, asking for a new one")
+            route = nil
+            await planRoute(announce: true, rerouting: true)
+        case nil:
+            break
         }
     }
 
@@ -831,7 +922,9 @@ final class AgentCenter {
     Two to four short spoken sentences in the user's language, addressed to them: where they \
     were and what stood out, what is still open among their intents, and what is in their \
     calendar next. Only what the lines below say, with times and figures exactly as written; \
-    nothing invented, no advice. If the lines hold nothing from today, say in one sentence that \
+    nothing invented, no advice. Leave out whatever is empty (no open reminders, nothing in the \
+    calendar) instead of saying so, and never use the words "intent", "record" or "frame". If \
+    the lines hold nothing from today, say in one sentence that \
     there is nothing to sum up yet.
     """
 

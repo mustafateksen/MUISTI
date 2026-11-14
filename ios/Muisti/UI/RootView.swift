@@ -13,6 +13,8 @@ struct RootView: View {
     @Environment(\.scenePhase) private var scenePhase
     private var signals: AppSignals { AppSignals.shared }
 
+    @State private var showAgentNotes = false
+
     var body: some View {
         // `Tab` needs iOS 18; the deployment target is 17.2, so tabs use `tabItem`.
         TabView(selection: $tab) {
@@ -37,8 +39,16 @@ struct RootView: View {
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { handleListenRequest() }
         }
+        .sheet(isPresented: $showAgentNotes) {
+            NavigationStack { AgentNotesView(controller: controller) }
+        }
         .task {
             #if DEBUG
+            // `--show-agent-notes`: the assistant notes screen (screenshots).
+            if ProcessInfo.processInfo.arguments.contains("--show-agent-notes") {
+                try? await Task.sleep(for: .seconds(4))
+                showAgentNotes = true
+            }
             // `--tab=ask|memory`: open on a tab (screenshots, UI checks).
             if let arg = ProcessInfo.processInfo.arguments.first(where: { $0.hasPrefix("--tab=") }) {
                 switch arg.dropFirst(6) {

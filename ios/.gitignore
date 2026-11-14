@@ -4,3 +4,6 @@ build/
 *.xcuserstate
 .DS_Store
 __pycache__/
+
+# Keys bundled into local builds only (never committed)
+Muisti/Resources/Secrets.plist

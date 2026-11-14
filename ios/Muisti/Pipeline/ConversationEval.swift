@@ -84,6 +84,40 @@ enum ConversationEval {
         var frame: (jpeg: Data, ocr: String, at: Date)?
     }
 
+    /// "Can it do this with what I am looking at?": each entry of `Documents/<folder>/tests.json`
+    /// (`file`, `say`, `must`) is asked as a fresh conversation with that photo as the live
+    /// view. Writes `look_result.txt` and `LOOKTEST` log lines.
+    static func runLookTest(controller: CaptureController, folder: String) async {
+        struct Case: Decodable { let file: String; let say: String; let must: [String] }
+        guard let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { return }
+        let dir = documents.appendingPathComponent(folder, isDirectory: true)
+        guard let data = try? Data(contentsOf: dir.appendingPathComponent("tests.json")),
+              let cases = try? JSONDecoder().decode([Case].self, from: data) else { return }
+        let engine = controller.queryEngine
+        let box = LiveBox()
+        await engine.setLiveView { box.frame }
+        var lines: [String] = []
+        var passed = 0
+        for test in cases {
+            await engine.clearConversation()
+            guard let raw = try? Data(contentsOf: dir.appendingPathComponent(test.file)),
+                  let copy = await Task.detached(operation: { SafetyFrame.prepare(raw, maxPixel: 1536, fromPipeline: false) }).value else {
+                lines.append("SKIP \(test.file): could not be prepared")
+                continue
+            }
+            box.frame = (copy.jpeg, copy.ocr, Date())
+            let result = await engine.ask(test.say, location: nil)
+            let answer = result.answer.lowercased()
+            let ok = test.must.allSatisfy { answer.contains($0.lowercased()) }
+            if ok { passed += 1 }
+            let line = "\(ok ? "PASS" : "FAIL") \(test.file) “\(test.say)” → [\(result.label.rawValue)] \(result.answer) · \(result.latencyMs) ms · \(result.trace ?? "")"
+            lines.append(line)
+            Log.pipeline.info("LOOKTEST \(line, privacy: .public)")
+        }
+        lines.insert("LOOKTEST SUMMARY \(passed)/\(cases.count)", at: 0)
+        try? lines.joined(separator: "\n").write(to: dir.appendingPathComponent("look_result.txt"), atomically: true, encoding: .utf8)
+    }
+
     static func run(controller: CaptureController, folder: String) async {
         guard let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { return }
         let dir = documents.appendingPathComponent(folder, isDirectory: true)

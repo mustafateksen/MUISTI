@@ -120,6 +120,28 @@
         }
       }
     },
+    "%@: %@, %lld min on foot." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@: %2$@, %3$lld min on foot."
+          }
+        },
+        "fi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@: %@, %lld min kävellen."
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@: %@, yürüyerek %lld dk."
+          }
+        }
+      }
+    },
     "%lld" : {
       "localizations" : {
         "fi" : {
@@ -3089,6 +3111,28 @@
         }
       }
     },
+    "In %@: %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "In %1$@: %2$@"
+          }
+        },
+        "fi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Matkaa %@: %@"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ sonra: %@"
+          }
+        }
+      }
+    },
     "Inspect 1 in %lld stream frames" : {
       "shouldTranslate" : false
     },
@@ -3968,6 +4012,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Yeni sohbet"
+          }
+        }
+      }
+    },
+    "New route: %@, %lld min." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "New route: %1$@, %2$lld min."
+          }
+        },
+        "fi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Uusi reitti: %@, %lld min."
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Yeni rota: %@, %lld dk."
           }
         }
       }

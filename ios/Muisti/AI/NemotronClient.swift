@@ -18,11 +18,23 @@ actor NemotronClient {
         var rerankModel = NemotronClient.defaultRerankModel
         var rerankKey = ""
 
-        var effectiveEmbedURL: URL { embedBaseURL ?? baseURL }
-        var effectiveEmbedKey: String { embedKey.isEmpty ? apiKey : embedKey }
+        /// The team's own retrieval container goes with its chat container unless another host is set.
+        var effectiveEmbedURL: URL { embedBaseURL ?? (baseURL == NemotronClient.muistiChatBase ? NemotronClient.muistiRetrievalBase : baseURL) }
+        /// Embeddings and reranking on the team's Verda retrieval container (`/v2/embed`,
+        /// `/classify`), which takes the same key as the chat container.
+        var usesMuistiRetrieval: Bool { effectiveEmbedURL.host == NemotronClient.muistiRetrievalBase.host }
+        var effectiveEmbedKey: String { usesMuistiRetrieval ? apiKey : (embedKey.isEmpty ? apiKey : embedKey) }
         /// NVIDIA keys work across build.nvidia.com models; a Verda key does not.
         var effectiveRerankKey: String { rerankKey.isEmpty ? embedKey : rerankKey }
     }
+
+    /// The team's Verda containers (Finland), 14 Nov: chat 0.12–0.26 s, embed ~0.1 s, one rerank
+    /// pair ~0.1 s and 20 pairs in parallel 0.37 s. Same models as on build.nvidia.com: text and
+    /// image vectors came back identical (cosine 1.0000 / 0.9999), so stored vectors stay valid.
+    static let muistiChatBase = URL(string: "https://containers.datacrunch.io/muisti-nemotron/v1")!
+    static let muistiRetrievalBase = URL(string: "https://containers.datacrunch.io/muisti-retrieval")!
+    static let muistiEmbedModel = "nemotron-3.5-embed"
+    static let muistiRerankModel = "nemotron-3.5-rerank"
 
     static let defaultRerankModel = "nvidia/nemotron-3.5-rerank-8b"
     static let fallbackRerankModel = "nvidia/llama-nemotron-rerank-vl-1b-v2"
@@ -37,13 +49,14 @@ actor NemotronClient {
         var label: String { self == .verda ? "Verda (Junction)" : "NVIDIA build.nvidia.com" }
         var baseURL: URL {
             switch self {
-            case .verda: return URL(string: "https://containers.datacrunch.io/nemotron-3-5-super-vl-b300/v1")!
+            case .verda: return NemotronClient.muistiChatBase
             case .nvidia: return URL(string: "https://integrate.api.nvidia.com/v1")!
             }
         }
         var chatModel: String { self == .verda ? "nemotron-3.5-super-vl" : "nvidia/nemotron-3.5-super-vl-120b-a12b" }
-        /// Verda serves only the VL model (no /embeddings).
-        var embedModel: String { self == .verda ? "" : "nvidia/nemotron-3.5-embed-1b" }   // single inputs only (batches 500 now and then)
+        /// The name stored next to each vector. Both hosts serve the same embedding model (the
+        /// Verda container calls it `nemotron-3.5-embed`), so one name keeps their vectors together.
+        var embedModel: String { "nvidia/nemotron-3.5-embed-1b" }   // single inputs only (batches 500 now and then)
     }
 
     enum NemotronError: Error, LocalizedError {
@@ -185,7 +198,10 @@ actor NemotronClient {
     /// Set when the configured reranker is gone (404/410) and the fallback answered instead.
     private var rerankOverride: String?
     private var rerankUnavailable = false
-    var rerankEnabled: Bool { !settings.rerankModel.isEmpty && !settings.effectiveRerankKey.isEmpty && !rerankUnavailable }
+    var rerankEnabled: Bool {
+        guard !settings.rerankModel.isEmpty, !rerankUnavailable else { return false }
+        return settings.usesMuistiRetrieval ? !settings.apiKey.isEmpty : !settings.effectiveRerankKey.isEmpty
+    }
     var rerankModelName: String { rerankOverride ?? settings.rerankModel }
 
     // MARK: Chat
@@ -209,7 +225,12 @@ actor NemotronClient {
         !settings.effectiveRerankKey.isEmpty && settings.baseURL.host != Provider.nvidia.baseURL.host
     }
 
-    func chat(system: String, user: String, image: ImagePart? = nil, examples: [(user: String, assistant: String)] = [],
+    /// Several pictures in one request (frames of one moment, oldest first, `image` last) are
+    /// only for the team's chat container, which takes up to 8; elsewhere it is a 400.
+    var multiImageChat: Bool { settings.baseURL == Self.muistiChatBase }
+
+    func chat(system: String, user: String, image: ImagePart? = nil, earlierImages: [ImagePart] = [],
+              examples: [(user: String, assistant: String)] = [],
               jsonSchema: String? = nil, schemaName: String = "record",
               maxTokens: Int = 700, temperature: Double = 0,
               route requested: Route? = nil, background: Bool = false) async throws -> String {
@@ -223,6 +244,12 @@ actor NemotronClient {
                 "type": "image_url",
                 "image_url": ["url": "data:image/jpeg;base64,\(image.jpeg.base64EncodedString())"],
             ])
+        }
+        if let image, !earlierImages.isEmpty {
+            // Pictures in time order first, then the text that refers to them as image 1, 2, …
+            content = (earlierImages.prefix(7) + [image]).map {
+                ["type": "image_url", "image_url": ["url": "data:image/jpeg;base64,\($0.jpeg.base64EncodedString())"]]
+            } + [["type": "text", "text": user]]
         }
         var messages: [[String: Any]] = [["role": "system", "content": system]]
         for example in examples {
@@ -341,10 +368,11 @@ actor NemotronClient {
 
     /// Chat whose answer must be a JSON object; tolerant of code fences / prose around it.
     func chatJSON<T: Decodable>(_ type: T.Type, system: String, user: String, image: ImagePart? = nil,
+                                earlierImages: [ImagePart] = [],
                                 examples: [(user: String, assistant: String)] = [], jsonSchema: String? = nil,
                                 schemaName: String = "record", maxTokens: Int = 700, temperature: Double = 0,
                                 route: Route? = nil, background: Bool = false) async throws -> T {
-        let text = try await chat(system: system, user: user, image: image, examples: examples, jsonSchema: jsonSchema,
+        let text = try await chat(system: system, user: user, image: image, earlierImages: earlierImages, examples: examples, jsonSchema: jsonSchema,
                                   schemaName: schemaName, maxTokens: maxTokens, temperature: temperature,
                                   route: route, background: background)
         guard let json = Self.extractJSONObject(text) else {
@@ -361,8 +389,34 @@ actor NemotronClient {
 
     enum EmbedKind: String { case passage, query }
 
+    /// One input on the team's retrieval container (`/v2/embed`): text, or a picture.
+    private func muistiEmbed(content: [[String: Any]], kind: EmbedKind) async throws -> [Float] {
+        let body: [String: Any] = [
+            "model": Self.muistiEmbedModel,
+            "input_type": kind == .query ? "query" : "document",
+            "embedding_types": ["float"],
+            "truncate": "END",
+            "inputs": [["content": content]],
+        ]
+        let data = try await post(Self.muistiRetrievalBase.appendingPathComponent("v2/embed"), json: body, key: settings.apiKey)
+        guard
+            let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let vector = ((root["embeddings"] as? [String: Any])?["float"] as? [[Double]])?.first, !vector.isEmpty
+        else { throw NemotronError.badResponse("missing embedding") }
+        return vector.map(Float.init)
+    }
+
     func embed(_ text: String, as kind: EmbedKind) async throws -> [Float] {
         guard embeddingsEnabled else { throw NemotronError.badResponse("embeddings off") }
+        if settings.usesMuistiRetrieval {
+            do {
+                return try await muistiEmbed(content: [["type": "text", "text": String(text.prefix(4000))]], kind: kind)
+            } catch NemotronError.http(let status, let message) where status == 404 {
+                embeddingsUnavailable = true
+                Log.net.info("embeddings unavailable on the retrieval container (\(status)); keyword search only")
+                throw NemotronError.http(status, message)
+            }
+        }
         var body: [String: Any] = [
             "model": settings.embedModel,
             "input": [String(text.prefix(4000))],
@@ -397,7 +451,8 @@ actor NemotronClient {
     private var imageEmbeddingsUnavailable = false
 
     var imageEmbeddingsEnabled: Bool {
-        embeddingsEnabled && !imageEmbeddingsUnavailable && settings.effectiveEmbedURL.host?.hasSuffix("nvidia.com") == true
+        embeddingsEnabled && !imageEmbeddingsUnavailable
+            && (settings.usesMuistiRetrieval || settings.effectiveEmbedURL.host?.hasSuffix("nvidia.com") == true)
     }
 
     /// A keyframe as a passage vector. nemotron-3.5-embed-1b puts images in the same space as
@@ -407,6 +462,15 @@ actor NemotronClient {
         guard imageEmbeddingsEnabled else { throw NemotronError.badResponse("image embeddings off") }
         // The model's default longest edge is 1120 px.
         let image = ImageData.downscaledJPEG(jpeg, maxPixel: 1024, quality: 0.8)
+        if settings.usesMuistiRetrieval {
+            do {
+                return try await muistiEmbed(content: [["type": "image_url", "image_url": ["url": "data:image/jpeg;base64,\(image.base64EncodedString())"]]],
+                                             kind: .passage)
+            } catch NemotronError.http(let status, let message) where status == 404 {
+                imageEmbeddingsUnavailable = true
+                throw NemotronError.http(status, message)
+            }
+        }
         let url = settings.effectiveEmbedURL.appendingPathComponent("embeddings")
         let key = settings.effectiveEmbedKey
         // Verified on the live endpoint: images need input_type "passage" ("" is a 400).
@@ -441,6 +505,7 @@ actor NemotronClient {
     func rerank(query: String, passages: [String], paced: Bool = false) async throws -> [Double] {
         guard rerankEnabled else { throw NemotronError.badResponse("reranking off") }
         guard !passages.isEmpty else { return [] }
+        if settings.usesMuistiRetrieval { return try await muistiRerank(query: query, passages: passages) }
         let model = rerankModelName
         do {
             return try await rerank(query: query, passages: passages, model: model, paced: paced)
@@ -453,6 +518,53 @@ actor NemotronClient {
             rerankOverride = Self.fallbackRerankModel
             return try await rerank(query: query, passages: passages, model: Self.fallbackRerankModel, paced: paced)
         }
+    }
+
+    /// The team's retrieval container scores one (query, passage) pair per request (`/classify`):
+    /// all pairs go out at once and come back in about the time of one. A pair that fails keeps
+    /// the lowest score; if every pair fails, the error is thrown.
+    private func muistiRerank(query: String, passages: [String]) async throws -> [Double] {
+        let url = Self.muistiRetrievalBase.appendingPathComponent("classify")
+        let key = settings.apiKey
+        let asked = String(query.prefix(500))
+        var logits = [Double](repeating: -.infinity, count: passages.count)
+        var lastError: Error?
+        let results = await withTaskGroup(of: (Int, Result<Double, Error>).self) { group -> [(Int, Result<Double, Error>)] in
+            for (index, passage) in passages.enumerated() {
+                let body: [String: Any] = [
+                    "model": Self.muistiRerankModel,
+                    "add_special_tokens": false,
+                    "use_activation": false,
+                    "messages": [
+                        ["role": "query", "content": [["type": "text", "text": asked]]],
+                        ["role": "document", "content": [["type": "text", "text": String(passage.prefix(1200))]]],
+                    ],
+                ]
+                let payload = try? JSONSerialization.data(withJSONObject: body)
+                group.addTask {
+                    do {
+                        guard let payload else { throw NemotronError.badResponse("rerank body") }
+                        let data = try await self.post(url, payload: payload, key: key, maxAttempts: 2)
+                        guard
+                            let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                            let score = ((root["data"] as? [[String: Any]])?.first?["probs"] as? [Double])?.first
+                        else { throw NemotronError.badResponse("missing rerank score") }
+                        return (index, .success(score))
+                    } catch { return (index, .failure(error)) }
+                }
+            }
+            var all: [(Int, Result<Double, Error>)] = []
+            for await item in group { all.append(item) }
+            return all
+        }
+        for (index, result) in results {
+            switch result {
+            case .success(let score): logits[index] = score
+            case .failure(let error): lastError = error
+            }
+        }
+        if let lastError, logits.allSatisfy({ $0 == -.infinity }) { throw lastError }
+        return logits
     }
 
     private func rerank(query: String, passages: [String], model: String, paced: Bool) async throws -> [Double] {
@@ -485,8 +597,13 @@ actor NemotronClient {
 
     private func post(_ url: URL, json: [String: Any], key: String, maxAttempts: Int = 4, background: Bool = false,
                       paced: Bool = false) async throws -> Data {
+        try await post(url, payload: try JSONSerialization.data(withJSONObject: json), key: key, maxAttempts: maxAttempts,
+                       background: background, paced: paced)
+    }
+
+    private func post(_ url: URL, payload: Data, key: String, maxAttempts: Int = 4, background: Bool = false,
+                      paced: Bool = false) async throws -> Data {
         guard !key.isEmpty else { throw NemotronError.missingKey }
-        let payload = try JSONSerialization.data(withJSONObject: json)
         var attempt = 0
         while true {
             attempt += 1

@@ -214,7 +214,7 @@ enum AgentEval {
         agent.policy.chime = { box.add("(chime)") }
         if let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first,
            let files = try? FileManager.default.contentsOfDirectory(at: documents.appendingPathComponent("agentset"), includingPropertiesForKeys: nil) {
-            for file in files.filter({ $0.pathExtension == "jpg" }).sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
+            for file in files.filter({ $0.pathExtension == "jpg" && !$0.lastPathComponent.hasPrefix("priv_") }).sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
                 guard let raw = try? Data(contentsOf: file), let prepared = await SafetyFrame.prepare(raw, maxPixel: 1536, fromPipeline: false),
                       let extracted = try? await controller.ai.chatJSON(ExtractedRecord.self, system: MemoryPrompts.extractionSystem,
                                                                         user: MemoryPrompts.extractionUser(ocr: prepared.ocr), image: .init(jpeg: prepared.jpeg),
@@ -271,10 +271,40 @@ enum AgentEval {
         _ = await agent.handle(.setDestination("Kiasma"), now: clock)
         let goal = agent.intents.first { $0.kind == .destination }
         check("destination: found on the map", goal?.coordinate != nil, "\(goal?.placeName ?? "-")")
+        // Turn by turn: Apple Maps is asked for the walking route, then the route is walked.
+        for _ in 0..<40 where agent.route == nil { try? await Task.sleep(for: .milliseconds(250)) }
+        if var walk = agent.route {
+            check("route: Apple Maps gives a walking route with turns", walk.steps.count >= 2,
+                  "\(Int(walk.meters)) m, \(Int(walk.seconds / 60)) min, \(walk.steps.count) steps · said: \(box.all.last ?? "-")")
+            let before = box.all.count
+            let turns = walk.steps.dropFirst().filter { !$0.instruction.isEmpty }.count
+            // Along the route, a fix every ~12 m, up to the last step (arrival is checked below).
+            for step in walk.steps.dropLast() {
+                for (a, b) in zip(step.path, step.path.dropFirst()) {
+                    let length = CLLocation(latitude: a.latitude, longitude: a.longitude).distance(from: CLLocation(latitude: b.latitude, longitude: b.longitude))
+                    let pieces = max(1, Int(length / 12))
+                    for i in 0..<pieces {
+                        let t = Double(i) / Double(pieces)
+                        clock = clock.addingTimeInterval(9)
+                        let fix = CLLocation(coordinate: .init(latitude: a.latitude + (b.latitude - a.latitude) * t, longitude: a.longitude + (b.longitude - a.longitude) * t),
+                                             altitude: 10, horizontalAccuracy: 6, verticalAccuracy: 6, course: -1, speed: 1.3, timestamp: clock)
+                        await agent.navigationFix(LocationFix(fix))
+                    }
+                }
+            }
+            walk = agent.route ?? walk
+            let said = Array(box.all.dropFirst(before))
+            check("route: each turn is said as the user comes up to it", turns > 0 && said.count >= max(1, turns - 1) && said.count <= turns + 1,
+                  "\(said.count) said for \(turns) turns · \(said.prefix(3).joined(separator: " | "))")
+            await at(base.latitude, base.longitude)
+        } else {
+            lines.append("route: Apple Maps gave no walking route (not tested)")
+        }
         if let target = goal?.coordinate {
             // Away from it, 15 m every 10 s, heading the opposite way.
             let away = Places.bearing(from: target, to: base)
             var saidAway = false
+            let beforeAway = box.all.count
             for step in 1...10 {
                 let meters = Double(step) * 15
                 let lat = base.latitude + meters * cos(away * .pi / 180) / 111_320
@@ -283,7 +313,14 @@ enum AgentEval {
                 await at(lat, lon, course: away)
                 if box.all.count > before { saidAway = true; break }
             }
-            check("destination: walking away is said", saidAway, box.all.last ?? agent.lastJudgement)
+            if box.all.count > beforeAway { saidAway = true }
+            // With a route, leaving it means a new route from Apple Maps: that takes a moment.
+            let fromHere = box.all.count
+            for _ in 0..<32 where !saidAway {
+                try? await Task.sleep(for: .milliseconds(250))
+                saidAway = box.all.count > fromHere || box.all.contains { $0.hasPrefix("New route") }
+            }
+            check("destination: leaving the route is said (a new route, or which way it is)", saidAway, box.all.last ?? agent.lastJudgement)
             let before = box.all.count
             await at(target.latitude, target.longitude, course: (away + 180).truncatingRemainder(dividingBy: 360))
             check("destination: arrival is said and the destination closed",
@@ -329,6 +366,65 @@ enum AgentEval {
             await agent.notificationAction(.done, intentID: letter.id, interventionID: nil)
             check("notification “Done”: the intent is closed", !agent.intents.contains { $0.id == letter.id })
         }
+
+        // 10. Private scenes never leave the phone: bathroom photos (`priv_…`) must come back
+        // withheld from the same preparation every outgoing frame goes through.
+        if let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first,
+           let files = try? FileManager.default.contentsOfDirectory(at: documents.appendingPathComponent("agentset"), includingPropertiesForKeys: nil) {
+            let jpgs = files.filter { $0.pathExtension == "jpg" }
+            var withheld = 0, privateCount = 0, passed = 0, ordinary = 0
+            for file in jpgs {
+                guard let raw = try? Data(contentsOf: file) else { continue }
+                guard let image = ImageData.thumbnail(raw, maxPixel: 1280) else { continue }
+                let isPrivate = PerceptionEngine.showsPrivateScene(image)
+                let out = SafetyFrame.prepare(raw, maxPixel: 1280, fromPipeline: false)
+                // Withheld = judged private AND nothing came out of the preparation.
+                if file.lastPathComponent.hasPrefix("priv_") { privateCount += 1; if isPrivate, out == nil { withheld += 1 } }
+                else { ordinary += 1; if !isPrivate, out != nil { passed += 1 } }
+                Log.pipeline.info("AGENT privacy \(file.lastPathComponent, privacy: .public): private \(isPrivate), prepared \(out != nil)")
+            }
+            #if targetEnvironment(simulator)
+            lines.append("privacy: the scene classifier does not run on the simulator (\(passed)/\(ordinary) ordinary photos prepared); run `privacycheck` on a phone")
+            #else
+            check("privacy: bathroom photos are withheld", privateCount > 0 && withheld * 3 >= privateCount * 2, "\(withheld)/\(privateCount)")
+            check("privacy: ordinary photos go through", passed == ordinary, "\(passed)/\(ordinary)")
+            #endif
+        }
+        check("calendar offer: a date that is written passes", Notice.dateWritten(Cue(at: "2026-11-21 19:00").nextDue(after: Date()) ?? Date(), shown: "Jazz night\nSat 21.11. klo 19.00\nTickets 15 €"))
+        check("calendar offer: a date that is not written is refused", !Notice.dateWritten(Cue(at: "2026-11-22 18:00").nextDue(after: Date()) ?? Date(), shown: "Jazz night\nSat 21.11. klo 19.00\nTickets 15 €"))
+
+        // 11. Woken in the background at a place an intent waits for (the wake-up itself is the
+        // system's; what Muisti does with it is run here).
+        await agent.deleteAll()
+        box.clear()
+        var notified: [String] = []
+        let notes = SpokenBox()
+        agent.policy.notify = { text, _, _ in notes.add(text) }
+        let office = CLLocation(coordinate: .init(latitude: 60.1867, longitude: 24.8277), altitude: 5, horizontalAccuracy: 10, verticalAccuracy: 5, timestamp: Date())
+        controller.location.inject(office)
+        _ = await agent.handle(.namePlace("work"))
+        _ = await agent.handle(.remember(text: "hand in the badge", say: "You wanted to hand in your badge.", kind: .reminder, cue: Cue(place: "work")))
+        // Somewhere else first, so arriving is a change.
+        controller.location.inject(CLLocation(coordinate: .init(latitude: 60.20, longitude: 24.90), altitude: 5, horizontalAccuracy: 10, verticalAccuracy: 5, timestamp: Date()))
+        await agent.tick()
+        let quietAway = box.all.isEmpty && notes.all.isEmpty
+        await agent.background.onWake?(CLLocation(coordinate: office.coordinate, altitude: 5, horizontalAccuracy: 10, verticalAccuracy: 5, timestamp: Date()))
+        notified = notes.all + box.all
+        check("background wake at a place: silent away, the reminder comes on arrival", quietAway && !notified.isEmpty, notified.last ?? agent.lastJudgement)
+
+        // 12. The evening summary: once, at its hour.
+        await agent.store.deleteAll()
+        await agent.reload()
+        box.clear(); notes.clear()
+        agent.policy.chime = {}
+        agent.settings.eveningDigest = true
+        agent.settings.digestHour = Calendar.current.component(.hour, from: Date())
+        UserDefaults.standard.removeObject(forKey: "agent.digestDay")
+        await agent.tick()
+        let first = notes.all.count + box.all.count
+        await agent.tick()
+        check("evening summary: made once at its hour", first == 1 && notes.all.count + box.all.count == 1, (notes.all + box.all).last ?? "nothing")
+        agent.settings.digestHour = 20
 
         agent.settings.dailySpokenBudget = 40
         agent.settings.minGapMinutes = 2

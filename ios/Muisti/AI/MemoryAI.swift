@@ -61,6 +61,15 @@ struct AnswerDraft: Codable, Sendable {
     var used_ids: [Int64]?
     var quotes: [String]
     var observations: String?
+    /// Every number in the answer with how the model got it: read off a record, or worked out
+    /// from what was read (a sum, a solution, a conversion). Worked-out figures are not on any
+    /// sign, so the evidence rule does not look for them there.
+    struct Figure: Codable, Sendable {
+        var value: String
+        var how: String
+    }
+    var figures: [Figure] = []
+    var derived: [String] { figures.filter { $0.how == "worked_out" }.map(\.value) }
     var unclear_reply: String?
     var rule: SafetyRule?
     var event: EventDraft?
@@ -106,6 +115,7 @@ struct AnswerDraft: Codable, Sendable {
         used_ids = c.lenientStrings(.used_ids)?.compactMap { Int64($0.filter(\.isNumber)) }
         quotes = (try? c.decodeIfPresent([String].self, forKey: .quotes)) ?? []
         observations = c.lenientString(.observations)
+        figures = (try? c.decodeIfPresent([Figure].self, forKey: .figures)) ?? []
         unclear_reply = c.lenientString(.unclear_reply)
         rule = (try? c.decodeIfPresent(SafetyRule.self, forKey: .rule)) ?? nil
         event = (try? c.decodeIfPresent(EventDraft.self, forKey: .event)) ?? nil
@@ -199,6 +209,10 @@ enum MemoryPrompts {
     "anything else?".
 
     ANSWERING: answer from the records only.
+    - Sound like someone talking, not a search engine: the answer comes in the first few words \
+    and names the thing asked about, then the detail that helps (what it was next to, when). \
+    Never open with "Based on the records", "According to my memory" or "I found"; do not repeat \
+    what the user already heard earlier in the conversation.
     - The "Muisti Turva" section (safety rules, watched objects' last states, safety log) is \
     evidence too. For questions about watched objects, medicines, rules, or what the user told \
     Muisti, answer from it first: it counts as found, with label GORDUM when it answers the \
@@ -325,6 +339,28 @@ enum MemoryPrompts {
     can only read in the picture and not in the record text may be used for words, but never for \
     numbers (the number rule above still holds).
     """ + SafetyPrompts.statusRules
+
+    /// Added to the question when the answer comes from looking through the glasses right now:
+    /// there the user may ask Muisti to do something with what is in front of them, and the
+    /// result is a number that is written nowhere. Memory questions never get this (it made
+    /// "did I see a hotel?" answers looser: negatives 11/11 → 5–8/11 on 14 Nov).
+    static let workOutNote = """
+
+
+    This turn you are looking through the glasses. If the user asks you to do something with \
+    what the live view shows — solve or calculate it, add it up, convert it, translate or \
+    explain it — do it and give the result as your own working ("that makes…"), never as \
+    something written there: that counts as found, label GORDUM, support "stated". After the \
+    answer, in figures, list the numbers the answer says, each as read (it is in the live view) \
+    or worked_out (you calculated it). A phone number, a time, a posted price, an address or a \
+    code is never worked out.
+    """
+
+    /// The answer schema for such a turn: the same, plus `figures`.
+    static let lookAnswerSchema: String = answerSchema
+        .replacingOccurrences(of: #""quotes":{"type":"array","items":{"type":"string"}},"#,
+                              with: #""quotes":{"type":"array","items":{"type":"string"}},"figures":{"type":"array","items":{"type":"object","properties":{"value":{"type":"string"},"how":{"type":"string","enum":["read","worked_out"]}},"required":["value","how"]}},"#)
+        .replacingOccurrences(of: #""used_ids","quotes","#, with: #""used_ids","quotes","figures","#)
 
     static let answerSchema = #"""
     {"type":"object","properties":{

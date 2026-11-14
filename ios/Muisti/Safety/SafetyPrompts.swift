@@ -82,8 +82,8 @@ enum SafetyPrompts {
         """
 
 
-        The picture holds \(frames) frames from the last \(seconds) seconds in time order, numbered \
-        1 (oldest) to \(frames) (now). States, the room and the text below are those of the last \
+        You are shown \(frames) frames from the last \(seconds) seconds in time order, 1 (oldest) to \
+        \(frames) (now): either as \(frames) pictures in that order, or as one sheet with the frames numbered. States, the room and the text below are those of the last \
         frame. Use the earlier frames for what was done: report an action only when the frames \
         show it happening — the same object in one state and then the other with the user's hand \
         on it (a knob turned, a switch flipped, a door locked), or something taken from where it \

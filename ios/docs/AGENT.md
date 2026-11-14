@@ -90,9 +90,24 @@ Onaysız: yalnız Muisti'nin kendi belleğine yazan ve geri alınabilen işler (
 
 Ayarlar › Assistant › "Reminders, places and what Muisti said" (`UI/Agent/AgentNotesView.swift`): açık niyetler (kaydırarak bitir / sil), adlı yerler, kullanıcının söyledikleri ve Muisti'nin kendiliğinden söylediği ya da sustuğu her şeyin günlüğü, nedeniyle.
 
+## Yön tarifi
+
+iOS, başka bir uygulamada (Apple Haritalar, Google Haritalar) çalışan navigasyonu okumaya izin vermiyor; Even Realities ve Meta da kendi rotalarını hesaplıyor. Muisti de öyle yapıyor (`RouteGuide.swift`): kullanıcı "X'e gidiyorum" deyince hedef bulunur, Apple'ın yol tarifi servisinden (`MKDirections`, yürüyüş) rota istenir ve:
+
+- rota hazır olunca özet söylenir ("Kiasma: 300 m, yürüyerek 5 dk. Elielinaukio'dan başla");
+- her dönüş, kullanıcı 28 m yaklaşınca Apple'ın kendi cümlesiyle söylenir ("30 m sonra: Mannerheimintie'ye sağa yönel");
+- rotadan 45 m'den fazla ve art arda 3 konum boyunca çıkılırsa yeni rota istenir ("Yeni rota: 660 m, 9 dk");
+- varışta söylenir ve hedef kapanır.
+
+Bu cümleler günlük bütçeye ve aralık kuralına takılmaz (kullanıcının beklediği şey); sessiz saatler ve susturma geçerlidir. Rota bilgisi modele de verilir: "nerede döneceğim", "ne kadar kaldı" soruları buradan cevaplanır. Rotası bulunamayan hedefte eski davranış sürer (uzaklaşınca yönüyle söylenir, tabelası görülürse söylenir).
+
 ## Kendiliğinden kolladıkları
 
 Zenginleştirmenin işaretine ek olarak üç sabit "görünce" ipucu her karede embedding + rerank ile denenir (`AgentCenter.standing`): yakından görülen ilaç, bırakılmış kişisel eşya, evde açık kalan şey. Eşleşirse hakem, notlara ve güvenlik günlüğüne bakıp söyler ya da sorar.
+
+## Gizlilik kapısı
+
+Banyo, tuvalet ya da duş sahnesi gösteren kare telefondan çıkmaz ve kaydedilmez (`PerceptionEngine.showsPrivateScene`, Apple'ın telefondaki sahne sınıflandırıcısı; fikir Android tarafından). Bellek, güvenlik bakışı ve canlı bakış aynı kapıdan geçer. Mac'te aynı Vision isteğiyle: 11 banyo fotoğrafının 8'i 0,45–0,97 puan aldı (eşik 0,40), 106 sıradan test fotoğrafının en yükseği 0,27. Simülatörde sınıflandırıcı çalışmadığı için orada kapı kapalıdır; telefonda sınıflandırıcı hata verirse kare geri çevrilir.
 
 ## Yapılmayanlar
 
@@ -106,7 +121,7 @@ Zenginleştirmenin işaretine ek olarak üç sabit "görünce" ipucu her karede 
 
 Aşağıdaki sayılar simülatörde `agenteval` ile alınır (`--script-only=waitidle@0,agenteval@1`).
 
-### 14 Kasım, simülatör (73 kayıtlı test belleği)
+### 14 Kasım, simülatör (73 kayıtlı test belleği, son koşu)
 
 | Adım | Sonuç |
 |---|---|
@@ -115,10 +130,17 @@ Aşağıdaki sayılar simülatörde `agenteval` ile alınır (`--script-only=wai
 | Politika (bütçe, aralık, susturma, güvenlik) | 5/5 |
 | Yön hesabı (yaklaşma, uzaklaşma, varış) | 3/3 |
 | "Eczane görünce söyle" niyeti: 5 eczane karesi | 5/5 söylendi |
-| Aynı niyet: 40 başka kare | 0 yanlış alarm |
-| Niyet yokken 25 sıradan kare | 5'i işaretlendi, 0–1'i söylendi (iki koşu) |
-| Girdi olmadan karar (7 fotoğraf: ilaç, yanan ocak, kapalı ocak, anahtar, TV, tabela) | 6/7; yakın çekim bir ilaç blisteri işaretlenmedi |
+| Aynı niyet: 40 başka kare | 0 yanlış alarm; 45 kareden yalnız 5'i hakeme gitti |
+| Niyet yokken 25 sıradan kare | 8'i işaretlendi, 0'ı söylendi |
+| Girdi olmadan karar (7 fotoğraf: 2 ilaç, yanan ocak, kapalı ocak, anahtar, TV, tabela) | 7/7 |
+| Yere bağlı niyet, sahte GPS + gerçek Apple Haritalar | market bulundu, 80 m'de söylendi |
+| Hedef, sahte GPS | uzaklaşınca yönüyle söylendi, varınca söylendi ve kapandı |
+| Park (araç → yürüme) | yer "car" olarak kaydedildi |
+| Takvim (9 dakika sonraki etkinlik) | okundu ve söylendi |
+| Bildirim düğmeleri (Tamam / Sonra / Bir daha söyleme) | 3/3 |
 | Hakem çağrısı süresi | 0,3–1,9 s |
+| Toplam | 43/43 kontrol (tam koşu), 41/41 (hızlı koşu, son sürüm) |
 | Sohbet gerilemesi (29 tur) | 28/29, öncekiyle aynı |
+| Bellek testi (68 soru), yeni zenginleştirme istemiyle baştan işlenmiş | 66/68 · olumsuz 10/11 · recall@1/3/8 49/59/63 · p50 4,8 s (o saatte uç yavaştı); 73 karenin işlenmesi sırasında ajan 0 kez konuştu |
 
-Ölçülmeyenler: gerçek gözlükle saha, yere bağlı niyet (Apple Haritalar araması), yanlış yön uyarısının gerçek GPS ile davranışı, park algılama, takvim, bildirim eylemleri, bellek testi (68 soru) zenginleştirme istemi değiştikten sonra. İşaret (`attention`) aynı karede koşudan koşuya değişebiliyor.
+Ölçülmeyenler: gerçek gözlükle saha; arka plan uyanmaları (bölge, ziyaret, yenileme); kare şeridiyle eylem algılama (elde eylem içeren görüntü yok); akşam özeti zamanlaması. İşaret (`attention`) aynı karede koşudan koşuya değişebiliyor; bu yüzden kişisel eşya için sabit eşleştirme de var.

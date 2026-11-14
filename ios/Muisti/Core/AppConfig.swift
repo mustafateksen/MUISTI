@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import Observation
 
@@ -199,6 +200,18 @@ final class AppConfig {
         if savedEmbed == "nvidia/nemotron-3-embed-1b" { savedEmbed = NemotronClient.Provider.nvidia.embedModel }   // → 3.5, re-embedded in the background
         embedModel = savedEmbed
         embedBaseURL = defaults.string(forKey: "embedBaseURL") ?? ""
+        // 14 Nov: the team's own fast Verda containers (chat + retrieval) replace the shared chat
+        // container and NVIDIA's free-tier retrieval. Stored vectors stay valid (same model).
+        if !defaults.bool(forKey: "migratedMuistiVerda") {
+            defaults.set(true, forKey: "migratedMuistiVerda")
+            apiBaseURL = NemotronClient.muistiChatBase.absoluteString
+            embedBaseURL = ""
+            embedModel = NemotronClient.Provider.verda.embedModel
+            // (`didSet` does not run inside `init`: saved by hand.)
+            defaults.set(NemotronClient.muistiChatBase.absoluteString, forKey: "apiBaseURL")
+            defaults.set("", forKey: "embedBaseURL")
+            defaults.set(NemotronClient.Provider.verda.embedModel, forKey: "embedModel")
+        }
         embedKey = KeychainStore.read("embed-api-key") ?? ""
         rerankModel = defaults.string(forKey: "rerankModel") ?? NemotronClient.defaultRerankModel
         rerankKey = KeychainStore.read("rerank-api-key") ?? ""
@@ -210,7 +223,16 @@ final class AppConfig {
         } else {
             zones = []
         }
-        apiKey = KeychainStore.read("nvidia-api-key") ?? ""
+        var storedKey = KeychainStore.read("nvidia-api-key") ?? ""
+        // A key bundled into a local build (`Resources/Secrets.plist`, git-ignored, absent from
+        // the public repo) goes into the Keychain once per key, so a phone the app was installed
+        // on by cable works without typing it in. A key typed in Settings afterwards stays.
+        if let bundled = Self.bundledKey(), defaults.string(forKey: "bundledKeyApplied") != Self.fingerprint(bundled) {
+            defaults.set(Self.fingerprint(bundled), forKey: "bundledKeyApplied")
+            storedKey = bundled
+            KeychainStore.write(bundled, for: "nvidia-api-key")
+        }
+        apiKey = storedKey
         autoReconnect = defaults.object(forKey: "autoReconnect") as? Bool ?? true
         autoStart = defaults.object(forKey: "autoStart") as? Bool ?? true
         // Always-on listening is off for now (double triggers, video quality): push-to-talk on
@@ -244,6 +266,19 @@ final class AppConfig {
             glassesPhotoRotation: glassesPhotoRotation,
             backgroundCapture: backgroundCapture
         )
+    }
+
+    private static func bundledKey() -> String? {
+        guard let url = Bundle.main.url(forResource: "Secrets", withExtension: "plist"),
+              let values = NSDictionary(contentsOf: url) as? [String: Any],
+              let key = (values["VerdaInferenceKey"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !key.isEmpty
+        else { return nil }
+        return key
+    }
+
+    /// Enough to tell one bundled key from the next without keeping the key itself in the settings.
+    private static func fingerprint(_ key: String) -> String {
+        SHA256.hash(data: Data(key.utf8)).prefix(6).map { String(format: "%02x", $0) }.joined()
     }
 
     var nemotronSettings: NemotronClient.Settings {

@@ -208,7 +208,32 @@ enum Notice {
         let words = shown.split(whereSeparator: \.isWhitespace).flatMap { EvidenceRule.numberRuns(String($0)) }
         let allowed = Set((EvidenceRule.numberRuns(shown) + words).map(EvidenceRule.canonicalNumber))
         let missing = EvidenceRule.unsupportedNumbers(in: text, ocr: shown, allowed: allowed)
-        return missing.isEmpty ? nil : "numbers not in what was shown: \(missing.joined(separator: ", "))"
+        if !missing.isEmpty { return "numbers not in what was shown: \(missing.joined(separator: ", "))" }
+        // Figures said together must have been written together: "6 am to 9 pm" put together
+        // from the store's line and the pharmacy's line is a time nobody posted. (The same rule
+        // the Android side added after it built Sunday hours out of two signs.) Clause by clause,
+        // so a distance from the situation and an hour from the sign can share a sentence.
+        let lines = shown.split(whereSeparator: \.isNewline).map { line -> Set<String> in
+            let words = line.split(whereSeparator: \.isWhitespace).flatMap { EvidenceRule.numberRuns(String($0)) }
+            return Set((EvidenceRule.numberRuns(String(line)) + words).map(EvidenceRule.canonicalNumber))
+        }
+        for clause in text.split(whereSeparator: { ".!?;,—–\n".contains($0) }) {
+            let said = Set(EvidenceRule.numberRuns(String(clause)).map(EvidenceRule.canonicalNumber))
+            guard said.count >= 2 else { continue }
+            if !lines.contains(where: { said.isSubset(of: $0) }) {
+                return "the figures “\(clause.trimmingCharacters(in: .whitespaces).prefix(50))” are not written together on any one line"
+            }
+        }
+        return nil
+    }
+
+    /// An event offered for the calendar must be dated by what was read: its day of the month and
+    /// its hour have to be written in what the model was shown (the year may be worked out).
+    static func dateWritten(_ start: Date, shown: String) -> Bool {
+        let written = Set(shown.split(whereSeparator: { !$0.isNumber }).compactMap { Int($0) })
+        let parts = Calendar.current.dateComponents([.day, .hour], from: start)
+        guard let day = parts.day, let hour = parts.hour else { return false }
+        return written.contains(day) && (written.contains(hour) || (hour > 12 && written.contains(hour - 12)))
     }
 
     /// One judgement. nil: the call failed (nothing is said).
