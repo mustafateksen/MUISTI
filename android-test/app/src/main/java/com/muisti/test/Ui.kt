@@ -720,8 +720,8 @@ private fun VoiceOverlay(s: AppState, t: Tones, onClose: () -> Unit, onOrb: () -
                     Text("Live with MUISTI", color = t.text, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
                 }
                 val speaking = s.phase == VoicePhase.Speaking
-                val orbSize by animateDpAsState(if (speaking) 150.dp else 300.dp, spring(dampingRatio = 0.8f, stiffness = 250f), label = "orb")
-                Spacer(Modifier.weight(if (speaking) 0.08f else 0.45f))
+                val orbSize by animateDpAsState(if (speaking) 240.dp else 300.dp, spring(dampingRatio = 0.8f, stiffness = 250f), label = "orb")
+                Spacer(Modifier.weight(if (speaking) 0.2f else 0.45f))
                 // no clip: the waves may move past the orb's box
                 Box(Modifier.clickable(interactionSource = remember { MutableInteractionSource() },
                     indication = null, onClick = onOrb)) {
@@ -744,7 +744,7 @@ private fun VoiceOverlay(s: AppState, t: Tones, onClose: () -> Unit, onOrb: () -
                     VoicePhase.Idle -> ""
                 }
                 if (speaking)
-                    Lyrics(s.spoken.ifEmpty { big }, s.spokenTo, Modifier.fillMaxWidth().weight(1f))
+                    LiveCaption(s.spoken.ifEmpty { big }, s.spokenTo, Modifier.fillMaxWidth().weight(1f))
                 else Text(big, color = if (s.phase == VoicePhase.Listening && s.partial.isEmpty()) t.sub else t.text,
                     fontSize = 27.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center, lineHeight = 33.sp, maxLines = 6)
                 if (s.phase == VoicePhase.Thinking) {
@@ -759,6 +759,21 @@ private fun VoiceOverlay(s: AppState, t: Tones, onClose: () -> Unit, onOrb: () -
                 }
             }
         }
+    }
+}
+
+/**
+ * MUISTI's words appear exactly like ours do while we talk: big, bold, centred, word by word as they are
+ * spoken. When the reply gets long the view follows the newest words.
+ */
+@Composable
+private fun LiveCaption(text: String, spokenTo: Int, modifier: Modifier) {
+    val shown = text.substring(0, spokenTo.coerceIn(0, text.length)).trimEnd()
+    val scroll = rememberScrollState()
+    LaunchedEffect(shown.length) { scroll.animateScrollTo(scroll.maxValue, tween(300)) }
+    Column(modifier.verticalScroll(scroll), horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(shown, color = Color.White, fontSize = 27.sp, fontWeight = FontWeight.Bold,
+            textAlign = TextAlign.Center, lineHeight = 33.sp, modifier = Modifier.fillMaxWidth())
     }
 }
 
