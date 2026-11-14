@@ -29,7 +29,7 @@ struct StatusBanner: View {
             row("location", locationLine)
             row("tray.and.arrow.up", queueLine)
             if let error = currentError {
-                row("exclamationmark.triangle", error).foregroundStyle(.orange)
+                row("exclamationmark.triangle", error).foregroundStyle(.attention)
             }
         }
         .font(.caption)
@@ -47,47 +47,47 @@ struct StatusBanner: View {
 
     private var stateColor: Color {
         switch controller.state {
-        case .running: return .green
-        case .starting, .waitingForDevice: return .yellow
-        case .paused: return .orange
-        case .failed, .needsPermission, .needsRegistration: return .red
+        case .running: return .success
+        case .starting, .waitingForDevice: return .attention
+        case .paused: return .attention
+        case .failed, .needsPermission, .needsRegistration: return .danger
         case .idle: return .gray
         }
     }
 
     private var sourceLabel: String {
-        if config.sourceKind == .phone { return "Telefon" }
-        return MockRuntime.isActive ? "Sahte gözlük" : "Gözlük"
+        if config.sourceKind == .phone { return "iPhone" }
+        return MockRuntime.isActive ? "Mock glasses" : "Glasses"
     }
 
     private var glassesLine: String {
-        var parts = ["kayıt: \(wearables.registrationState.label)", "oturum: \(glasses.sessionState.description)"]
+        var parts = ["registration: \(wearables.registrationState.label)", "session: \(glasses.sessionState.description)"]
         if config.mode.usesPhotoCapability {
-            parts.append("foto: \(String(describing: glasses.photoState))")
+            parts.append("photo: \(String(describing: glasses.photoState))")
             if let res = glasses.effectiveStillResolution { parts.append(res) }
-            if let ms = glasses.lastTransferMillis { parts.append("aktarım \(ms) ms") }
-            if let fraction = glasses.transferFraction { parts.append("%\(Int(fraction * 100))") }
+            if let ms = glasses.lastTransferMillis { parts.append("transfer \(ms) ms") }
+            if let fraction = glasses.transferFraction { parts.append("\(Int(fraction * 100))%") }
         } else {
-            parts.append("akış: \(String(describing: glasses.streamState))")
+            parts.append("stream: \(String(describing: glasses.streamState))")
         }
         return parts.joined(separator: " · ")
     }
 
     private var deviceLine: String {
         let d = glasses.device
-        guard glasses.hasActiveDevice else { return "Cihaz yok" }
-        var parts = [d.name.isEmpty ? "Gözlük" : d.name]
-        if let battery = d.battery { parts.append("pil %\(battery)\(d.charging == .charging ? "⚡︎" : "")") }
+        guard glasses.hasActiveDevice else { return "No device" }
+        var parts = [d.name.isEmpty ? "Glasses" : d.name]
+        if let battery = d.battery { parts.append("battery \(battery)%\(d.charging == .charging ? "⚡︎" : "")") }
         switch d.don {
-        case .donned: parts.append("takılı")
-        case .doffed: parts.append("takılı değil")
+        case .donned: parts.append("worn")
+        case .doffed: parts.append("not worn")
         default: break
         }
-        if d.hinge == .closed { parts.append("menteşe kapalı") }
+        if d.hinge == .closed { parts.append("hinge closed") }
         switch d.thermal {
-        case .moderate: parts.append("ılık")
-        case .severe: parts.append("sıcak")
-        case .critical, .emergency, .shutdown: parts.append("aşırı sıcak")
+        case .moderate: parts.append("warm")
+        case .severe: parts.append("hot")
+        case .critical, .emergency, .shutdown: parts.append("overheated")
         default: break
         }
         return parts.joined(separator: " · ")
@@ -97,9 +97,9 @@ struct StatusBanner: View {
         var parts = [
             "\(controller.motion.activity.label) → \(controller.movement.label)",
             controller.schedulerText,
-            "\(controller.capturesLastMinute)/dk",
+            "\(controller.capturesLastMinute)/min",
         ]
-        if controller.batteryFactor > 1 { parts.append(String(format: "tasarruf ×%.1f", controller.batteryFactor)) }
+        if controller.batteryFactor > 1 { parts.append(String(format: "saver ×%.1f", controller.batteryFactor)) }
         return parts.joined(separator: " · ")
     }
 
@@ -107,26 +107,26 @@ struct StatusBanner: View {
         guard let fix = controller.location.freshFix() else {
             switch controller.location.authorization {
             case .denied, .restricted:
-                return "Konum izni yok: kareler konumsuz kaydediliyor. Ayarlar > Muisti > Konum."
+                return "No location permission: frames are saved without location. Settings > Muisti > Location."
             default:
-                return controller.location.isRunning ? "Konum bekleniyor" : "Konum kapalı"
+                return controller.location.isRunning ? "Waiting for location" : "Location off"
             }
         }
         var parts = [String(format: "±%.0f m", fix.accuracy)]
-        if let speed = fix.validSpeed { parts.append(String(format: "%.1f m/sn", speed)) }
-        if let course = fix.validCourse { parts.append(String(format: "yön %.0f°", course)) }
-        parts.append(String(format: "%.0f m yol", controller.location.odometer))
-        if controller.motion.stepCount > 0 { parts.append("\(controller.motion.stepCount) adım") }
+        if let speed = fix.validSpeed { parts.append(String(format: "%.1f m/s", speed)) }
+        if let course = fix.validCourse { parts.append(String(format: "heading %.0f°", course)) }
+        parts.append(String(format: "%.0f m traveled", controller.location.odometer))
+        if controller.motion.stepCount > 0 { parts.append("\(controller.motion.stepCount) steps") }
         return parts.joined(separator: " · ")
     }
 
     private var queueLine: String {
         let stats = controller.pipelineStats
-        var parts = ["alınan \(controller.capturedCount)", "hafızada \(controller.memoryCount)"]
-        if controller.pendingCount > 0 { parts.append("Nemotron bekleyen \(controller.pendingCount)") }
-        if stats.droppedTotal > 0 { parts.append("elenen \(stats.droppedTotal) (\(stats.droppedSummary))") }
-        if !controller.enrichment.online { parts.append("çevrimdışı") }
-        if let folder = controller.recordingFolder { parts.append("ham: \(folder)") }
+        var parts = ["captured \(controller.capturedCount)", "in memory \(controller.memoryCount)"]
+        if controller.pendingCount > 0 { parts.append("Nemotron pending \(controller.pendingCount)") }
+        if stats.droppedTotal > 0 { parts.append("dropped \(stats.droppedTotal) (\(stats.droppedSummary))") }
+        if !controller.enrichment.online { parts.append("offline") }
+        if let folder = controller.recordingFolder { parts.append("raw: \(folder)") }
         return parts.joined(separator: " · ")
     }
 
@@ -138,7 +138,7 @@ struct StatusBanner: View {
         if config.sourceKind == .glasses, let w = glasses.healthWarning { return w }
         if let e = wearables.lastError { return e }
         if !controller.enrichment.hasKey, controller.memoryCount > 0 {
-            return "Nemotron API anahtarı yok: kareler telefonda bekliyor (Ayarlar > Nemotron)."
+            return "No Nemotron API key: frames are waiting on the iPhone (Settings > AI)."
         }
         if let e = controller.enrichment.lastError { return e }
         return nil

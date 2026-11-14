@@ -7,62 +7,62 @@ struct NemotronDeveloperSection: View {
 
     var body: some View {
         Section {
-            Menu("Hazır sağlayıcı seç") {
+            Menu("Choose a provider preset") {
                 ForEach(NemotronClient.Provider.allCases) { provider in
                     Button(provider.label) { config.use(provider) }
                 }
             }
-            LabeledContent("Adres") {
+            LabeledContent("Base URL") {
                 TextField("https://…/v1", text: $config.apiBaseURL)
                     .keyboardType(.URL)
                     .multilineTextAlignment(.trailing)
             }
-            LabeledContent("Sohbet modeli") {
+            LabeledContent("Chat model") {
                 TextField("model", text: $config.chatModel)
                     .multilineTextAlignment(.trailing)
             }
-            Menu("Gömme (anlam araması) kaynağı") {
-                Button("Kapalı: yalnız anahtar kelime") { config.embedModel = ""; config.embedBaseURL = "" }
-                Button("NVIDIA build (ücretsiz anahtar)") { config.useNVIDIAEmbeddings() }
-                Button("Kendi Verda konteynerim") { config.useOwnEmbeddingContainer(baseURL: config.embedBaseURL) }
+            Menu("Embedding (semantic search) source") {
+                Button("Off: keywords only") { config.embedModel = ""; config.embedBaseURL = "" }
+                Button("NVIDIA build (free key)") { config.useNVIDIAEmbeddings() }
+                Button("My own Verda container") { config.useOwnEmbeddingContainer(baseURL: config.embedBaseURL) }
             }
-            LabeledContent("Gömme modeli") {
-                TextField("boş = yalnız anahtar kelime", text: $config.embedModel)
+            LabeledContent("Embedding model") {
+                TextField("empty = keywords only", text: $config.embedModel)
                     .multilineTextAlignment(.trailing)
             }
-            LabeledContent("Gömme adresi") {
-                TextField("boş = sohbetle aynı", text: $config.embedBaseURL)
+            LabeledContent("Embedding URL") {
+                TextField("empty = same as chat", text: $config.embedBaseURL)
                     .keyboardType(.URL)
                     .multilineTextAlignment(.trailing)
             }
-            LabeledContent("Gömme anahtarı") {
-                SecureField("boş = sohbetle aynı", text: $config.embedKey)
+            LabeledContent("Embedding key") {
+                SecureField("empty = same as chat", text: $config.embedKey)
                     .multilineTextAlignment(.trailing)
             }
-            Menu("Yeniden sıralayıcı (reranker)") {
-                Button("Kapalı") { config.rerankModel = "" }
-                Button("Nemotron 3.5 Rerank 8B (önerilen)") { config.rerankModel = NemotronClient.defaultRerankModel }
-                Button("Llama Nemotron Rerank VL 1B (hızlı)") { config.rerankModel = NemotronClient.fallbackRerankModel }
+            Menu("Reranker") {
+                Button("Off") { config.rerankModel = "" }
+                Button("Nemotron 3.5 Rerank 8B (recommended)") { config.rerankModel = NemotronClient.defaultRerankModel }
+                Button("Llama Nemotron Rerank VL 1B (fast)") { config.rerankModel = NemotronClient.fallbackRerankModel }
             }
-            LabeledContent("Rerank modeli") {
-                TextField("boş = kapalı", text: $config.rerankModel)
+            LabeledContent("Rerank model") {
+                TextField("empty = off", text: $config.rerankModel)
                     .multilineTextAlignment(.trailing)
             }
-            LabeledContent("Rerank anahtarı") {
-                SecureField("boş = gömme anahtarı", text: $config.rerankKey)
+            LabeledContent("Rerank key") {
+                SecureField("empty = embedding key", text: $config.rerankKey)
                     .multilineTextAlignment(.trailing)
             }
-            LabeledContent("Nemotron bekleyen", value: "\(controller.pendingCount)")
-            LabeledContent("Yapılandırılan / başarısız", value: "\(controller.enrichment.enriched) / \(controller.enrichment.failed)")
+            LabeledContent("Nemotron pending", value: "\(controller.pendingCount)")
+            LabeledContent("Structured / failed", value: "\(controller.enrichment.enriched) / \(controller.enrichment.failed)")
             if let error = controller.enrichment.lastError {
                 Text(error)
                     .font(.footnote)
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(.attention)
             }
         } header: {
             Text("Nemotron 3.5 Super VL")
         } footer: {
-            Text("API anahtarı son kullanıcı Ayarlar'ında. Değişiklikler panel kapanınca uygulanır.")
+            Text("The API key is in the regular Settings. Changes apply when the panel closes.")
         }
         .font(.subheadline)
         .textInputAutocapitalization(.never)

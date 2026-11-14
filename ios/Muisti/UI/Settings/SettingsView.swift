@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// End-user settings: camera source, AI key, voice, privacy. Everything technical sits behind
-/// "Geliştirici seçenekleri" at the bottom.
+/// "Developer options" at the bottom.
 struct SettingsView: View {
     let controller: CaptureController
     @Bindable var config: AppConfig
@@ -13,59 +13,59 @@ struct SettingsView: View {
         NavigationStack {
             Form {
                 Section {
-                    Picker("Kamera", selection: $config.sourceKind) {
+                    Picker("Camera", selection: $config.sourceKind) {
                         ForEach(SourceKind.allCases) { Text($0.label).tag($0) }
                     }
                     .disabled(controller.isRunning)
                     if config.sourceKind == .glasses {
-                        LabeledContent("Gözlük") {
+                        LabeledContent("Glasses") {
                             if wearables.isRegistered {
-                                Label("Bağlı", systemImage: "checkmark.circle.fill")
-                                    .foregroundStyle(.green)
+                                Label("Connected", systemImage: "checkmark.circle.fill")
+                                    .foregroundStyle(.success)
                             } else {
-                                Button(wearables.registrationState == .registering ? "Bağlanıyor…" : "Bağlan", action: register)
+                                Button(wearables.registrationState == .registering ? "Connecting…" : "Connect", action: register)
                             }
                         }
                     }
                 } header: {
-                    Text("Kamera")
+                    Text("Camera")
                 } footer: {
-                    Text(controller.isRunning ? "Kamerayı değiştirmek için önce kaydı durdur." : "Ray-Ban Meta gözlük ya da telefonun arka kamerası.")
+                    Text(controller.isRunning ? "Stop recording to change the camera." : "Ray-Ban Meta glasses or the iPhone's rear camera.")
                 }
 
                 AISettingsSection(controller: controller, config: config)
 
                 Section {
-                    LabeledContent("Soru dili", value: "English")
-                    Toggle("Cevabı sesli oku", isOn: $config.speakAnswers)
+                    LabeledContent("Question language", value: "English")
+                    Toggle("Read answers aloud", isOn: $config.speakAnswers)
                 } header: {
-                    Text("Ses")
+                    Text("Voice")
                 } footer: {
-                    Text("Eller serbest: “Hey Siri, Muisti'ye sor” ya da Ayarlar > Eylem Düğmesi > Kestirme > Muisti'ye sor. Cevap gözlük hoparlöründen okunur.")
+                    Text("Hands-free: “Hey Siri, Ask Muisti” or Settings > Action Button > Shortcut > Ask Muisti. The answer plays through the glasses speakers.")
                 }
 
                 PrivacySettingsSection(controller: controller, config: config)
 
                 Section {
-                    Toggle("Geliştirici seçenekleri", isOn: $developerMode.animation())
+                    Toggle("Developer options", isOn: $developerMode.animation())
                     if developerMode {
                         NavigationLink(value: SettingsRoute.developer) {
-                            Label("Geliştirici paneli", systemImage: "hammer")
+                            Label("Developer panel", systemImage: "hammer")
                         }
                     }
                 } header: {
-                    Text("Gelişmiş")
+                    Text("Advanced")
                 } footer: {
-                    Text("Yakalama modları, Nemotron sunucusu, zamanlayıcı ayarları ve canlı tanılama. Açıkken Kayıt ekranında da bir düğme görünür.")
+                    Text("Capture modes, Nemotron server, scheduler tuning and live diagnostics. When on, a button also appears on the Recording screen.")
                 }
 
                 Section {
-                    LabeledContent("Sürüm", value: Self.versionText)
+                    LabeledContent("Version", value: Self.versionText)
                 } footer: {
-                    Text("Muisti gördüklerini senin için hatırlar. Hafıza bu telefonda kalır.")
+                    Text("Muisti remembers what you see. Your memory stays on this iPhone.")
                 }
             }
-            .navigationTitle("Ayarlar")
+            .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
             .navigationDestination(for: SettingsRoute.self) { route in
                 switch route {
@@ -75,7 +75,7 @@ struct SettingsView: View {
             }
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Bitti") { dismiss() }
+                    Button("Done") { dismiss() }
                 }
             }
             .onDisappear(perform: applySettings)

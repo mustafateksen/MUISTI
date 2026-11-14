@@ -19,20 +19,20 @@ struct DebugMenu: View {
         Form {
             Section {
                 if mock.isEnabled {
-                    LabeledContent("Durum", value: mock.isPaired ? "Ray-Ban Meta eşleşti" : "Etkin, eşleşmedi")
-                    if !mock.isPaired { Button("Ray-Ban Meta eşleştir") { mock.pair() } }
-                    Button("MockDeviceKit'i kapat", role: .destructive) {
+                    LabeledContent("Status", value: mock.isPaired ? "Ray-Ban Meta paired" : "Enabled, not paired")
+                    if !mock.isPaired { Button("Pair Ray-Ban Meta") { mock.pair() } }
+                    Button("Turn off MockDeviceKit", role: .destructive) {
                         Task {
                             await controller.stop()
                             await mock.disable()
                         }
                     }
                 } else {
-                    Button("Sahte gözlüğü aç (kayıtlı + izinli)") {
+                    Button("Turn on mock glasses (registered + permitted)") {
                         mock.quickStart()
                         controller.config.sourceKind = .glasses
                     }
-                    Button("Sahte gözlüğü aç (kayıtsız, izinsiz)") {
+                    Button("Turn on mock glasses (unregistered, no permission)") {
                         mock.quickStart(registered: false, permissionsGranted: false)
                         controller.config.sourceKind = .glasses
                     }
@@ -40,74 +40,74 @@ struct DebugMenu: View {
             } header: {
                 Text("MockDeviceKit")
             } footer: {
-                Text("Açıldıktan sonra uygulama aynı SDK çağrılarıyla sahte gözlüğe bağlanır. Ana ekrandan Kaydı başlat.")
+                Text("Once on, the app connects to the mock glasses through the same SDK calls. Start recording from the main screen.")
             }
 
             if mock.isPaired {
-                Section("Kamera beslemesi") {
-                    LabeledContent("Şu an", value: mock.feedLabel)
-                    Button("Paketteki tabela videosu") { mock.useBundledDemo() }
-                    Button("Telefonun arka kamerası (canlı)") { mock.usePhoneCamera() }
-                    PhotosPicker("Fotoğraflar'dan video seç", selection: $pickedVideo, matching: .videos)
-                    Button("Dosyalar'dan video seç") { showFileImporter = true }
-                    if mock.isImporting { ProgressView("HEVC'ye çevriliyor…") }
-                    Text("Video h.265 olmalı; değilse otomatik çevrilir. Akış zaten açıksa yeni besleme için akışı yeniden başlat.")
+                Section("Camera feed") {
+                    LabeledContent("Current", value: mock.feedLabel)
+                    Button("Bundled sign video") { mock.useBundledDemo() }
+                    Button("iPhone rear camera (live)") { mock.usePhoneCamera() }
+                    PhotosPicker("Choose video from Photos", selection: $pickedVideo, matching: .videos)
+                    Button("Choose video from Files") { showFileImporter = true }
+                    if mock.isImporting { ProgressView("Converting to HEVC…") }
+                    Text("Video must be H.265; otherwise it is converted automatically. If the stream is already running, restart it to use the new feed.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
 
-                Section("Cihaz durumu") {
-                    Toggle("Güç açık", isOn: Binding(get: { mock.isPoweredOn }, set: { mock.setPower($0) }))
-                    Toggle("Menteşe açık", isOn: Binding(get: { mock.isUnfolded }, set: { mock.setUnfolded($0) }))
-                    Toggle("Takılı", isOn: Binding(get: { mock.isDonned }, set: { mock.setDonned($0) }))
-                    Button("Sapa dokun (akışı duraklat/sürdür)") { mock.tap() }
+                Section("Device state") {
+                    Toggle("Powered on", isOn: Binding(get: { mock.isPoweredOn }, set: { mock.setPower($0) }))
+                    Toggle("Hinge open", isOn: Binding(get: { mock.isUnfolded }, set: { mock.setUnfolded($0) }))
+                    Toggle("Worn", isOn: Binding(get: { mock.isDonned }, set: { mock.setDonned($0) }))
+                    Button("Tap temple (pause/resume stream)") { mock.tap() }
                     VStack(alignment: .leading) {
-                        Text("Pil: %\(Int(battery))")
+                        Text("Battery: \(Int(battery))%")
                         Slider(value: $battery, in: 0...100, step: 1) { editing in
                             if !editing { mock.setBattery(Int(battery)) }
                         }
                     }
-                    Picker("Isı", selection: Binding(get: { mock.thermal }, set: { mock.setThermal($0) })) {
+                    Picker("Thermal", selection: Binding(get: { mock.thermal }, set: { mock.setThermal($0) })) {
                         Text("normal").tag(ThermalLevel.none)
-                        Text("ılık").tag(ThermalLevel.moderate)
-                        Text("sıcak").tag(ThermalLevel.severe)
-                        Text("kritik").tag(ThermalLevel.critical)
+                        Text("warm").tag(ThermalLevel.moderate)
+                        Text("hot").tag(ThermalLevel.severe)
+                        Text("critical").tag(ThermalLevel.critical)
                     }
                 }
 
-                Section("Hata senaryoları") {
-                    Button("Kamera iznini reddet") { mock.denyCamera() }
-                    Button("Kamera iznini ver") { mock.grantCamera() }
-                    Button("Sonraki fotoğraf başarısız olsun") { mock.simulateCaptureFailure() }
-                    Text("Arka plan: kayıt sürerken ana ekrana dön; dönüşte 'Devam et' görünmeli. Menteşe/takma/pil satırları yukarıda.")
+                Section("Error scenarios") {
+                    Button("Deny camera permission") { mock.denyCamera() }
+                    Button("Grant camera permission") { mock.grantCamera() }
+                    Button("Fail the next photo") { mock.simulateCaptureFailure() }
+                    Text("Background: go to the Home Screen while recording; 'Resume' should appear when you return. Hinge/worn/battery controls are above.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
             }
 
-            Section("Veri") {
-                Button("Tüm hafızayı sil", role: .destructive) {
+            Section("Data") {
+                Button("Delete all memories", role: .destructive) {
                     Task { await controller.deleteAllMemories() }
                 }
                 #if DEBUG
-                Button("Hafızayı silip örnek fotoğrafları yükle") {
+                Button("Delete memories and load sample photos") {
                     Task {
                         await controller.deleteAllMemories()
                         _ = await controller.ingestFolder("ingest")
                     }
                 }
-                Text("Örnekler: Documents/ingest (manifest.json + fotoğraflar). Gerçek akıştan geçer: OCR, bulanıklaştırma, bölümler, Nemotron.")
+                Text("Samples: Documents/ingest (manifest.json + photos). They go through the real pipeline: OCR, blurring, episodes, Nemotron.")
                     .font(.footnote).foregroundStyle(.secondary)
                 #endif
-                Text("Ham veri seti (açıksa): Dosyalar > Bu iPhone'da > Muisti > sessions").font(.footnote)
+                Text("Raw dataset (if on): Files > On My iPhone > Muisti > sessions").font(.footnote)
                 if !sessionsPath.isEmpty {
                     Text(sessionsPath).font(.caption2.monospaced()).textSelection(.enabled)
                 }
             }
 
             if let error = mock.lastError {
-                Section("Son hata") { Text(error).foregroundStyle(.red) }
+                Section("Last error") { Text(error).foregroundStyle(.danger) }
             }
         }
-        .navigationTitle("Sahte gözlük")
+        .navigationTitle("Mock glasses")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
             battery = Double(mock.batteryLevel)
@@ -119,7 +119,7 @@ struct DebugMenu: View {
                 if let movie = try? await item.loadTransferable(type: PickedMovie.self) {
                     await mock.importVideo(from: movie.url)
                 } else {
-                    mock.lastError = "Video yüklenemedi."
+                    mock.lastError = "Couldn't load the video."
                 }
                 pickedVideo = nil
             }

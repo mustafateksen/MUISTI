@@ -34,16 +34,16 @@ final class PhoneCameraSource: CaptureSource {
             break
         case .notDetermined:
             guard await AVCaptureDevice.requestAccess(for: .video) else {
-                state = .failed(message: "Telefon kamerası izni verilmedi.")
+                state = .failed(message: "iPhone camera access wasn't granted.")
                 return
             }
         default:
-            state = .failed(message: "Telefon kamerası izni yok. Ayarlar > Muisti'den aç.")
+            state = .failed(message: "No iPhone camera access. Turn it on in Settings > Muisti.")
             return
         }
         let emitEvery: Double? = config.mode.usesScheduler ? nil : 1.0 / Double(config.streamFPS)
         let ok = await engine.start(emitInterval: emitEvery, continuation: frameContinuation)
-        state = ok ? .running : .failed(message: "Bu cihazda arka kamera yok (simülatörde sahte gözlüğü kullan).")
+        state = ok ? .running : .failed(message: "This device has no rear camera (use mock glasses in the simulator).")
     }
 
     func stop() async {
@@ -160,7 +160,7 @@ final class PhoneCameraEngine: NSObject, @unchecked Sendable,
             }
         }
         // The 720p preset would also cap stills at 720p; open the photo output to the largest
-        // size this camera format supports so "Yüksek çöz." means something.
+        // size this camera format supports so "High-res" means something.
         if let largest = device.activeFormat.supportedMaxPhotoDimensions.max(by: { $0.width * $0.height < $1.width * $1.height }) {
             photoOutput.maxPhotoDimensions = largest
         }

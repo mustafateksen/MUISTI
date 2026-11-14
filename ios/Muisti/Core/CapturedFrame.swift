@@ -22,7 +22,7 @@ enum CaptureTrigger: String, Codable, Sendable {
     case idleRefresh     // long stationary refresh
     case fixedInterval   // mode C
     case followUp        // perception line asked for another look (e.g. text detected)
-    case manual          // "Şimdi çek" button
+    case manual          // "Capture now" button
     case highRes         // explicit high-resolution request
 }
 

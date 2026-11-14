@@ -28,10 +28,10 @@ enum Movement: String, Sendable {
 
     var label: String {
         switch self {
-        case .unknown: return "bilinmiyor"
-        case .still: return "duruyor"
-        case .walking: return "yürüyor"
-        case .fast: return "hızlı (bisiklet/araç)"
+        case .unknown: return "unknown"
+        case .still: return "still"
+        case .walking: return "walking"
+        case .fast: return "fast (bike/vehicle)"
         }
     }
 }
@@ -73,7 +73,7 @@ struct AdaptiveScheduler: Sendable {
 
     private(set) var movement: Movement = .unknown
     private(set) var factor: Double = 1
-    private(set) var lastDecision: SchedulerDecision = .wait("Başlamadı")
+    private(set) var lastDecision: SchedulerDecision = .wait("Not started")
 
     init(tuning: AdaptiveTuning) {
         self.tuning = tuning
@@ -104,7 +104,7 @@ struct AdaptiveScheduler: Sendable {
 
         // Heat first: critical heat on either device pauses capture altogether.
         if input.phoneThermal == .critical || input.glassesHeat == .critical {
-            return .hold("Isı kritik; cihazlar soğuyana kadar kare alınmıyor")
+            return .hold("Heat critical; no frames until devices cool down")
         }
         factor = batteryFactor(input)
 
@@ -112,11 +112,11 @@ struct AdaptiveScheduler: Sendable {
         let elapsed = now.timeIntervalSince(last)
 
         if elapsed < tuning.minInterval * factor {
-            return .wait("En kısa aralık doluyor")
+            return .wait("Waiting for minimum interval")
         }
         let perMinute = max(1, Int(Double(tuning.maxPerMinute) / factor))
         if recent.count >= perMinute {
-            return .hold("Dakika sınırı (\(perMinute)) doldu")
+            return .hold("Per-minute limit (\(perMinute)) reached")
         }
         if followUpRequested {
             return .capture(.followUp)
@@ -130,30 +130,30 @@ struct AdaptiveScheduler: Sendable {
             if moved >= tuning.walkingDistance * factor { return .capture(.distance) }
             if let turned, turned >= tuning.headingChange { return .capture(.heading) }
             if elapsed >= tuning.walkingMaxInterval * factor { return .capture(.interval) }
-            return .wait(String(format: "Yürüyor · %.0f/%.0f m", moved, tuning.walkingDistance * factor))
+            return .wait(String(format: "Walking · %.0f/%.0f m", moved, tuning.walkingDistance * factor))
 
         case .fast:
             if moved >= tuning.fastDistance * factor { return .capture(.distance) }
             if let turned, turned >= tuning.headingChange { return .capture(.heading) }
             if elapsed >= tuning.fastMaxInterval * factor { return .capture(.interval) }
-            return .wait(String(format: "Hızlı · %.0f/%.0f m", moved, tuning.fastDistance * factor))
+            return .wait(String(format: "Fast · %.0f/%.0f m", moved, tuning.fastDistance * factor))
 
         case .still:
             if let stillSince, movedSinceDwell, now.timeIntervalSince(stillSince) >= tuning.dwellSeconds {
                 return .capture(.dwell)
             }
             if stationaryStills >= tuning.stationaryMaxStills {
-                return .hold("Duruyorsun; hareket edince devam edecek")
+                return .hold("You're still; resumes when you move")
             }
             if let turned, turned >= tuning.headingChange * 1.3 { return .capture(.heading) }
             if elapsed >= tuning.stationaryRefresh * factor { return .capture(.idleRefresh) }
-            return .wait("Duruyor")
+            return .wait("Still")
 
         case .unknown:
             // No motion data (simulator, permission denied): fall back to distance + timer.
             if moved >= tuning.walkingDistance * factor { return .capture(.distance) }
             if elapsed >= tuning.unknownActivityInterval * factor { return .capture(.interval) }
-            return .wait("Hareket verisi yok; zamanlayıcı")
+            return .wait("No motion data; using timer")
         }
     }
 

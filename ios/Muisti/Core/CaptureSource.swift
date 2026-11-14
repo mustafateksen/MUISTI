@@ -21,14 +21,14 @@ enum CaptureState: Equatable, Sendable {
 
     var label: String {
         switch self {
-        case .idle: return "Hazır"
-        case .needsRegistration: return "Meta AI ile bağlantı gerekli"
-        case .needsPermission: return "Kamera izni gerekli"
-        case .waitingForDevice: return "Gözlük bekleniyor"
-        case .starting: return "Başlatılıyor"
-        case .running: return "Kayıtta"
-        case .paused(let reason): return "Duraklatıldı: \(reason)"
-        case .failed(let message): return "Hata: \(message)"
+        case .idle: return "Ready"
+        case .needsRegistration: return "Connect in Meta AI"
+        case .needsPermission: return "Camera access needed"
+        case .waitingForDevice: return "Waiting for glasses"
+        case .starting: return "Starting"
+        case .running: return "Recording"
+        case .paused(let reason): return "Paused: \(reason)"
+        case .failed(let message): return "Error: \(message)"
         }
     }
 }
@@ -40,8 +40,8 @@ enum SourceKind: String, Codable, Sendable, CaseIterable, Identifiable {
     var id: String { rawValue }
     var label: String {
         switch self {
-        case .glasses: return "Gözlük"
-        case .phone: return "Telefon kamerası"
+        case .glasses: return "Glasses"
+        case .phone: return "iPhone camera"
         }
     }
 }

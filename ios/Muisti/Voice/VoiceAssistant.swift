@@ -3,7 +3,7 @@ import Foundation
 import Observation
 @preconcurrency import Speech
 
-/// Push-to-talk (or "Hey Siri, Muisti'ye sor") → glasses mic over Bluetooth HFP →
+/// Push-to-talk (or "Hey Siri, ask Muisti") → glasses mic over Bluetooth HFP →
 /// on-device speech recognition → `QueryEngine` → spoken answer on the glasses speakers.
 @Observable
 @MainActor
@@ -26,6 +26,7 @@ final class VoiceAssistant {
     @ObservationIgnored private let location: LocationProvider
     @ObservationIgnored private var session: SpeechSession?
     @ObservationIgnored private let synthesizer = AVSpeechSynthesizer()
+    @ObservationIgnored private let player = SpeechPlayer()
     @ObservationIgnored private var speechDelegate: SpeechFinishDelegate?
     @ObservationIgnored private var silenceTask: Task<Void, Never>?
     @ObservationIgnored private var maxTask: Task<Void, Never>?
@@ -46,18 +47,19 @@ final class VoiceAssistant {
     func startListening() async {
         guard phase != .listening, phase != .thinking else { return }
         synthesizer.stopSpeaking(at: .immediate)
+        player.stop()
         transcript = ""
 
         guard await Self.requestSpeechAuthorization() else {
-            phase = .failed("Konuşma tanıma izni yok. Ayarlar > Muisti > Konuşma Tanıma.")
+            phase = .failed("No access to Speech Recognition. Settings > Muisti > Speech Recognition.")
             return
         }
         guard await AVAudioApplication.requestRecordPermission() else {
-            phase = .failed("Mikrofon izni yok. Ayarlar > Muisti > Mikrofon.")
+            phase = .failed("No access to the microphone. Settings > Muisti > Microphone.")
             return
         }
         guard let recognizer = SFSpeechRecognizer(locale: Locale(identifier: localeIdentifier)), recognizer.isAvailable else {
-            phase = .failed("Bu dil için konuşma tanıma şu an kullanılamıyor (\(localeIdentifier)).")
+            phase = .failed("Speech recognition isn't available for this language right now (\(localeIdentifier)).")
             return
         }
         do {
@@ -68,8 +70,8 @@ final class VoiceAssistant {
                 Task { @MainActor in self?.handlePartial(text, isFinal: isFinal) }
             } onError: { [weak self] message in
                 Task { @MainActor in self?.handleError(message) }
-            } onBands: { bands in
-                Task { @MainActor in levels.update(bands) }
+            } onFrame: { frame in
+                Task { @MainActor in levels.update(frame) }
             }
             self.session = session
             phase = .listening
@@ -79,7 +81,7 @@ final class VoiceAssistant {
                 await self?.finishListening()
             }
         } catch {
-            phase = .failed("Mikrofon açılamadı: \(error.localizedDescription)")
+            phase = .failed("Couldn't turn on the microphone: \(error.localizedDescription)")
             Self.deactivateAudioSession()
         }
     }
@@ -98,6 +100,35 @@ final class VoiceAssistant {
             return
         }
         await ask(question)
+    }
+
+    /// Stops listening without asking, or stops reading the answer aloud.
+    func cancel() {
+        switch phase {
+        case .listening:
+            silenceTask?.cancel()
+            maxTask?.cancel()
+            session?.stop()
+            session = nil
+            levels.reset()
+            transcript = ""
+            phase = .idle
+            Self.deactivateAudioSession()
+        case .speaking:
+            player.stop()
+            synthesizer.stopSpeaking(at: .immediate)
+        default:
+            break
+        }
+    }
+
+    /// Starts a new conversation on screen (stored memories are untouched).
+    func clearConversation() {
+        guard !isBusy else { return }
+        history = []
+        lastResult = nil
+        transcript = ""
+        phase = .idle
     }
 
     /// Typed question (also used by tests and when speech is unavailable).
@@ -160,8 +191,14 @@ final class VoiceAssistant {
             ?? AVSpeechSynthesisVoice.speechVoices().first { $0.language.hasPrefix(language + "-") }
             ?? AVSpeechSynthesisVoice(language: localeIdentifier)
         utterance.rate = AVSpeechUtteranceDefaultSpeechRate
+        let levels = levels
+        let played = await player.speak(utterance) { frame in
+            Task { @MainActor in levels.update(frame) }
+        }
+        levels.reset()
+        guard !played else { return }
+        // Fallback: the system synthesizer plays it itself (no spectrum, word pulses instead).
         await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in
-            let levels = levels
             let delegate = SpeechFinishDelegate {
                 Task { @MainActor in levels.wordSpoken() }
             } done: { @Sendable in
@@ -186,6 +223,8 @@ final class VoiceAssistant {
             bluetooth = AVAudioSession.CategoryOptions(rawValue: 0x4)   // .allowBluetooth
         }
         try session.setCategory(.playAndRecord, mode: .default, options: [bluetooth, .allowBluetoothA2DP, .defaultToSpeaker])
+        // Smaller IO buffers → more frequent spectrum updates for the orb (a hint; iOS may ignore it).
+        try? session.setPreferredIOBufferDuration(0.02)
         try session.setActive(true)
         // Prefer a Bluetooth input (the glasses) when one is connected.
         if let bt = session.availableInputs?.first(where: { $0.portType == .bluetoothHFP }) {
@@ -233,7 +272,7 @@ private final class SpeechSession: @unchecked Sendable {
 
     func start(onText: @escaping @Sendable (String, Bool) -> Void,
                onError: @escaping @Sendable (String) -> Void,
-               onBands: @escaping @Sendable ([Float]) -> Void) throws {
+               onFrame: @escaping @Sendable (SpectrumAnalyzer.Frame) -> Void) throws {
         request.shouldReportPartialResults = true
         if recognizer.supportsOnDeviceRecognition {
             request.requiresOnDeviceRecognition = true   // the question never leaves the phone
@@ -245,14 +284,14 @@ private final class SpeechSession: @unchecked Sendable {
         let format = input.outputFormat(forBus: 0)
         guard format.sampleRate > 0, format.channelCount > 0 else {
             throw NSError(domain: "Muisti.Speech", code: 1,
-                          userInfo: [NSLocalizedDescriptionKey: "Mikrofon hazır değil; tekrar dene."])
+                          userInfo: [NSLocalizedDescriptionKey: "The microphone isn't ready. Try again."])
         }
         let request = request
         let analyzer = SpectrumAnalyzer()
         input.removeTap(onBus: 0)
         input.installTap(onBus: 0, bufferSize: 1024, format: nil) { @Sendable buffer, _ in
             request.append(buffer)
-            if let bands = analyzer.bands(for: buffer) { onBands(bands) }
+            if let frame = analyzer.process(buffer) { onFrame(frame) }
         }
         audioEngine.prepare()
         try audioEngine.start()

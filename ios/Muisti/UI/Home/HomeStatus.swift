@@ -11,10 +11,10 @@ struct HomeStatus {
         var color: Color {
             switch self {
             case .idle: return .secondary
-            case .active: return .green
-            case .waiting: return .yellow
-            case .attention: return .orange
-            case .problem: return .red
+            case .active: return .success
+            case .waiting: return .attention
+            case .attention: return .attention
+            case .problem: return .danger
             }
         }
     }
@@ -41,45 +41,45 @@ struct HomeStatus {
 
         switch controller.state {
         case .running:
-            title = "Hatırlıyorum"
+            title = "Remembering"
             message = config.mode.usesScheduler
-                ? "Gördüğün tabela ve yazıları gerekli anlarda kaydediyorum. Muisti açık kalsın; ekran kilitlenmez."
-                : "Sürekli kayıt açık. Gördüğün yazılar hafızaya ekleniyor."
+                ? "I'm saving the signs and text you see when it matters. Keep Muisti open; the screen won't lock."
+                : "Continuous recording is on. Text you see is being added to your memory."
             symbol = usesGlasses ? "eyeglasses" : "iphone.rear.camera"
             tone = .active
         case .starting:
-            title = "Başlatılıyor"
-            message = usesGlasses ? "Gözlüğün kamerasına bağlanıyorum…" : "Telefon kamerası açılıyor…"
+            title = "Starting"
+            message = usesGlasses ? "Connecting to your glasses' camera…" : "Opening the iPhone camera…"
             symbol = "hourglass"
             tone = .waiting
         case .waitingForDevice:
-            title = "Gözlük bekleniyor"
-            message = running ? glasses.waitingHint : "Gözlüğün açık, menteşesi açık ve telefona yakın olsun."
+            title = "Waiting for glasses"
+            message = running ? glasses.waitingHint : "Make sure your glasses are on, unfolded, and near your phone."
             symbol = "antenna.radiowaves.left.and.right"
             tone = .waiting
         case .paused(let reason):
-            title = "Duraklatıldı"
+            title = "Paused"
             message = reason
             symbol = "pause.circle"
             tone = .attention
         case .needsRegistration:
-            title = "Gözlüğü bağla"
-            message = "Meta AI uygulamasında Muisti'yi bir kez onaylaman yeterli."
+            title = "Connect your glasses"
+            message = "Just approve Muisti once in the Meta AI app."
             symbol = "link"
             tone = .attention
         case .needsPermission:
-            title = "Kamera izni gerekli"
-            message = "Gözlük kamerasını kullanmak için Meta AI'da izin vermelisin."
+            title = "Camera access needed"
+            message = "Allow access in Meta AI to use the glasses camera."
             symbol = "camera.badge.ellipsis"
             tone = .attention
         case .failed(let error):
-            title = "Bir sorun oluştu"
+            title = "Something went wrong"
             message = error
             symbol = "exclamationmark.triangle"
             tone = .problem
         case .idle:
-            title = "Hazır"
-            message = "Kaydı başlat; yürürken gördüğün tabelaları, numaraları ve saatleri senin için hatırlayayım."
+            title = "Ready"
+            message = "Start recording and I'll remember the signs, numbers, and times you see as you walk."
             symbol = usesGlasses ? "eyeglasses" : "iphone.rear.camera"
             tone = .idle
         }
@@ -88,48 +88,48 @@ struct HomeStatus {
         if usesGlasses {
             if glasses.hasActiveDevice {
                 let device = glasses.device
-                let name = device.name.isEmpty ? "Gözlük" : device.name
+                let name = device.name.isEmpty ? "Glasses" : device.name
                 if let battery = device.battery {
                     let charging = device.charging == .charging
                     chips.append(Chip(
                         id: "device",
-                        text: "\(name) %\(battery)",
+                        text: "\(name) \(battery)%",
                         systemImage: charging ? "battery.100percent.bolt" : Self.batterySymbol(battery),
-                        tint: battery < 20 && !charging ? .orange : .green
+                        tint: battery < 20 && !charging ? .attention : .success
                     ))
                 } else {
-                    chips.append(Chip(id: "device", text: name, systemImage: "eyeglasses", tint: .green))
+                    chips.append(Chip(id: "device", text: name, systemImage: "eyeglasses", tint: .success))
                 }
             } else {
                 chips.append(Chip(
                     id: "device",
-                    text: wearables.isRegistered ? "Gözlük bulunamadı" : "Gözlük bağlı değil",
+                    text: wearables.isRegistered ? "Glasses not found" : "Glasses not connected",
                     systemImage: "eyeglasses"
                 ))
             }
         } else {
-            chips.append(Chip(id: "device", text: "Telefon kamerası", systemImage: "iphone.rear.camera"))
+            chips.append(Chip(id: "device", text: "iPhone camera", systemImage: "iphone.rear.camera"))
         }
 
         switch controller.location.authorization {
         case .denied, .restricted:
-            chips.append(Chip(id: "location", text: "Konum kapalı", systemImage: "location.slash", tint: .orange))
+            chips.append(Chip(id: "location", text: "Location off", systemImage: "location.slash", tint: .attention))
         default:
             if controller.location.freshFix() != nil {
-                chips.append(Chip(id: "location", text: "Konum açık", systemImage: "location.fill", tint: .blue))
+                chips.append(Chip(id: "location", text: "Location on", systemImage: "location.fill", tint: .brandSky))
             }
         }
 
         chips.append(Chip(
             id: "memory",
-            text: "\(controller.memoryCount) anı",
+            text: "\(controller.memoryCount) \(controller.memoryCount == 1 ? "memory" : "memories")",
             systemImage: "square.stack.3d.up.fill",
             tint: .accentColor
         ))
         if !controller.enrichment.online {
-            chips.append(Chip(id: "online", text: "Çevrimdışı", systemImage: "wifi.slash", tint: .orange))
+            chips.append(Chip(id: "online", text: "Offline", systemImage: "wifi.slash", tint: .attention))
         } else if controller.pendingCount > 0 {
-            chips.append(Chip(id: "pending", text: "\(controller.pendingCount) işleniyor", systemImage: "sparkles"))
+            chips.append(Chip(id: "pending", text: "\(controller.pendingCount) processing", systemImage: "sparkles"))
         }
         self.chips = chips
 

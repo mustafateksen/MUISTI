@@ -16,41 +16,41 @@ struct SetupCards: View {
                 if !wearables.isRegistered {
                     ActionCard(
                         icon: "eyeglasses",
-                        title: "Gözlüğü bağla",
-                        message: "Meta AI uygulamasına geçip Muisti'yi onaylayacaksın, sonra buraya döneceksin. İnternet gerekli.",
-                        button: wearables.registrationState == .registering ? "Bağlanıyor…" : "Bağlan",
+                        title: "Connect your glasses",
+                        message: "You'll switch to the Meta AI app to approve Muisti, then come back here. Requires an internet connection.",
+                        button: wearables.registrationState == .registering ? "Connecting…" : "Connect",
                         action: register
                     )
                     if wearables.metaAIMissing {
-                        Link("Meta AI'ı App Store'da aç", destination: WearablesController.metaAIAppStoreURL)
+                        Link("Open Meta AI in the App Store", destination: WearablesController.metaAIAppStoreURL)
                             .font(.footnote.weight(.semibold))
                     }
                 } else if controller.state == .needsPermission {
                     ActionCard(
                         icon: "camera.badge.ellipsis",
-                        title: "Kamera izni gerekli",
-                        message: "Gözlük kamerasına erişim için Meta AI'da izin vermelisin.",
-                        button: "İzin ver",
+                        title: "Camera access needed",
+                        message: "Allow access to the glasses camera in Meta AI.",
+                        button: "Allow",
                         action: askForPermission
                     )
                 }
                 if wearables.requiresFirmwareUpdate {
                     ActionCard(
                         icon: "arrow.down.circle",
-                        title: "Gözlük yazılımı eski",
-                        message: "Güncelleme Meta AI uygulamasında yapılır.",
-                        button: "Güncelle",
-                        tint: .orange,
+                        title: "Glasses software out of date",
+                        message: "Update it in the Meta AI app.",
+                        button: "Update",
+                        tint: .attention,
                         action: openFirmwareUpdate
                     )
                 }
                 if glasses.needsGlassesAppUpdate {
                     ActionCard(
                         icon: "arrow.down.app",
-                        title: "Gözlükteki uygulama eski",
-                        message: "Güncelleme Meta AI uygulamasında yapılır.",
-                        button: "Güncelle",
-                        tint: .orange,
+                        title: "App on glasses out of date",
+                        message: "Update it in the Meta AI app.",
+                        button: "Update",
+                        tint: .attention,
                         action: openGlassesAppUpdate
                     )
                 }
@@ -58,10 +58,10 @@ struct SetupCards: View {
             if !controller.enrichment.hasKey {
                 ActionCard(
                     icon: "sparkles",
-                    title: "Yapay zekâyı aç",
-                    message: "Anahtar eklenince kayıtlar ad, telefon ve saat olarak düzenlenir; sorulara daha iyi cevap verilir. O zamana kadar kayıtlar telefonda bekler.",
-                    button: "Ayarlar'a git",
-                    tint: .purple,
+                    title: "Turn on AI",
+                    message: "Once you add a key, recordings are organized into names, phone numbers, and times, and questions get better answers. Until then, recordings wait on your phone.",
+                    button: "Go to Settings",
+                    tint: .brandViolet,
                     action: openSettings
                 )
             }

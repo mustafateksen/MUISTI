@@ -48,6 +48,8 @@ actor NemotronClient {
 
     enum NemotronError: Error, LocalizedError {
         case missingKey
+        /// A background request cancelled so a question could go first; retry later, not a failure.
+        case preempted
         case http(Int, String)
         case badResponse(String)
 
@@ -55,17 +57,18 @@ actor NemotronClient {
             switch self {
             case .http(let status, _): return status == 429 || status >= 500
             case .badResponse: return true
-            case .missingKey: return false
+            case .missingKey, .preempted: return false
             }
         }
 
         var errorDescription: String? {
             switch self {
-            case .missingKey: return "Nemotron API anahtarı yok (Ayarlar > Nemotron)."
-            case .http(401, _), .http(403, _): return "Nemotron API anahtarı geçersiz."
-            case .http(429, _): return "Nemotron istek sınırı doldu; biraz sonra tekrar denenecek."
+            case .missingKey: return "No Nemotron API key (Settings > Nemotron)."
+            case .preempted: return "Deferred for a question."
+            case .http(401, _), .http(403, _): return "Nemotron API key is invalid."
+            case .http(429, _): return "Nemotron rate limit reached; will retry shortly."
             case .http(let code, let body): return "Nemotron \(code): \(body.prefix(160))"
-            case .badResponse(let why): return "Nemotron yanıtı okunamadı: \(why)"
+            case .badResponse(let why): return "Couldn't read Nemotron response: \(why)"
             }
         }
     }
@@ -100,7 +103,17 @@ actor NemotronClient {
     /// Questions in flight. Background enrichment waits while > 0, so a spoken question never
     /// queues behind frame extraction on the same (sometimes slow) Verda endpoint.
     private(set) var questionsInFlight = 0
-    func beginQuestion() { questionsInFlight += 1 }
+    /// Background (enrichment) requests in flight; a question cancels them so it is served first.
+    private var backgroundRequests: [UUID: Task<(Data, URLResponse), Error>] = [:]
+
+    func beginQuestion() {
+        questionsInFlight += 1
+        if !backgroundRequests.isEmpty {
+            Log.net.info("question: pre-empting \(self.backgroundRequests.count) background request(s)")
+            backgroundRequests.values.forEach { $0.cancel() }
+            backgroundRequests.removeAll()
+        }
+    }
     func endQuestion() { questionsInFlight = max(0, questionsInFlight - 1) }
     /// Set after the host answers 404/400 for embeddings, so we stop spending calls on it.
     private var embeddingsUnavailable = false
@@ -129,9 +142,21 @@ actor NemotronClient {
     /// Returns the assistant text. Reasoning is disabled: it eats `max_tokens` and can leave
     /// `content` empty (team measurement: 6.3 s → 0.44 s per frame, same accuracy).
     /// `jsonSchema` (JSON text) turns on guided decoding.
+    /// Where a chat call goes: the configured host (Verda) or the NVIDIA build fallback.
+    enum Route: Sendable { case primary, fallback }
+
+    /// Same Nemotron 3.5 Super VL on build.nvidia.com, with the NVIDIA key (rerank/embed key).
+    var fallbackAvailable: Bool {
+        !settings.effectiveRerankKey.isEmpty && settings.baseURL.host != Provider.nvidia.baseURL.host
+    }
+
     func chat(system: String, user: String, image: ImagePart? = nil, examples: [(user: String, assistant: String)] = [],
               jsonSchema: String? = nil, schemaName: String = "record",
-              maxTokens: Int = 700, temperature: Double = 0) async throws -> String {
+              maxTokens: Int = 700, temperature: Double = 0,
+              route: Route = .primary, background: Bool = false) async throws -> String {
+        let baseURL = route == .primary ? settings.baseURL : Provider.nvidia.baseURL
+        let model = route == .primary ? settings.chatModel : Provider.nvidia.chatModel
+        let key = route == .primary ? settings.apiKey : settings.effectiveRerankKey
         var content: [[String: Any]] = [["type": "text", "text": user]]
         if let image {
             content.append([
@@ -146,7 +171,7 @@ actor NemotronClient {
         }
         messages.append(["role": "user", "content": content])
         var body: [String: Any] = [
-            "model": settings.chatModel,
+            "model": model,
             "messages": messages,
             "max_tokens": maxTokens,
             "temperature": temperature,
@@ -154,46 +179,48 @@ actor NemotronClient {
             "stream": false,
             "chat_template_kwargs": ["enable_thinking": false],
         ]
-        let host = settings.baseURL.host ?? ""
-        let url = settings.baseURL.appendingPathComponent("chat/completions")
+        let host = baseURL.host ?? ""
+        let url = baseURL.appendingPathComponent("chat/completions")
         var data: Data
         if let jsonSchema, !schemaUnsupportedHosts.contains(host),
            let schema = try? JSONSerialization.jsonObject(with: Data(jsonSchema.utf8)) {
             body["response_format"] = ["type": "json_schema", "json_schema": ["name": schemaName, "schema": schema]]
             do {
-                data = try await post(url, json: body, key: settings.apiKey)
+                data = try await post(url, json: body, key: key, background: background)
             } catch NemotronError.http(let status, _) where status == 400 || status == 422 {
                 schemaUnsupportedHosts.insert(host)
                 Log.net.info("json_schema rejected by \(host, privacy: .public) (\(status)); using json_object")
                 body["response_format"] = ["type": "json_object"]
-                data = try await post(url, json: body, key: settings.apiKey)
+                data = try await post(url, json: body, key: key, background: background)
             }
         } else {
             if jsonSchema != nil { body["response_format"] = ["type": "json_object"] }
-            data = try await post(url, json: body, key: settings.apiKey)
+            data = try await post(url, json: body, key: key, background: background)
         }
         guard
             let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
             let choices = root["choices"] as? [[String: Any]],
             let message = choices.first?["message"] as? [String: Any],
             let text = message["content"] as? String
-        else { throw NemotronError.badResponse("choices[0].message.content yok") }
+        else { throw NemotronError.badResponse("missing choices[0].message.content") }
         return text
     }
 
     /// Chat whose answer must be a JSON object; tolerant of code fences / prose around it.
     func chatJSON<T: Decodable>(_ type: T.Type, system: String, user: String, image: ImagePart? = nil,
                                 examples: [(user: String, assistant: String)] = [], jsonSchema: String? = nil,
-                                schemaName: String = "record", maxTokens: Int = 700, temperature: Double = 0) async throws -> T {
+                                schemaName: String = "record", maxTokens: Int = 700, temperature: Double = 0,
+                                route: Route = .primary, background: Bool = false) async throws -> T {
         let text = try await chat(system: system, user: user, image: image, examples: examples, jsonSchema: jsonSchema,
-                                  schemaName: schemaName, maxTokens: maxTokens, temperature: temperature)
+                                  schemaName: schemaName, maxTokens: maxTokens, temperature: temperature,
+                                  route: route, background: background)
         guard let json = Self.extractJSONObject(text) else {
-            throw NemotronError.badResponse("JSON bulunamadı: \(text.prefix(120))")
+            throw NemotronError.badResponse("no JSON found: \(text.prefix(120))")
         }
         do {
             return try JSONDecoder().decode(T.self, from: Data(json.utf8))
         } catch {
-            throw NemotronError.badResponse("JSON çözülemedi: \(error.localizedDescription)")
+            throw NemotronError.badResponse("couldn't decode JSON: \(error.localizedDescription)")
         }
     }
 
@@ -202,7 +229,7 @@ actor NemotronClient {
     enum EmbedKind: String { case passage, query }
 
     func embed(_ text: String, as kind: EmbedKind) async throws -> [Float] {
-        guard embeddingsEnabled else { throw NemotronError.badResponse("gömme kapalı") }
+        guard embeddingsEnabled else { throw NemotronError.badResponse("embeddings off") }
         var body: [String: Any] = [
             "model": settings.embedModel,
             "input": [String(text.prefix(4000))],
@@ -228,7 +255,7 @@ actor NemotronClient {
             let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
             let items = root["data"] as? [[String: Any]],
             let vector = items.first?["embedding"] as? [Double]
-        else { throw NemotronError.badResponse("embedding yok") }
+        else { throw NemotronError.badResponse("missing embedding") }
         return vector.map(Float.init)
     }
 
@@ -236,7 +263,7 @@ actor NemotronClient {
 
     /// Cross-encoder relevance of each passage to the query: one logit per passage, same order.
     func rerank(query: String, passages: [String]) async throws -> [Double] {
-        guard rerankEnabled else { throw NemotronError.badResponse("yeniden sıralama kapalı") }
+        guard rerankEnabled else { throw NemotronError.badResponse("reranking off") }
         guard !passages.isEmpty else { return [] }
         let model = rerankModelName
         do {
@@ -263,7 +290,7 @@ actor NemotronClient {
         guard
             let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
             let rankings = root["rankings"] as? [[String: Any]]
-        else { throw NemotronError.badResponse("rankings yok") }
+        else { throw NemotronError.badResponse("missing rankings") }
         var logits = [Double](repeating: -.infinity, count: passages.count)
         for item in rankings {
             guard let index = (item["index"] as? NSNumber)?.intValue, logits.indices.contains(index) else { continue }
@@ -280,7 +307,7 @@ actor NemotronClient {
 
     // MARK: Transport
 
-    private func post(_ url: URL, json: [String: Any], key: String, maxAttempts: Int = 4) async throws -> Data {
+    private func post(_ url: URL, json: [String: Any], key: String, maxAttempts: Int = 4, background: Bool = false) async throws -> Data {
         guard !key.isEmpty else { throw NemotronError.missingKey }
         let payload = try JSONSerialization.data(withJSONObject: json)
         var attempt = 0
@@ -294,7 +321,24 @@ actor NemotronClient {
             request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
             request.httpBody = payload
             do {
-                let (data, response) = try await session.data(for: request)
+                let (data, response): (Data, URLResponse)
+                if background {
+                    let id = UUID()
+                    let session = self.session
+                    let request = request
+                    let task = Task { try await session.data(for: request) }
+                    backgroundRequests[id] = task
+                    defer { backgroundRequests[id] = nil }
+                    do {
+                        (data, response) = try await task.value
+                    } catch is CancellationError {
+                        throw NemotronError.preempted
+                    } catch let error as URLError where error.code == .cancelled {
+                        throw NemotronError.preempted
+                    }
+                } else {
+                    (data, response) = try await session.data(for: request)
+                }
                 let status = (response as? HTTPURLResponse)?.statusCode ?? 0
                 if (200..<300).contains(status) { return data }
                 let error = NemotronError.http(status, String(decoding: data, as: UTF8.self))
@@ -346,7 +390,7 @@ actor NemotronClient {
 
 struct TimeoutError: Error, LocalizedError {
     let seconds: Double
-    var errorDescription: String? { "\(Int(seconds)) sn içinde yanıt gelmedi" }
+    var errorDescription: String? { "No response within \(Int(seconds)) s" }
 }
 
 /// Like `withTimeout`, but keeps the error (shown in the answer note and logged).

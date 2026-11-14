@@ -65,13 +65,33 @@ final class LocationProvider: NSObject, CLLocationManagerDelegate {
         }
         odometer = 0
         lastOdometerFix = nil
+        // Keeps GPS (and so the app) running in the background while capturing; the system
+        // shows the blue location indicator. Needs the "location" background mode.
+        manager.allowsBackgroundLocationUpdates = true
+        manager.showsBackgroundLocationIndicator = true
         manager.startUpdatingLocation()
         isRunning = true
     }
 
     func stop() {
         manager.stopUpdatingLocation()
+        manager.allowsBackgroundLocationUpdates = false
         isRunning = false
+    }
+
+    /// Fixes of the last two hours, for placing frames recorded in the background.
+    @ObservationIgnored private(set) var history: [LocationFix] = []
+
+    func remember(_ fix: LocationFix) {
+        history.append(fix)
+        let cutoff = fix.timestamp.addingTimeInterval(-2 * 3600)
+        if let first = history.first, first.timestamp < cutoff { history.removeAll { $0.timestamp < cutoff } }
+    }
+
+    /// The fix closest in time to `date` (within 60 s).
+    func fix(near date: Date) -> LocationFix? {
+        history.min { abs($0.timestamp.timeIntervalSince(date)) < abs($1.timestamp.timeIntervalSince(date)) }
+            .flatMap { abs($0.timestamp.timeIntervalSince(date)) <= 60 ? $0 : nil }
     }
 
     /// Latest fix if it is younger than `maxAge` (brief: no location older than 10 s).

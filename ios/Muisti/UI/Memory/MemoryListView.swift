@@ -2,7 +2,7 @@ import SwiftUI
 
 /// What is stored on this phone, as memory episodes (folders: one walk or visit each, grouped
 /// by time and place). Searching shows matching frames directly. Swipe to delete,
-/// "son 10 dakikayı unut", delete all.
+/// "forget the last 10 minutes", delete all.
 struct MemoryListView: View {
     let controller: CaptureController
     @State private var records: [MemoryRecord] = []
@@ -30,10 +30,7 @@ struct MemoryListView: View {
                             retentionDays: controller.config.retentionDays
                         )
                         .textCase(nil)
-                        .foregroundStyle(.primary)
-                    } footer: {
-                        Label("Hepsi yalnızca bu telefonda. Yüzler ve plakalar bulanıklaştırılır; video saklanmaz.", systemImage: "lock.fill")
-                            .padding(.top, Theme.Spacing.xs)
+                        .padding(.bottom, Theme.Spacing.xs)
                     }
                 }
 
@@ -56,7 +53,7 @@ struct MemoryListView: View {
                                     MemoryRow(record: record, store: controller.store)
                                 }
                                 .swipeActions {
-                                    Button("Sil", systemImage: "trash", role: .destructive) { delete(record) }
+                                    Button("Delete", systemImage: "trash", role: .destructive) { delete(record) }
                                 }
                             }
                         }
@@ -66,16 +63,16 @@ struct MemoryListView: View {
             .overlay {
                 if records.isEmpty {
                     ContentUnavailableView(
-                        "Henüz anı yok",
+                        "No memories yet",
                         systemImage: "square.stack.3d.up.slash",
-                        description: Text("Kaydı başlattığında gördüğün tabelalar, numaralar ve saatler burada görünür.")
+                        description: Text("When you start recording, the signs, numbers and opening hours you see will appear here.")
                     )
                 } else if filtered.isEmpty {
                     ContentUnavailableView.search
                 }
             }
-            .searchable(text: $query, prompt: "Ad, numara, sokak, yazı…")
-            .navigationTitle("Hafıza")
+            .searchable(text: $query, prompt: "Name, number, street, text…")
+            .navigationTitle("Memory")
             .navigationDestination(for: MemoryRecord.self) { record in
                 MemoryDetailView(record: record, controller: controller)
             }
@@ -84,15 +81,15 @@ struct MemoryListView: View {
             }
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Menu("Seçenekler", systemImage: "ellipsis.circle") {
-                        Button("Son 10 dakikayı unut", systemImage: "clock.arrow.circlepath", action: forgetRecent)
-                        Button("Tümünü sil", systemImage: "trash", role: .destructive) { confirmDeleteAll = true }
+                    Menu("Options", systemImage: "ellipsis.circle") {
+                        Button("Forget the last 10 minutes", systemImage: "clock.arrow.circlepath", action: forgetRecent)
+                        Button("Delete all", systemImage: "trash", role: .destructive) { confirmDeleteAll = true }
                     }
                     .labelStyle(.iconOnly)
-                    .confirmationDialog("Tüm hafıza silinsin mi?", isPresented: $confirmDeleteAll, titleVisibility: .visible) {
-                        Button("Tümünü sil", role: .destructive, action: deleteAll)
+                    .confirmationDialog("Delete all memories?", isPresented: $confirmDeleteAll, titleVisibility: .visible) {
+                        Button("Delete all", role: .destructive, action: deleteAll)
                     } message: {
-                        Text("Bu telefondaki bütün kareler ve kayıtlar kalıcı olarak silinir.")
+                        Text("All frames and memories on this iPhone will be permanently deleted.")
                     }
                 }
             }

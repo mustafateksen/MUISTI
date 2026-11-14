@@ -100,7 +100,7 @@ enum DebugLaunchArguments {
             case "register": await wearables.register()
             case "permit": await glasses.requestPermissionAndStart(using: wearables)
             case "highres": await controller.requestHighRes()
-            case "ask": await controller.voice.ask(ProcessInfo.processInfo.arguments.first { $0.hasPrefix("--ask=") }.map { String($0.dropFirst(6)) } ?? "Ne gördüm?")
+            case "ask": await controller.voice.ask(ProcessInfo.processInfo.arguments.first { $0.hasPrefix("--ask=") }.map { String($0.dropFirst(6)) } ?? "What did I see?")
             case "asks":
                 // `--asks=q1||q2||…`: one question after another (retrieval eval in the simulator).
                 let all = ProcessInfo.processInfo.arguments.first { $0.hasPrefix("--asks=") }.map { String($0.dropFirst(7)) } ?? ""

@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Small capsule with an icon and short text: "Gözlük %82", "Konum açık", "12 anı".
+/// Small capsule with an icon and short text: "Glasses 82%", "Location on", "12 memories".
 struct InfoChip: View {
     let text: String
     let systemImage: String
@@ -20,9 +20,9 @@ struct InfoChip: View {
 
 #Preview {
     FlowLayout {
-        InfoChip(text: "Gözlük %82", systemImage: "battery.75percent", tint: .green)
-        InfoChip(text: "Konum açık", systemImage: "location.fill")
-        InfoChip(text: "12 anı", systemImage: "square.stack.3d.up.fill", tint: .accentColor)
+        InfoChip(text: "Glasses 82%", systemImage: "battery.75percent", tint: .success)
+        InfoChip(text: "Location on", systemImage: "location.fill")
+        InfoChip(text: "12 memories", systemImage: "square.stack.3d.up.fill", tint: .accentColor)
     }
     .padding()
 }

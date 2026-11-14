@@ -20,13 +20,13 @@ struct MemoryRow: View {
                 if record.phone != nil || record.hours != nil || record.status == .pending {
                     FlowLayout {
                         if let phone = record.phone {
-                            InfoChip(text: phone, systemImage: "phone.fill", tint: .green)
+                            InfoChip(text: phone, systemImage: "phone.fill", tint: .success)
                         }
                         if let hours = record.hours {
-                            InfoChip(text: hours, systemImage: "clock.fill", tint: .blue)
+                            InfoChip(text: hours, systemImage: "clock.fill", tint: .brandSky)
                         }
                         if record.status == .pending {
-                            InfoChip(text: "İşleniyor", systemImage: "sparkles", tint: .purple)
+                            InfoChip(text: "Processing", systemImage: "sparkles", tint: .brandViolet)
                         }
                     }
                     .padding(.top, Theme.Spacing.xxs)

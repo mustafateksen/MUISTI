@@ -47,12 +47,12 @@ struct RecordControls: View {
         .buttonStyle(.borderedProminent)
         .buttonBorderShape(.capsule)
         .controlSize(.large)
-        .tint(isRecording ? .red : .accentColor)
+        .tint(isRecording ? .danger : .accentColor)
     }
 
     private var captureButton: some View {
         Button(action: captureNow) {
-            Label("Şimdi çek", systemImage: "camera.shutter.button")
+            Label("Capture now", systemImage: "camera.shutter.button")
                 .font(.headline)
                 .frame(minHeight: 34)
         }
@@ -65,9 +65,9 @@ struct RecordControls: View {
 
     private var primaryTitle: String {
         switch controller.state {
-        case .paused where controller.isRunning: return "Devam et"
-        case _ where isRecording: return "Durdur"
-        default: return "Kaydı başlat"
+        case .paused where controller.isRunning: return "Resume"
+        case _ where isRecording: return "Stop"
+        default: return "Start recording"
         }
     }
 

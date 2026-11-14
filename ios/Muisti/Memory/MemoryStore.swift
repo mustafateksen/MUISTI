@@ -31,7 +31,7 @@ struct MemoryRecord: Sendable, Identifiable, Hashable {
         if let name, !name.isEmpty { return kind.map { "\(name) · \($0)" } ?? name }
         if let kind { return kind }
         let firstLine = ocrText.split(separator: "\n").first.map(String.init) ?? ""
-        return firstLine.isEmpty ? "Kare" : firstLine
+        return firstLine.isEmpty ? "Frame" : firstLine
     }
 }
 
@@ -51,7 +51,7 @@ struct MemoryEpisode: Sendable, Identifiable, Hashable {
     var displayTitle: String {
         if let title, !title.isEmpty { return title }
         let time = startedAt.formatted(date: .omitted, time: .shortened)
-        return street.map { "\($0) · \(time)" } ?? "Anı · \(time)"
+        return street.map { "\($0) · \(time)" } ?? "Memory · \(time)"
     }
 }
 

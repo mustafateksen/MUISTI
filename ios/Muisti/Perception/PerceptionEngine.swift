@@ -5,7 +5,7 @@ import Foundation
 import ImageIO
 import Vision
 
-/// A place where nothing is recorded (home, work…). Plan: "kayıt yok" bölgeleri.
+/// A place where nothing is recorded (home, work…). Plan: "no-record" zones.
 struct NoRecordZone: Codable, Sendable, Identifiable, Equatable {
     var id = UUID()
     var name: String
@@ -23,11 +23,11 @@ enum DropReason: String, Sendable, CaseIterable {
 
     var label: String {
         switch self {
-        case .blurry: return "bulanık"
-        case .duplicate: return "tekrar"
-        case .noRecordZone: return "kayıt dışı bölge"
-        case .noText: return "yazısız"
-        case .unreadable: return "okunamadı"
+        case .blurry: return "blurry"
+        case .duplicate: return "duplicate"
+        case .noRecordZone: return "no-record zone"
+        case .noText: return "no text"
+        case .unreadable: return "unreadable"
         }
     }
 }

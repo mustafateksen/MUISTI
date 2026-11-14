@@ -37,9 +37,9 @@ struct ActionCard: View {
 #Preview {
     ActionCard(
         icon: "eyeglasses",
-        title: "Gözlüğü bağla",
-        message: "Meta AI uygulamasına geçip Muisti'yi onaylayacaksın.",
-        button: "Bağlan"
+        title: "Connect your glasses",
+        message: "You'll switch to the Meta AI app to approve Muisti.",
+        button: "Connect"
     ) {}
     .padding()
 }

@@ -17,17 +17,17 @@ enum AnswerLabel: String, Codable, Sendable {
     /// Sentence-case title for the answer card.
     var title: String {
         switch self {
-        case .seen: return "Gördüm"
-        case .unsure: return "Emin değilim"
-        case .unknown: return "Bilmiyorum"
+        case .seen: return "Seen"
+        case .unsure: return "Not sure"
+        case .unknown: return "Don't know"
         }
     }
 
     var display: String {
         switch self {
-        case .seen: return "GÖRDÜM"
-        case .unsure: return "EMİN DEĞİLİM"
-        case .unknown: return "BİLMİYORUM"
+        case .seen: return "SEEN"
+        case .unsure: return "NOT SURE"
+        case .unknown: return "DON'T KNOW"
         }
     }
 }
@@ -163,7 +163,9 @@ enum MemoryPrompts {
     a picture, and where.
     - Episodes: frames are grouped into episodes, continuous stretches of one walk or visit \
     (close in time and place). The episode list shows every frame of the episode in the order \
-    seen: "#k" is the frame's position in the episode (#3 comes right after #2), "+XmYYs" the \
+    seen: the most recent episode is always included, for "what did I just see" and "where am \
+    I now". "Last", "most recent", "just now" mean the smallest minutes_ago among everything \
+    shown (records and episode frames), not the last frame of some episode. "#k" is the frame's position in the episode (#3 comes right after #2), "+XmYYs" the \
     time from its start. Use it for relation questions: what was next to, before \
     or after something, what else was on the same street or at the same place, which way the \
     user went. Frames a few seconds apart were seen together or one right after the other. \
@@ -198,9 +200,9 @@ enum MemoryPrompts {
     - "GORDUM" when the records answer the question; "BILMIYORUM" when they do not (then say \
     briefly that you did not see it, and optionally the closest thing you did see).
 
-    Language: write answer, observations and unclear_reply in the language the QUESTION is \
-    written in, never in the language of the signs or records (a Turkish question about an \
-    English sign gets a Turkish answer; quote the sign's words as they are).
+    Language: write answer, observations and unclear_reply in the "Answer language" given in \
+    the message (detected from the question), never in the language of the signs, street names \
+    or records; quote the sign's words as they are. Set "language" to that code.
 
     Style: one or two short, natural spoken sentences in the language of the question. Never \
     mention record ids, frame numbers ("#3", "frame 4"), episode numbers or field names in \
@@ -232,11 +234,16 @@ enum MemoryPrompts {
      "required":["action","forget_minutes","language","label","support","answer","used_ids","quotes","observations","unclear_reply"]}
     """#
 
-    static func answerUser(question: String, now: Date, hasLocation: Bool, records: [String], episodes: [String] = []) -> String {
+    static func answerUser(question: String, language: (code: String, name: String)?, now: Date, hasLocation: Bool,
+                           records: [String], episodes: [String] = [], latest: [String] = []) -> String {
         """
+        Answer language: \(language.map { "\($0.name) (\($0.code)), detected from the question" } ?? "the language of the question")
         Current local time: \(QueryEngine.promptTime(now))
         User position known: \(hasLocation ? "yes" : "no")
         Question: \(question)
+
+        Most recent frames (newest first; "last" / "just now" / "where am I now" start here):
+        \(latest.isEmpty ? "(none)" : latest.joined(separator: "\n"))
 
         Records (most relevant first):
         \(records.isEmpty ? "(none — nothing relevant is in memory)" : records.joined(separator: "\n\n"))

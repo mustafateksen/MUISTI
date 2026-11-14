@@ -5,9 +5,9 @@ struct SuggestionList: View {
     let onSelect: (String) -> Void
 
     static let suggestions = [
-        "Dişçinin numarası neydi?",
-        "Eczane kaçta kapanıyor?",
-        "Son tabelada ne yazıyordu?",
+        "What was the dentist's number?",
+        "When does the pharmacy close?",
+        "What did the last sign say?",
     ]
 
     var body: some View {
@@ -25,6 +25,6 @@ struct SuggestionList: View {
         }
         .frame(maxWidth: .infinity)
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("Örnek sorular")
+        .accessibilityLabel("Example questions")
     }
 }

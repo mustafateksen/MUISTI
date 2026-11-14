@@ -36,13 +36,13 @@ struct EvidenceCard: View {
                     .padding(Theme.Spacing.s)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(.background.tertiary, in: .rect(cornerRadius: Theme.Radius.small))
-                    .accessibilityLabel("Okunan yazı: \(record.ocrText)")
+                    .accessibilityLabel("Recognized text: \(record.ocrText)")
             }
 
             if let lat = record.latitude, let lon = record.longitude {
                 let coordinate = CLLocationCoordinate2D(latitude: lat, longitude: lon)
                 Map(initialPosition: .region(MKCoordinateRegion(center: coordinate, latitudinalMeters: 400, longitudinalMeters: 400))) {
-                    Marker(record.name ?? record.kind ?? "Görüldü", coordinate: coordinate)
+                    Marker(record.name ?? record.kind ?? "Seen", coordinate: coordinate)
                 }
                 .frame(height: 130)
                 .clipShape(.rect(cornerRadius: Theme.Radius.inner))

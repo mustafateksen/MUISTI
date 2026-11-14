@@ -77,21 +77,33 @@ Gözlük tarafında fotoğraf yeteneğini açmak için önce kısa bir akış ba
 ### Telefonda RAG (Emir'in sunucusu yok, her şey uygulamada)
 
 ```
-kare → Vision OCR (aynı satırdaki kutular soldan sağa tek satır, L01…) → Nemotron çıkarma (few-shot, json_schema)
-     → kod kontrolü: ad/telefon/saat kendi satırında olmalı, items aynı satırda, en fazla 15 nesne
-     → useful=false ise kare silinir; yoksa metin + görsel hafıza (nesne, konum ilişkisi, RESİM) + Nemotron 3.5 Embed
-soru → Nemotron 3.5 Embed (~0,3 sn)
-     → telefonda hibrit arama (1–20 ms): FTS5 bm25 + bellek içi vektör indeksi (Accelerate) + kısmi okuma + yenilik,
-       RRF ile birleştirme → aynı tabelanın okumaları tek grup → Nemotron 3.5 Rerank 8B (ilk 20)
-     → tek Nemotron çağrısı: dil, "az önce / burada / şu an neredeyim", "unut" isteği ve cevap (yalnız kayıtlardan)
-     → kod kontrolü: her alıntı kayıtta, her sayı OCR'da; model "inferred" derse EMİN DEĞİLİM + gözlemler
+kare → Vision OCR (aynı satırdaki kutular soldan sağa tek satır, L01…) ‖ baş tespiti (paralel)
+     → baş/plaka maskesi (yüz + vücut duruşu + üst gövde, 2×2 parça; pikselleştir+bulanıklaştır; tespit hata verirse kare atılır)
+     → anı bölümü (zaman ≤10 dk ve konum ≤300 m ile bir önceki bölüme eklenir; yoksa yeni bölüm)
+     → Nemotron çıkarma (json_schema, few-shot yok): metin alanları kendi OCR satırından kontrol edilir,
+       8-15 nesne, ilişkiler, RESİM (gerçek değil) ayrımı; useful=false → kare silinir; bozuk JSON → bir kez temperature 0
+     → Nemotron 3.5 Embed; bölüm oturunca Nemotron başlık + özet yazar
+soru → Nemotron 3.5 Embed (~0,3 sn) → telefonda hibrit arama (FTS5 + bellek içi vektör + kısmi okuma + yenilik, RRF)
+     → aynı tabelanın okumaları tek grup → Nemotron 3.5 Rerank 8B
+     → tek Nemotron çağrısı: soru dili (Apple NaturalLanguage), en yeni kareler, ilgili kayıtlar ve bölümleri (kare sırası,
+       minutes_ago) → cevap / "unut" isteği; Verda 12 sn'de cevap vermezse aynı model NVIDIA build'den
+     → kod kontrolü: her alıntı kayıtta, her sayı OCR'da; tutmazsa bir düzeltme turu; "inferred" → EMİN DEĞİLİM
 ```
 
-- **Kodda dil ayrıştırma yok** (anahtar kelime listesi, "burada/az önce/unut" regex'i yok). Soruyu anlamak İngilizce sistem istemiyle modelin işi: `AI/MemoryAI.swift` (`answerSystem`), çıkarma: `AI/Extraction.swift`.
-- Çıkarma istemi ve kontrolleri ekibin v7 istemlerinden (31/31). Alınmayanlar: ayrı soru ayrıştırma çağrısı (+5 sn), liste / "neredeyim" sorularının koda yönlendirilmesi ve insan sözcüğü listesi (vakaya özel kod), LOOK yeniden bakma (cevap başına 3'e kadar ek görsel çağrı).
-- Her vektörün yanında model adı (`embed_model`) saklanır; model değişince eski satırlar arka planda yeniden gömülür.
-- Anahtarlar yalnız Keychain'de: `nvidia-api-key` (sohbet), `embed-api-key`, `rerank-api-key` (boşsa gömme anahtarı). Geliştirici paneli > Nemotron.
-- Test: `--embed=https://integrate.api.nvidia.com/v1|nvidia/nemotron-3.5-embed-1b|<anahtar> --rerank=nvidia/nemotron-3.5-rerank-8b|<anahtar> --mock-script=stop@0.3,asks@2 --asks=soru1||soru2` (sırayla sorar, iz `ask “…”` log satırında).
+- **Kodda dil ayrıştırma yok** (anahtar kelime listesi, regex yok). Soruyu anlamak İngilizce sistem istemiyle modelin işi: `AI/MemoryAI.swift` (`answerSystem`), çıkarma: `AI/Extraction.swift`.
+- Ekibin v12 istemlerinden alınanlar: OCR satır kimlikleri ve satır kontrolü, nesne grupları ve tanımları, resim/gerçek ayrımı, stated/inferred, alıntılar, max_tokens 2500, 1536 px. Alınmayanlar: few-shot örnekleri (örnek içeriği kopyalandı), ayrı soru ayrıştırma çağrısı (+5 sn), anahtar kelimeli nesne temizliği ve listelerin koda yönlendirilmesi (vakaya özel kod), LOOK yeniden bakma.
+- Soru dili İngilizceye kilitli (`en-US`, telefon dilinden bağımsız). Cevap sorunun dilinde.
+- Soru gelince arka plandaki çıkarma isteği iptal edilir (sayılmaz, sonra tekrar), soru önce cevaplanır.
+- Anahtarlar yalnız Keychain'de: `nvidia-api-key` (sohbet), `embed-api-key`, `rerank-api-key` (boşsa gömme anahtarı; NVIDIA yedek sohbet de bunu kullanır).
+- Örnek veri: Geliştirici > "Hafızayı silip örnek fotoğrafları yükle" (`Documents/ingest/manifest.json`), ya da `--script-only=wipe@0,ingest@1 --ingest=ingest`. Telefona: `devicectl device copy to … --destination Documents/ingest`.
+- Test: `--ask-only --asks=soru1||soru2` (son istem `Documents/last_prompt.txt`, DEBUG).
+
+### Arka planda kayıt
+
+Meta SDK `.hvc1` (HEVC) akışını arka planda sürdürür (`.raw` durur; CHANGELOG 0.5.0). Arka planda iOS GPU/donanım çözücü vermediği için:
+- Uygulama arka plana geçince gözlük kamerası 720p, 2 fps HEVC akışa geçer; sıkıştırılmış kareler çözülmeden dosyaya yazılır (`Glasses/BackgroundSegmentRecorder.swift`). GPS ("location" arka plan modu, mavi gösterge) uygulamayı canlı tutar ve konum geçmişi tutulur.
+- Öne gelince dosyadan ~2,5 sn'de bir kare alınır, gerçek zamanı ve en yakın GPS'iyle normal hattan geçer (OCR, maskeleme, tekrar, bölümler, Nemotron); dosya silinir. Fotoğraf modu kendiliğinden geri gelir.
+- Simülatörde (sahte gözlük) doğrulandı: 25 sn arka plan → 10 kare → 2 yeni anı. **Gerçek gözlükte denenmedi.** Kapatmak: Geliştirici > "Arka planda da kaydet".
 
 ## Dosyalar
 
@@ -102,8 +114,8 @@ Muisti/
   Glasses/     WearablesController, GlassesCaptureSource (A, B, C, uyarlamalı), MockDeviceController, MockRuntime
   Phone/       PhoneCameraSource, LocationProvider (+ sokak adı)
   Adaptive/    MotionProvider, AdaptiveScheduler
-  Perception/  PerceptionEngine (keskinlik, dHash + metin tekrarı, Vision OCR, yüz/plaka bulanıklaştırma, kayıt dışı bölge)
-  Memory/      MemoryStore (SQLite + FTS5 + RRF), VectorIndex (Accelerate), MemoryPipeline, EnrichmentWorker, QueryEngine (gruplama + rerank)
+  Perception/  PerceptionEngine (keskinlik, dHash + metin tekrarı, Vision OCR satırları, kayıt dışı bölge), HeadBlur (baş/plaka maskesi)
+  Memory/      MemoryStore (SQLite + FTS5 + RRF + anı bölümleri), VectorIndex (Accelerate), MemoryPipeline, EnrichmentWorker, QueryEngine (gruplama + rerank + bölüm bağlamı)
   AI/          NemotronClient (OpenAI uyumlu), MemoryAI (istemler + kanıt kuralı), KeychainStore
   Voice/       VoiceAssistant (dinle → sor → oku), AskIntent (Siri / Eylem Düğmesi)
   Pipeline/    CaptureController, SessionRecorder (isteğe bağlı ham veri seti)

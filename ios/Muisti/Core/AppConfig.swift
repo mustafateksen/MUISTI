@@ -18,10 +18,10 @@ enum CaptureMode: String, Codable, Sendable, CaseIterable, Identifiable {
 
     var label: String {
         switch self {
-        case .adaptive: return "Uyarlamalı (önerilen)"
-        case .stream: return "A · Düşük hızlı akış"
-        case .streamPlusPhoto: return "B · Akış + tetiklenen fotoğraf"
-        case .intervalPhoto: return "C · Aralıklı fotoğraf"
+        case .adaptive: return "Adaptive (recommended)"
+        case .stream: return "A · Low-rate stream"
+        case .streamPlusPhoto: return "B · Stream + triggered photo"
+        case .intervalPhoto: return "C · Interval photo"
         }
     }
 
@@ -36,9 +36,9 @@ enum StreamQuality: String, Codable, Sendable, CaseIterable, Identifiable {
     var id: String { rawValue }
     var label: String {
         switch self {
-        case .high: return "Yüksek 720×1280"
-        case .medium: return "Orta 504×896"
-        case .low: return "Düşük 360×640"
+        case .high: return "High 720×1280"
+        case .medium: return "Medium 504×896"
+        case .low: return "Low 360×640"
         }
     }
 }
@@ -83,6 +83,8 @@ struct CaptureConfig: Sendable, Equatable {
     /// Clockwise degrees (0/90/180/270) baked into real-glasses photos. Ray-Ban Meta Gen 2
     /// stills arrive in sensor order with no EXIF orientation; field test 13 Nov: 90° is upright.
     var glassesPhotoRotation: Int = 90
+    /// Keep recording (HEVC stream to a file) while the app is in the background.
+    var backgroundCapture: Bool = true
 }
 
 /// App-wide settings, persisted in `UserDefaults`, editable from Settings and the debug menu.
@@ -130,6 +132,7 @@ final class AppConfig {
         didSet { KeychainStore.write(apiKey.trimmingCharacters(in: .whitespacesAndNewlines), for: "nvidia-api-key") }
     }
     var autoReconnect: Bool { didSet { save("autoReconnect", autoReconnect) } }
+    var backgroundCapture: Bool { didSet { save("backgroundCapture", backgroundCapture) } }
     var glassesPhotoRotation: Int { didSet { save("glassesPhotoRotation", glassesPhotoRotation) } }
     var tuning: AdaptiveTuning {
         didSet { if let data = try? JSONEncoder().encode(tuning) { defaults.set(data, forKey: "tuning") } }
@@ -167,6 +170,7 @@ final class AppConfig {
         }
         apiKey = KeychainStore.read("nvidia-api-key") ?? ""
         autoReconnect = defaults.object(forKey: "autoReconnect") as? Bool ?? true
+        backgroundCapture = defaults.object(forKey: "backgroundCapture") as? Bool ?? true
         glassesPhotoRotation = defaults.object(forKey: "glassesPhotoRotation") as? Int ?? 90
         if let data = defaults.data(forKey: "tuning"),
            let decoded = try? JSONDecoder().decode(AdaptiveTuning.self, from: data) {
@@ -184,7 +188,8 @@ final class AppConfig {
             stillResolution: stillResolution,
             stillQuality: stillQuality,
             autoReconnect: autoReconnect,
-            glassesPhotoRotation: glassesPhotoRotation
+            glassesPhotoRotation: glassesPhotoRotation,
+            backgroundCapture: backgroundCapture
         )
     }
 

@@ -94,9 +94,9 @@ final class WearablesController {
         switch error {
         case .metaAINotInstalled:
             metaAIMissing = true
-            lastError = "Meta AI uygulaması yüklü değil. Gözlüğe bağlanmak için önce onu yükle."
+            lastError = "The Meta AI app isn't installed. Install it first to connect your glasses."
         case .networkUnavailable:
-            lastError = "Kayıt için internet gerekli. Bağlantıyı kontrol edip tekrar dene."
+            lastError = "Connecting needs internet. Check your connection and try again."
         case .alreadyRegistered:
             lastError = nil
         default:
@@ -126,7 +126,7 @@ final class WearablesController {
         do {
             let status = try await wearables.requestPermission(.camera)
             cameraPermission = status
-            if status != .granted { lastError = "Kamera izni verilmedi. Telefon kamerasına geçebilirsin." }
+            if status != .granted { lastError = "Camera access wasn't granted. You can switch to the iPhone camera." }
             return status == .granted
         } catch {
             if error == .metaAINotInstalled { metaAIMissing = true }
@@ -173,11 +173,11 @@ final class WearablesController {
 extension RegistrationState {
     var label: String {
         switch self {
-        case .unavailable: return "kullanılamıyor"
-        case .available: return "bağlı değil"
-        case .registering: return "bağlanıyor"
-        case .registered: return "bağlı"
-        @unknown default: return "bilinmiyor"
+        case .unavailable: return "unavailable"
+        case .available: return "not connected"
+        case .registering: return "connecting"
+        case .registered: return "connected"
+        @unknown default: return "unknown"
         }
     }
 }

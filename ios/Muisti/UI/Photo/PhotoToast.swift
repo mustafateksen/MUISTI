@@ -4,9 +4,9 @@ enum PhotoToast: Equatable {
 
     var text: String {
         switch self {
-        case .saved: "Fotoğraflara kaydedildi"
-        case .denied: "Fotoğraflar izni yok.\nAyarlar > Muisti > Fotoğraflar"
-        case .failed: "Kaydedilemedi, tekrar dene."
+        case .saved: "Saved to Photos"
+        case .denied: "No access to Photos.\nSettings > Muisti > Photos"
+        case .failed: "Couldn't save. Try again."
         }
     }
 

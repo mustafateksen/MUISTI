@@ -51,7 +51,7 @@ struct MemoryDetailView: View {
                     NavigationLink(value: episode) {
                         Label {
                             VStack(alignment: .leading, spacing: 2) {
-                                Text("Bu anının bölümü").font(.footnote).foregroundStyle(.secondary)
+                                Text("Episode for this memory").font(.footnote).foregroundStyle(.secondary)
                                 Text(episode.displayTitle).font(.body).lineLimit(2)
                             }
                         } icon: {
@@ -64,7 +64,7 @@ struct MemoryDetailView: View {
 
                 if let visual = record.visual {
                     VStack(alignment: .leading, spacing: Theme.Spacing.s) {
-                        Label("Görsel detaylar", systemImage: "eye")
+                        Label("Visual details", systemImage: "eye")
                             .font(.headline)
                         ForEach(Array(visual.split(separator: "\n").enumerated()), id: \.offset) { _, line in
                             Text(line)
@@ -77,9 +77,9 @@ struct MemoryDetailView: View {
                 }
 
                 VStack(alignment: .leading, spacing: Theme.Spacing.s) {
-                    Label("Karede okunan yazı", systemImage: "text.viewfinder")
+                    Label("Text in the frame", systemImage: "text.viewfinder")
                         .font(.headline)
-                    Text(record.ocrText.isEmpty ? "Yazı okunmadı." : record.ocrText)
+                    Text(record.ocrText.isEmpty ? "No text was read." : record.ocrText)
                         .font(.callout.monospaced())
                         .foregroundStyle(record.ocrText.isEmpty ? .secondary : .primary)
                         .textSelection(.enabled)
@@ -96,13 +96,13 @@ struct MemoryDetailView: View {
                     .clipShape(.rect(cornerRadius: Theme.Radius.card))
                 }
 
-                Button("Bu anıyı sil", systemImage: "trash", role: .destructive) { confirmDelete = true }
+                Button("Delete this memory", systemImage: "trash", role: .destructive) { confirmDelete = true }
                     .buttonStyle(.bordered)
                     .buttonBorderShape(.capsule)
                     .controlSize(.large)
                     .frame(maxWidth: .infinity)
-                    .confirmationDialog("Bu anı silinsin mi?", isPresented: $confirmDelete, titleVisibility: .visible) {
-                        Button("Sil", role: .destructive, action: delete)
+                    .confirmationDialog("Delete this memory?", isPresented: $confirmDelete, titleVisibility: .visible) {
+                        Button("Delete", role: .destructive, action: delete)
                     }
             }
             .padding(.horizontal, Theme.Spacing.l)

@@ -1,4 +1,5 @@
 import Foundation
+import NaturalLanguage
 
 struct AskResult: Sendable, Identifiable {
     let id = UUID()
@@ -55,7 +56,7 @@ actor QueryEngine {
 
         // 1. Query vector (~0.3–0.9 s; skipped when embeddings are off or slow).
         let (embedding, embedMs) = await Self.queryVector(ai, question: trimmed)
-        trace.add(embedding == nil ? "vektör yok" : "vektör \(embedMs) ms")
+        trace.add(embedding == nil ? "no vector" : "vector \(embedMs) ms")
 
         // 2. Retrieve on the phone.
         let searchStarted = ContinuousClock.now
@@ -66,7 +67,7 @@ actor QueryEngine {
 
         // 3. One entry per sign/object: repeated and partial reads collapse into one group.
         var groups = Self.group(hits).map { Self.withDistance($0, from: location) }
-        trace.add("arama \((ContinuousClock.now - searchStarted).milliseconds) ms · \(hits.count) kayıt → \(groups.count) grup")
+        trace.add("search \((ContinuousClock.now - searchStarted).milliseconds) ms · \(hits.count) records → \(groups.count) groups")
 
         // 4. Cross-encoder rerank of the top groups.
         if !groups.isEmpty, await ai.rerankEnabled {
@@ -84,21 +85,26 @@ actor QueryEngine {
                 groups = reranked + groups.dropFirst(head.count)
                 trace.add("rerank \((ContinuousClock.now - rerankStarted).milliseconds) ms (\(await ai.rerankModelName.split(separator: "/").last ?? ""))")
             } else {
-                trace.add("rerank yok")
+                trace.add("no rerank")
             }
         }
         let context = Array(groups.prefix(Self.answerContext))
-        if !context.isEmpty { trace.add("ilk: " + context.prefix(3).map(Self.traceLabel).joined(separator: ", ")) }
+        if !context.isEmpty { trace.add("top: " + context.prefix(3).map(Self.traceLabel).joined(separator: ", ")) }
 
         // 5. One model call: understand the question and answer from the records only.
         guard await ai.hasKey else {
-            return offline(trimmed, context, started, note: "Nemotron anahtarı yok; yerel arama.", trace)
+            return offline(trimmed, context, started, note: "No Nemotron key; local search.", trace)
         }
         // Episodes of the best records: the frames seen just before and after them, in order,
         // so the model can answer "what was next to / after / on the same walk as X".
         var episodeIDs: [Int64] = []
         for id in context.prefix(5).compactMap(\.record.episodeID) where !episodeIDs.contains(id) { episodeIDs.append(id) }
         episodeIDs = Array(episodeIDs.prefix(Self.episodeContext))
+        // The most recent episode is always there: "what did I just see / where am I now" need
+        // the latest frames whatever the search ranked first.
+        if let latest = await store.episodes(limit: 1).first, !episodeIDs.contains(latest.id) {
+            episodeIDs.append(latest.id)
+        }
         let episodes = await store.episodes(episodeIDs)
         var episodeText: [String] = []
         var pool = context
@@ -107,28 +113,39 @@ actor QueryEngine {
             guard let episode = episodes.first(where: { $0.id == id }) else { continue }
             let frames = await store.records(inEpisode: id)
             for (i, r) in frames.enumerated() { position[r.id] = (i + 1, frames.count) }
-            let shown = Self.window(frames, around: Set(context.flatMap(\.allRecords).map(\.id)))
-            episodeText.append(Self.describe(episode, frames: shown, total: frames.count,
+            let anchors = Set(context.flatMap(\.allRecords).map(\.id))
+            let shown = frames.contains(where: { anchors.contains($0.id) })
+                ? Self.window(frames, around: anchors)
+                : Array(frames.suffix(Self.framesPerEpisode))   // latest episode: its last frames
+            episodeText.append(Self.describe(episode, frames: shown, total: frames.count, now: now,
                                              position: { position[$0]?.index }))
             let known = Set(pool.flatMap(\.allRecords).map(\.id))
             pool += shown.filter { !known.contains($0.id) }.map { MemoryHit(record: $0, score: 0) }
         }
-        if !episodeText.isEmpty { trace.add("\(episodeText.count) anı bölümü") }
+        if !episodeText.isEmpty { trace.add("\(episodeText.count) episodes") }
+        // Reads of the same sign are checked together (a cited partial read is backed by the
+        // full read of the same sign).
+        pool = Self.group(pool)
 
         let answerStarted = ContinuousClock.now
-        let user = MemoryPrompts.answerUser(question: trimmed, now: now, hasLocation: location != nil,
+        let language = Self.detectLanguage(trimmed)
+        // Newest frames first, so recency never has to be worked out from relevance order.
+        let latest = await store.recent(limit: 5).map { r -> String in
+            let ago = max(0, Int(now.timeIntervalSince(r.seenAt) / 60))
+            let what = [r.kind, r.name].compactMap { $0 }.joined(separator: " ")
+            return "- id \(r.id), minutes_ago: \(ago), \(Self.promptTime(r.seenAt))" + (what.isEmpty ? "" : ", \(what)")
+                + (r.street.map { ", \($0)" } ?? "")
+        }
+        let user = MemoryPrompts.answerUser(question: trimmed, language: language, now: now, hasLocation: location != nil,
                                             records: context.map { Self.describe($0, now: now, position: position[$0.record.id]) },
-                                            episodes: episodeText)
+                                            episodes: episodeText, latest: latest)
         #if DEBUG
         // Last prompt, for checking retrieval/episode context (Documents/last_prompt.txt).
         if let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first {
             try? user.write(to: docs.appendingPathComponent("last_prompt.txt"), atomically: true, encoding: .utf8)
         }
         #endif
-        let answered = await withTimeoutResult(seconds: 40) {
-            try await ai.chatJSON(AnswerDraft.self, system: MemoryPrompts.answerSystem, user: user,
-                                  jsonSchema: MemoryPrompts.answerSchema, schemaName: "answer", maxTokens: 400, temperature: 0)
-        }
+        let answered = await Self.answer(ai, user: user, trace: &trace)
         let draft: AnswerDraft
         switch answered {
         case .success(let value):
@@ -136,9 +153,9 @@ actor QueryEngine {
         case .failure(let error):
             let why = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
             Log.net.error("answer call failed: \(why, privacy: .public)")
-            return offline(trimmed, context, started, note: "Nemotron cevap vermedi (\(why)); yerel arama.", trace)
+            return offline(trimmed, context, started, note: "Nemotron didn't answer (\(why)); local search.", trace)
         }
-        trace.add("cevap \((ContinuousClock.now - answerStarted).milliseconds) ms")
+        trace.add("answer \((ContinuousClock.now - answerStarted).milliseconds) ms")
 
         // One repair round: tell the model exactly which check failed and let it answer again.
         var final = draft
@@ -146,26 +163,52 @@ actor QueryEngine {
             Log.pipeline.info("evidence check failed (\(why, privacy: .public)); asking again")
             let retry = user + "\n\nYour previous reply was rejected by the evidence check: \(why). " +
                 "Answer again following the rules: leave out anything you cannot copy from the records' text."
-            if case .success(let second) = await withTimeoutResult(seconds: 20, {
-                try await ai.chatJSON(AnswerDraft.self, system: MemoryPrompts.answerSystem, user: retry,
-                                      jsonSchema: MemoryPrompts.answerSchema, schemaName: "answer", maxTokens: 400, temperature: 0)
-            }) {
+            if case .success(let second) = await Self.answer(ai, user: retry, trace: &trace) {
                 final = second
-                trace.add("düzeltme turu")
+                trace.add("repair round")
             }
         }
 
         // 6. Forget request, as understood by the model.
         if draft.action == .forget {
             guard let minutes = draft.forget_minutes, (1...Self.maxForgetMinutes).contains(minutes) else {
-                trace.add("unut: süre geçersiz (\(draft.forget_minutes.map(String.init) ?? "-"))")
+                trace.add("forget: invalid span (\(draft.forget_minutes.map(String.init) ?? "-"))")
                 return result(trimmed, draft.unclear_reply ?? draft.answer, .unknown, [], true, started, nil, draft.language, trace)
             }
             let removed = await store.delete(since: now.addingTimeInterval(-Double(minutes) * 60))
-            trace.add("unut: \(minutes) dk, \(removed) kayıt silindi")
+            trace.add("forget: \(minutes) min, \(removed) records deleted")
             return result(trimmed, draft.answer, .seen, [], true, started, nil, draft.language, trace)
         }
         return checked(final, question: trimmed, hits: pool, started: started, trace: trace)
+    }
+
+    /// The answer call: the configured Nemotron (Verda) gets 12 s; if it fails or is slow, the
+    /// same model on NVIDIA build answers. (Verda alone left answers as "Nemotron didn't answer"
+    /// when it was busy.)
+    private static func answer(_ ai: NemotronClient, user: String, trace: inout Trace) async -> Result<AnswerDraft, Error> {
+        let primary = await withTimeoutResult(seconds: 12) {
+            try await ai.chatJSON(AnswerDraft.self, system: MemoryPrompts.answerSystem, user: user,
+                                  jsonSchema: MemoryPrompts.answerSchema, schemaName: "answer", maxTokens: 400, temperature: 0)
+        }
+        guard case .failure(let error) = primary, await ai.fallbackAvailable else { return primary }
+        let why = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        Log.net.info("answer: primary failed (\(why, privacy: .public)); using NVIDIA build")
+        trace.add("fallback endpoint (\(why.prefix(40)))")
+        return await withTimeoutResult(seconds: 20) {
+            try await ai.chatJSON(AnswerDraft.self, system: MemoryPrompts.answerSystem, user: user,
+                                  jsonSchema: MemoryPrompts.answerSchema, schemaName: "answer", maxTokens: 400, temperature: 0,
+                                  route: .fallback)
+        }
+    }
+
+    /// Language of the question (Apple NaturalLanguage), as an English name for the prompt.
+    static func detectLanguage(_ text: String) -> (code: String, name: String)? {
+        let recognizer = NLLanguageRecognizer()
+        recognizer.processString(text)
+        guard let language = recognizer.dominantLanguage, language != .undetermined else { return nil }
+        let code = language.rawValue
+        let name = Locale(identifier: "en_US").localizedString(forLanguageCode: code) ?? code
+        return (code, name)
     }
 
     private static func queryVector(_ ai: NemotronClient, question: String) async -> ([Float]?, Int) {
@@ -290,7 +333,8 @@ actor QueryEngine {
         let ocr = evidence.map(mergedOCR).joined(separator: "\n")
         let fullText = evidence.map(recordText).joined(separator: "\n")
         var reasons: [String] = []
-        if let quote = draft.quotes.first(where: { !EvidenceRule.supports($0, in: fullText) }) {
+        // Our own "(none)" placeholder for frames without text is not a quote.
+        if let quote = draft.quotes.first(where: { !$0.hasPrefix("(") && !EvidenceRule.supports($0, in: fullText) }) {
             reasons.append("the quote \"\(quote)\" is not in the text of the records listed in used_ids")
         }
         let missing = EvidenceRule.unsupportedNumbers(in: draft.answer, ocr: ocr, allowed: seenTimes(evidence))
@@ -318,7 +362,7 @@ actor QueryEngine {
     }
 
     /// Final result: a reply that still fails the checks becomes "not clearly seen"; a reply
-    /// the model itself marks "inferred" is shown as its observations, labelled EMİN DEĞİLİM.
+    /// the model itself marks "inferred" is shown as its observations, labelled NOT SURE.
     private func checked(_ draft: AnswerDraft, question: String, hits: [MemoryHit],
                          started: ContinuousClock.Instant, trace: Trace) -> AskResult {
         let evidence = Self.evidence(for: draft, in: hits)
@@ -328,7 +372,7 @@ actor QueryEngine {
         if let why = Self.rejection(draft, hits: hits) {
             label = .unknown
             answer = draft.unclear_reply ?? Self.unclearText
-            trace.add("kanıt kuralı reddetti")
+            trace.add("evidence rule rejected")
             Log.pipeline.info("evidence rule rejected “\(draft.answer, privacy: .public)”: \(why, privacy: .public)")
         } else if label == .seen, draft.support == .inferred {
             label = .unsure
@@ -337,7 +381,7 @@ actor QueryEngine {
                EvidenceRule.numbersSupported(in: observations, ocr: ocr, allowed: Self.seenTimes(evidence)) {
                 answer = observations
             }
-            trace.add("yorum → emin değilim")
+            trace.add("inferred → not sure")
         }
         return result(question, answer, label, evidence, true, started, nil, draft.language, trace)
     }
@@ -359,7 +403,7 @@ actor QueryEngine {
         let r = best.record
         let text = Self.mergedOCR(best).split(separator: "\n").prefix(3).joined(separator: ", ")
         let time = r.seenAt.formatted(date: .omitted, time: .shortened)
-        let answer = text.isEmpty ? "En ilgili kare saat \(time); yazı okunmadı." : "En ilgili kayıt (saat \(time)): \(text)."
+        let answer = text.isEmpty ? "Closest frame at \(time); no text was read." : "Closest record (at \(time)): \(text)."
         return result(question, answer, .unknown, [best], false, started, note, nil, trace)
     }
 
@@ -421,17 +465,19 @@ actor QueryEngine {
     }
 
     /// One episode, its summary and its frames in the order seen (compact).
-    private static func describe(_ episode: MemoryEpisode, frames: [MemoryRecord], total: Int,
+    private static func describe(_ episode: MemoryEpisode, frames: [MemoryRecord], total: Int, now: Date,
                                  position: (Int64) -> Int?) -> String {
+        let endedAgo = max(0, Int(now.timeIntervalSince(episode.endedAt) / 60))
         var lines = ["Episode #\(episode.id): \(episode.title ?? "(no title yet)")",
-                     "Time: \(promptTime(episode.startedAt)) to \(promptTime(episode.endedAt)), \(total) frames"]
+                     "Time: \(promptTime(episode.startedAt)) to \(promptTime(episode.endedAt)) (ended minutes_ago: \(endedAgo)), \(total) frames"]
         if let street = episode.street { lines.append("Street: \(street)") }
         if let summary = episode.summary { lines.append("Summary: \(summary)") }
         lines.append(total > frames.count ? "Frames in order (part):" : "Frames in order:")
         for r in frames {
             let offset = Int(r.seenAt.timeIntervalSince(episode.startedAt))
             let order = position(r.id).map { "#\($0)" } ?? "#?"
-            var parts = ["\(order) id \(r.id)", "+\(offset / 60)m\(String(format: "%02d", offset % 60))s"]
+            let ago = max(0, Int(now.timeIntervalSince(r.seenAt) / 60))
+            var parts = ["\(order) id \(r.id)", "+\(offset / 60)m\(String(format: "%02d", offset % 60))s", "minutes_ago: \(ago)"]
             if let kind = r.kind { parts.append(kind) }
             if let name = r.name { parts.append("\"\(name)\"") }
             if let street = r.street, street != episode.street { parts.append("street: \(street)") }
@@ -446,6 +492,6 @@ actor QueryEngine {
     }
 
     // App UI strings for the paths where the model did not answer.
-    static let emptyText = "Hafızada bununla ilgili bir kayıt bulamadım."
-    static let unclearText = "Bunu net görmedim; en yakın kareyi gösteriyorum."
+    static let emptyText = "I couldn't find anything about that in memory."
+    static let unclearText = "I didn't see that clearly; here's the closest frame."
 }

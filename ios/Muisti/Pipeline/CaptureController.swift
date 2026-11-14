@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 import MWDATCore
 import Observation
@@ -114,9 +115,16 @@ final class CaptureController {
             }
         })
 
+        let locationProvider = location
         location.onFix = { [recorder] fix in
+            locationProvider.remember(fix)
             Task { await recorder.record(fix) }
         }
+        // Glasses video recorded while Muisti was in the background → frames → pipeline.
+        let segments = glasses.backgroundSegments
+        tasks.append(Task { [weak self] in
+            for await segment in segments { await self?.ingestBackgroundSegment(segment) }
+        })
         Task { [weak self] in
             guard let self else { return }
             await self.store.purge(olderThanDays: self.config.retentionDays)
@@ -143,12 +151,12 @@ final class CaptureController {
         await applySettings()
 
         if let free = Self.freeDiskBytes(), free < 500_000_000 {
-            notice = "Telefonda 500 MB'tan az yer var. Hafıza ve kayıt yazılamayabilir; yer aç."
+            notice = "Less than 500 MB free on your iPhone. Memories and recordings may not be saved; free up space."
         }
         if recordingFolder == nil, config.recordToDisk {
             if let free = Self.freeDiskBytes(), free < 1_000_000_000 {
                 // Raw 12 MP stills are ~1.8 MB each; below 1 GB free, keep the memory but skip raw copies.
-                notice = "Telefonda 1 GB'tan az yer var; ham kareler kaydedilmiyor (hafıza çalışıyor)."
+                notice = "Less than 1 GB free on your iPhone; raw frames aren't being saved (memory still works)."
                 await pipeline.configure(recordRaw: false, streamEveryN: config.passthroughEveryN, zones: config.zones)
             } else {
                 recordingFolder = (try? await recorder.begin())?.lastPathComponent
@@ -206,7 +214,7 @@ final class CaptureController {
         }
     }
 
-    /// "Şimdi çek".
+    /// "Capture now".
     func captureNow() async {
         guard !isCapturing else { return }
         isCapturing = true
@@ -218,7 +226,7 @@ final class CaptureController {
             frame = await activeSource.requestHighResPhoto()
         }
         guard var frame else {
-            notice = "Kare alınamadı. Kaynak hazır mı?"
+            notice = "Couldn't get a frame. Is the source ready?"
             return
         }
         frame.trigger = .manual
@@ -231,27 +239,62 @@ final class CaptureController {
         isCapturing = true
         defer { isCapturing = false }
         guard let frame = await activeSource.requestHighResPhoto() else {
-            notice = "Yüksek çözünürlüklü fotoğraf gelmedi."
+            notice = "No high-resolution photo arrived."
             return
         }
         ingest(frame)
     }
 
-    /// "Son N dakikayı unut": deletes records and keyframes on the phone.
+    /// "Forget the last N minutes": deletes records and keyframes on the phone.
     func forget(minutes: Int) async {
         let removed = await store.delete(since: Date().addingTimeInterval(TimeInterval(-60 * minutes)))
-        notice = "Son \(minutes) dakikadan \(removed) kayıt silindi."
+        notice = "Deleted \(removed) records from the last \(minutes) minutes."
         await refreshCounts()
     }
 
     func deleteAllMemories() async {
         let removed = await store.deleteAll()
-        notice = "\(removed) kayıt silindi."
+        notice = "Deleted \(removed) records."
         await refreshCounts()
     }
 
     func deleteMemory(_ id: Int64) async {
         await store.delete(id: id)
+        await refreshCounts()
+    }
+
+    /// Frames from a background recording, every `step` seconds, through the normal pipeline
+    /// with their real time and the nearest GPS fix. Dedup drops the repeats. File deleted after.
+    private func ingestBackgroundSegment(_ segment: BackgroundSegment, step: Double = 2.5) async {
+        let asset = AVURLAsset(url: segment.url)
+        let generator = AVAssetImageGenerator(asset: asset)
+        generator.appliesPreferredTrackTransform = true
+        generator.maximumSize = CGSize(width: 2400, height: 2400)
+        let tolerance = CMTime(seconds: 0.5, preferredTimescale: 600)
+        generator.requestedTimeToleranceBefore = tolerance
+        generator.requestedTimeToleranceAfter = tolerance
+        var kept = 0, sampled = 0
+        var t = 0.0
+        while t <= segment.duration {
+            defer { t += step }
+            guard let (image, actual) = try? await generator.image(at: CMTime(seconds: t, preferredTimescale: 600)),
+                  let jpeg = ImageData.encodeJPEG(image, quality: 0.85) else { continue }
+            sampled += 1
+            let at = segment.startedAt.addingTimeInterval(actual.seconds)
+            var frame = CapturedFrame(capturedAt: at, origin: .glassesStream, jpeg: jpeg,
+                                      pixelSize: CGSize(width: image.width, height: image.height),
+                                      isHighRes: false, trigger: .interval)
+            if let fix = location.fix(near: at) {
+                frame.latitude = fix.latitude
+                frame.longitude = fix.longitude
+                frame.horizontalAccuracy = fix.accuracy
+                frame.speedMps = fix.validSpeed
+                frame.headingDegrees = fix.validCourse
+            }
+            if await pipeline.handle(frame, street: nil) != nil { kept += 1 }
+        }
+        try? FileManager.default.removeItem(at: segment.url)
+        Log.pipeline.info("background segment \(Int(segment.duration)) s: \(sampled) frames sampled, \(kept) kept")
         await refreshCounts()
     }
 
@@ -337,14 +380,14 @@ final class CaptureController {
     private func tick() async {
         guard !isCapturing else { return }
         guard activeSource.state == .running else {
-            schedulerText = "Kaynak hazır değil"
+            schedulerText = "Source not ready"
             return
         }
         if let retryNotBefore, Date() < retryNotBefore { return }
 
         if config.mode == .intervalPhoto {
             let due = lastFixedCapture.map { Date().timeIntervalSince($0) >= config.intervalSeconds } ?? true
-            schedulerText = due ? "Çekiliyor" : "Sabit aralık \(Int(config.intervalSeconds)) sn"
+            schedulerText = due ? "Capturing" : "Fixed interval \(Int(config.intervalSeconds)) s"
             if due { await takeScheduledStill(.fixedInterval, input: nil) }
             return
         }
@@ -358,7 +401,11 @@ final class CaptureController {
         case .wait(let why), .hold(let why):
             schedulerText = why
         case .capture(let trigger):
-            schedulerText = "Çekiliyor (\(trigger.label))"
+            guard !glasses.recordingInBackground else {
+                schedulerText = "Recording in background (glasses stream saved to file)"
+                return
+            }
+            schedulerText = "Capturing (\(trigger.label))"
             await waitForSteadyMoment(trigger)
             await takeScheduledStill(trigger, input: input)
         }
@@ -371,7 +418,7 @@ final class CaptureController {
             failedStills += 1
             let pause = min(16, pow(2, Double(failedStills - 1)))
             retryNotBefore = Date().addingTimeInterval(pause)
-            schedulerText = "Kare gelmedi (\(failedStills)); \(Int(pause)) sn sonra tekrar"
+            schedulerText = "No frame (\(failedStills)); retrying in \(Int(pause)) s"
             return
         }
         failedStills = 0
@@ -479,17 +526,17 @@ extension HeatLevel {
 extension CaptureTrigger {
     var label: String {
         switch self {
-        case .stream: return "akış"
-        case .firstFrame: return "ilk kare"
-        case .distance: return "mesafe"
-        case .heading: return "dönüş"
-        case .dwell: return "durup bakma"
-        case .interval: return "süre"
-        case .idleRefresh: return "yenileme"
-        case .fixedInterval: return "sabit aralık"
-        case .followUp: return "tekrar bak"
-        case .manual: return "elle"
-        case .highRes: return "yüksek çözünürlük"
+        case .stream: return "stream"
+        case .firstFrame: return "first frame"
+        case .distance: return "distance"
+        case .heading: return "turn"
+        case .dwell: return "dwell"
+        case .interval: return "time"
+        case .idleRefresh: return "refresh"
+        case .fixedInterval: return "fixed interval"
+        case .followUp: return "follow-up"
+        case .manual: return "manual"
+        case .highRes: return "high-res"
         }
     }
 }

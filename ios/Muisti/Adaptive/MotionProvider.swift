@@ -7,12 +7,12 @@ enum MotionActivityKind: String, Sendable, Codable {
 
     var label: String {
         switch self {
-        case .unknown: return "bilinmiyor"
-        case .stationary: return "duruyor"
-        case .walking: return "yürüyor"
-        case .running: return "koşuyor"
-        case .cycling: return "bisiklette"
-        case .automotive: return "araçta"
+        case .unknown: return "unknown"
+        case .stationary: return "still"
+        case .walking: return "walking"
+        case .running: return "running"
+        case .cycling: return "cycling"
+        case .automotive: return "in vehicle"
         }
     }
 }

@@ -12,13 +12,13 @@ struct AISettingsSection: View {
 
     var body: some View {
         Section {
-            SecureField("API anahtarı", text: $config.apiKey)
+            SecureField("API key", text: $config.apiKey)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
                 .textContentType(.password)
             Button(action: runCheck) {
                 HStack {
-                    Text("Bağlantıyı dene")
+                    Text("Test connection")
                     Spacer()
                     checkStatus
                 }
@@ -27,12 +27,12 @@ struct AISettingsSection: View {
             if case .failed(let message) = check {
                 Text(message)
                     .font(.footnote)
-                    .foregroundStyle(.red)
+                    .foregroundStyle(.danger)
             }
         } header: {
-            Text("Yapay zekâ")
+            Text("AI")
         } footer: {
-            Text("Anahtar Keychain'de saklanır. Telefondan yalnızca bulanıklaştırılmış küçük kare ve okunan yazı gönderilir; hafıza telefonda kalır. Anahtar yoksa arama yerel yapılır.")
+            Text("The key is stored in the Keychain. Only a small blurred frame and the text read from it leave your iPhone; your memory stays on the device. Without a key, search runs locally.")
         }
         .onChange(of: config.apiKey) { check = .idle }
     }
@@ -45,12 +45,12 @@ struct AISettingsSection: View {
         case .checking:
             ProgressView()
         case .ok:
-            Label("Çalışıyor", systemImage: "checkmark.circle.fill")
-                .foregroundStyle(.green)
+            Label("Working", systemImage: "checkmark.circle.fill")
+                .foregroundStyle(.success)
         case .failed:
             Image(systemName: "xmark.circle.fill")
-                .foregroundStyle(.red)
-                .accessibilityLabel("Başarısız")
+                .foregroundStyle(.danger)
+                .accessibilityLabel("Failed")
         }
     }
 

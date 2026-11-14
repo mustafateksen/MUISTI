@@ -62,7 +62,7 @@ struct PhotoViewer: View {
 
     private var topBar: some View {
         HStack {
-            Button("Kapat", systemImage: "xmark") { dismiss() }
+            Button("Close", systemImage: "xmark") { dismiss() }
                 .labelStyle(.iconOnly)
                 .font(.title3.weight(.semibold))
                 .frame(width: 44, height: 44)
@@ -88,7 +88,7 @@ struct PhotoViewer: View {
     private var bottomBar: some View {
         HStack(spacing: Theme.Spacing.m) {
             Button(action: save) {
-                Label(saved ? "Kaydedildi" : "Fotoğraflara kaydet",
+                Label(saved ? "Saved" : "Save to Photos",
                       systemImage: saved ? "checkmark" : "square.and.arrow.down")
                     .contentTransition(.symbolEffect(.replace))
                     .frame(maxWidth: .infinity, minHeight: 44)
@@ -97,8 +97,8 @@ struct PhotoViewer: View {
 
             if let image {
                 let preview = Image(uiImage: image)
-                ShareLink(item: preview, preview: SharePreview(title ?? "Muisti anısı", image: preview)) {
-                    Label("Paylaş", systemImage: "square.and.arrow.up")
+                ShareLink(item: preview, preview: SharePreview(title ?? "Muisti memory", image: preview)) {
+                    Label("Share", systemImage: "square.and.arrow.up")
                         .labelStyle(.iconOnly)
                         .frame(width: 44, height: 44)
                 }

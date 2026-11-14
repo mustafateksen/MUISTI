@@ -9,21 +9,21 @@ struct PrivacySettingsSection: View {
 
     var body: some View {
         Section {
-            Stepper("Kayıtları \(config.retentionDays) gün sakla", value: $config.retentionDays, in: 1...30)
-            Button("Son 10 dakikayı unut", systemImage: "clock.arrow.circlepath", role: .destructive) {
+            Stepper("Keep memories for \(config.retentionDays) days", value: $config.retentionDays, in: 1...30)
+            Button("Forget the last 10 minutes", systemImage: "clock.arrow.circlepath", role: .destructive) {
                 confirmForget = true
             }
-            .confirmationDialog("Son 10 dakikadaki kayıtlar silinsin mi?", isPresented: $confirmForget, titleVisibility: .visible) {
-                Button("Unut", role: .destructive, action: forgetRecent)
+            .confirmationDialog("Delete memories from the last 10 minutes?", isPresented: $confirmForget, titleVisibility: .visible) {
+                Button("Forget", role: .destructive, action: forgetRecent)
             }
         } header: {
-            Text("Mahremiyet")
+            Text("Privacy")
         } footer: {
-            Text("Yüzler ve plakalar telefonda bulanıklaştırılır; ham video saklanmaz.")
+            Text("Faces and license plates are blurred on your iPhone; raw video is never stored.")
         }
 
         Section {
-            Button("Bulunduğum yeri kayıt dışı yap", systemImage: "location.slash.circle", action: addZone)
+            Button("Don't record at my current location", systemImage: "location.slash.circle", action: addZone)
             if let zoneMessage {
                 Text(zoneMessage)
                     .font(.footnote)
@@ -34,9 +34,9 @@ struct PrivacySettingsSection: View {
             }
             .onDelete { config.zones.remove(atOffsets: $0) }
         } header: {
-            Text("Kayıt dışı yerler")
+            Text("No-record zones")
         } footer: {
-            Text("Ev ya da iş gibi yerlerin 100 m çevresinde görülenler hafızaya yazılmaz. Silmek için sola kaydır.")
+            Text("Nothing seen within 100 m of places like home or work is saved to memory. Swipe left to delete.")
         }
     }
 
@@ -45,8 +45,8 @@ struct PrivacySettingsSection: View {
     }
 
     private func addZone() {
-        zoneMessage = controller.addZoneHere(name: "Yer \(config.zones.count + 1)")
-            ? "Eklendi."
-            : "Konum alınamadı. Kayıt sürerken tekrar dene."
+        zoneMessage = controller.addZoneHere(name: "Place \(config.zones.count + 1)")
+            ? "Added."
+            : "Couldn't get your location. Try again while recording."
     }
 }

@@ -4,7 +4,7 @@ import SwiftUI
 /// capture modes (A/B/C), the Nemotron endpoint, stream/photo parameters, adaptive scheduler
 /// tuning, the raw dataset switch and (DEBUG) the mock glasses.
 ///
-/// Shown as a sheet from the Kayıt toolbar, or pushed from Settings > Gelişmiş.
+/// Shown as a sheet from the Recording toolbar, or pushed from Settings > Advanced.
 struct DeveloperView: View {
     let controller: CaptureController
     @Bindable var config: AppConfig
@@ -15,7 +15,7 @@ struct DeveloperView: View {
 
     var body: some View {
         Form {
-            Section("Canlı durum") {
+            Section("Live status") {
                 StatusBanner(controller: controller, config: config, wearables: wearables)
                     .listRowInsets(EdgeInsets())
                     .listRowBackground(Color.clear)
@@ -27,29 +27,29 @@ struct DeveloperView: View {
             AdaptiveTuningSection(config: config)
 
             Section {
-                Toggle("Ham kareleri de kaydet", isOn: $config.recordToDisk)
-                Text("Dosyalar > Bu iPhone'da > Muisti > sessions")
+                Toggle("Also save raw frames", isOn: $config.recordToDisk)
+                Text("Files > On My iPhone > Muisti > sessions")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             } header: {
-                Text("Veri seti")
+                Text("Dataset")
             } footer: {
-                Text("Yalnızca gözlük penceresi için veri seti. Kapalıyken ham kare saklanmaz.")
+                Text("Dataset for the glasses window only. When off, no raw frames are stored.")
             }
 
             #if DEBUG
             Section {
                 NavigationLink(value: DeveloperRoute.mockDevice) {
-                    Label("Sahte gözlük (MockDeviceKit)", systemImage: "eyeglasses.slash")
+                    Label("Mock glasses (MockDeviceKit)", systemImage: "eyeglasses.slash")
                 }
             } header: {
-                Text("Simülasyon")
+                Text("Simulation")
             } footer: {
-                Text("Simülatörde gözlüksüz deneme: tabela videosu, menteşe, pil, ısı ve hata senaryoları.")
+                Text("Test without glasses in the Simulator: sign video, hinge, battery, heat and error scenarios.")
             }
             #endif
         }
-        .navigationTitle("Geliştirici")
+        .navigationTitle("Developer")
         .navigationBarTitleDisplayMode(.inline)
         .navigationDestination(for: DeveloperRoute.self) { route in
             switch route {
@@ -64,7 +64,7 @@ struct DeveloperView: View {
         .toolbar {
             if showsDoneButton {
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Bitti") { dismiss() }
+                    Button("Done") { dismiss() }
                 }
             }
         }

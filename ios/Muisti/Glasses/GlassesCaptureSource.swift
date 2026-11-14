@@ -93,6 +93,14 @@ final class GlassesCaptureSource: CaptureSource {
 
     @ObservationIgnored private var deviceMonitorTask: Task<Void, Never>?
     @ObservationIgnored private var backgroundTask: Task<Void, Never>?
+    @ObservationIgnored private var foregroundTask: Task<Void, Never>?
+    /// True while the app is in the background and the glasses' HEVC stream is being written
+    /// to a file (see `BackgroundSegmentRecorder`).
+    private(set) var recordingInBackground = false
+    @ObservationIgnored private var backgroundRecorder: BackgroundSegmentRecorder?
+    /// Finished background recordings, for the controller to run through the pipeline.
+    @ObservationIgnored let backgroundSegments: AsyncStream<BackgroundSegment>
+    @ObservationIgnored private let segmentContinuation: AsyncStream<BackgroundSegment>.Continuation
 
     private static let photoTimeout: Duration = .seconds(25)   // field: first 12 MP still took 13–15 s
 
@@ -100,6 +108,7 @@ final class GlassesCaptureSource: CaptureSource {
         self.wearables = wearables
         selector = AutoDeviceSelector(wearables: wearables)
         (frames, frameContinuation) = AsyncStream.makeStream(of: CapturedFrame.self, bufferingPolicy: .bufferingNewest(2))
+        (backgroundSegments, segmentContinuation) = AsyncStream.makeStream(of: BackgroundSegment.self)
         (states, stateContinuation) = AsyncStream.makeStream(of: CaptureState.self, bufferingPolicy: .bufferingNewest(8))
         hasActiveDevice = selector.activeDevice != nil
         startDeviceMonitoring()
@@ -116,32 +125,32 @@ final class GlassesCaptureSource: CaptureSource {
     /// What the user should do while we wait for the glasses (brief §7: one next step).
     var waitingHint: String {
         guard hasActiveDevice else {
-            return "Gözlük açık, menteşesi açık ve telefonun yakınında olmalı."
+            return "Turn on your glasses, unfold them and keep them near your iPhone."
         }
-        if device.hinge == .closed { return "Menteşe kapalı. Açınca yeni oturum kurulur." }
-        if device.don == .doffed { return "Gözlük takılı değil. Takınca yeniden bağlanır." }
-        if device.link != .connected { return "Gözlük bağlanıyor…" }
+        if device.hinge == .closed { return "Glasses are folded. Unfold them to start a new session." }
+        if device.don == .doffed { return "Glasses aren't on. Put them on to reconnect." }
+        if device.link != .connected { return "Connecting to glasses…" }
         if config?.autoReconnect == true, reconnectAttempts >= 5 {
-            return "Bağlanılamadı. Durdurup yeniden başlat."
+            return "Couldn't connect. Stop and start again."
         }
-        return "Gözlüğe yeniden bağlanılıyor…"
+        return "Reconnecting to glasses…"
     }
 
     /// Battery / heat warning derived from device state (brief §7). The SDK also reports
     /// `StreamError.batteryLow/.thermalHot`, but those arrive only once the device acts.
     var healthWarning: String? {
         guard hasActiveDevice else { return nil }
-        let suggestion = usesPhoto ? "" : " Uyarlamalı moda geçmek pili ve ısıyı rahatlatır."
+        let suggestion = usesPhoto ? "" : " Switching to adaptive mode saves battery and reduces heat."
         switch device.thermal {
         case .critical, .emergency, .shutdown:
-            return "Gözlük aşırı ısındı; çekim duraklatıldı, soğumasını bekle."
+            return "Glasses are too hot; capture paused. Let them cool down."
         case .severe:
-            return "Gözlük ısınıyor; çekim seyreltildi." + suggestion
+            return "Glasses are warming up; capturing less often." + suggestion
         default:
             break
         }
         if let battery = device.battery, battery < 15, device.charging != .charging {
-            return "Gözlük pili düşük (%\(battery)); çekim seyreltildi." + suggestion
+            return "Glasses battery low (\(battery)%); capturing less often." + suggestion
         }
         return nil
     }
@@ -240,6 +249,10 @@ final class GlassesCaptureSource: CaptureSource {
         blocked = nil
         lastError = nil
         backgroundPaused = false
+        if recordingInBackground {
+            recordingInBackground = false
+            await finishBackgroundRecording()
+        }
         reconnectTask?.cancel()
         reconnectTask = nil
         pendingPhoto.fulfill(nil)
@@ -253,6 +266,7 @@ final class GlassesCaptureSource: CaptureSource {
 
     func captureStill(trigger: CaptureTrigger) async -> CapturedFrame? {
         guard usesPhoto else { return nil }   // stream modes deliver through `frames`
+        guard !recordingInBackground else { return nil }   // background: the stream is recorded instead
         guard let config else { return nil }
         return await takePhoto(
             resolution: config.stillResolution.sdk,
@@ -424,7 +438,12 @@ final class GlassesCaptureSource: CaptureSource {
     private func attachCameraIfNeeded() {
         guard let session, session.state == .started, camera == nil, let config else { return }
         let streamConfig: StreamConfiguration
-        if config.mode.usesPhotoCapability {
+        let background = recordingInBackground
+        if background {
+            // The SDK keeps .hvc1 streaming in the background (.raw pauses). 720p for legible
+            // signs, 2 fps: frames are sampled every ~2.5 s later anyway.
+            streamConfig = StreamConfiguration(videoCodec: .hvc1, resolution: .high, frameRate: 2)
+        } else if config.mode.usesPhotoCapability {
             // Wake-up stream only: compressed, smallest, slowest. Nothing decodes it.
             streamConfig = StreamConfiguration(videoCodec: .hvc1, resolution: .low, frameRate: 2)
         } else {
@@ -436,12 +455,13 @@ final class GlassesCaptureSource: CaptureSource {
         }
         do {
             guard let newCamera = try session.addCamera(config: streamConfig) else {
-                lastError = "Kamera eklenemedi. Tekrar dene."
+                lastError = "Couldn't add the camera. Try again."
                 return
             }
             camera = newCamera
             resetCameraFlags()
-            observe(camera: newCamera, photoMode: config.mode.usesPhotoCapability)
+            observe(camera: newCamera, photoMode: !background && config.mode.usesPhotoCapability,
+                    recorder: background ? backgroundRecorder : nil)
             streamState = .starting
             newCamera.stream.start()
         } catch {
@@ -450,7 +470,7 @@ final class GlassesCaptureSource: CaptureSource {
         recompute()
     }
 
-    private func observe(camera: MWDATCamera.Camera, photoMode: Bool) {
+    private func observe(camera: MWDATCamera.Camera, photoMode: Bool, recorder: BackgroundSegmentRecorder? = nil) {
         let stream = camera.stream
         camera.statePublisher.listen { [weak self] state in
             Task { @MainActor in self?.cameraStateChanged(state) }
@@ -485,6 +505,11 @@ final class GlassesCaptureSource: CaptureSource {
             }.store(in: cameraTokens)
             photo.transferProgressPublisher.listen { [weak self] progress in
                 Task { @MainActor in self?.transferFraction = progress.fraction }
+            }.store(in: cameraTokens)
+        } else if let recorder {
+            // Background: compressed samples go straight to the file, nothing is decoded.
+            stream.videoFramePublisher.listen { frame in
+                recorder.append(frame.sampleBuffer)
             }.store(in: cameraTokens)
         } else {
             // Frames never touch the main actor: encode on a background queue, drop when busy.
@@ -535,7 +560,7 @@ final class GlassesCaptureSource: CaptureSource {
         Log.glasses.info("stream → \(String(describing: newState), privacy: .public)")
         switch newState {
         case .streaming:
-            if usesPhoto { startPhotoIfNeeded() }
+            if usesPhoto, !recordingInBackground { startPhotoIfNeeded() }
         case .stopped:
             if usesPhoto, wakeStreamStopIntended {
                 break   // ours: the photo capability now has the sensor to itself
@@ -599,21 +624,21 @@ final class GlassesCaptureSource: CaptureSource {
         switch error {
         case .datAppOnTheGlassesUpdateRequired:
             needsGlassesAppUpdate = true
-            lastError = "Gözlükteki uygulamanın güncellenmesi gerekiyor."
+            lastError = "The app on your glasses needs an update."
         case .noEligibleDevice:
-            lastError = "Uygun gözlük yok. Gözlük açık, menteşesi açık ve yakında mı?"
+            lastError = "No compatible glasses found. Are they on, unfolded and nearby?"
         case .thermalCritical, .thermalEmergency:
-            lastError = "\(error.localizedDescription) Gözlük soğuyana kadar bekle."
+            lastError = "\(error.localizedDescription) Wait for the glasses to cool down."
         case .batteryCritical, .peakPowerShutdown:
-            lastError = "\(error.localizedDescription) Gözlüğü şarj et."
+            lastError = "\(error.localizedDescription) Charge your glasses."
         case .insufficientSDKVersion:
             blocked = .failed(message: error.localizedDescription)
         case .dwaOutOfStuRange:
             break   // non-blocking compatibility warning
         case .unexpectedError(let description):
             // Session teardown (folded, taken off, out of range) arrives here as free text.
-            // No raw SDK text on screen and no matching on it: the device state ("Gözlük
-            // bekleniyor") and auto-reconnect already tell the user what is happening.
+            // No raw SDK text on screen and no matching on it: the device state ("Waiting for
+            // glasses") and auto-reconnect already tell the user what is happening.
             Log.glasses.info("session error: \(description, privacy: .public)")
             lastError = nil
         default:
@@ -629,11 +654,11 @@ final class GlassesCaptureSource: CaptureSource {
         case .permissionDenied:
             permissionVerified = false
             blocked = .needsPermission
-            lastError = "Kamera izni yok. İzin ver ya da telefon kamerasına geç."
+            lastError = "No camera access. Allow it or switch to the iPhone camera."
         case .hingesClosed:
-            lastError = "Menteşe kapandı ya da gözlük çıkarıldı. Açınca yeni oturum gerekir."
+            lastError = "Glasses were folded or taken off. Unfold them to start a new session."
         case .thermalHot, .batteryLow, .peakPowerLimit:
-            lastError = "\(error.localizedDescription) Uyarlamalı mod pil ve ısıyı rahatlatır."
+            lastError = "\(error.localizedDescription) Adaptive mode saves battery and reduces heat."
         case .photoCaptureFailed:
             pendingStreamPhoto.fulfill(nil)   // silent: keep using stream frames
         default:
@@ -650,9 +675,9 @@ final class GlassesCaptureSource: CaptureSource {
         case .permissionDenied:
             permissionVerified = false
             blocked = .needsPermission
-            lastError = "Kamera izni yok."
+            lastError = "No camera access."
         case .deviceHealthCritical:
-            lastError = "\(error.localizedDescription) Gözlük dinlensin."
+            lastError = "\(error.localizedDescription) Give the glasses a rest."
         default:
             break   // capture failures are logged, not shown
         }
@@ -738,12 +763,31 @@ final class GlassesCaptureSource: CaptureSource {
                 self?.handleDidEnterBackground()
             }
         }
+        foregroundTask = Task { [weak self] in
+            for await _ in NotificationCenter.default.notifications(named: UIApplication.willEnterForegroundNotification) {
+                await self?.handleWillEnterForeground()
+            }
+        }
     }
 
-    /// Mirrors the sample: end the session on purpose, hide the expected teardown errors
-    /// for 5 s, and offer "Devam et" on return. Background streaming is not relied upon.
+    /// Background capture (default): swap the camera to an `.hvc1` stream, which the SDK keeps
+    /// running in the background, and write it to a file. Without it (setting off, or no
+    /// running session): end the session on purpose and offer "Resume" on return.
     private func handleDidEnterBackground() {
         guard wantRunning, session != nil else { return }
+        if config?.backgroundCapture == true, session?.state == .started {
+            recordingInBackground = true
+            backgroundRecorder = BackgroundSegmentRecorder(
+                directory: FileManager.default.temporaryDirectory.appendingPathComponent("background", isDirectory: true))
+            detachCamera()
+            Log.glasses.info("background: recording the HEVC stream")
+            Task { [weak self] in
+                try? await Task.sleep(for: .milliseconds(500))
+                self?.attachCameraIfNeeded()
+            }
+            recompute()
+            return
+        }
         backgroundPaused = true
         suppressErrorsUntil = Date().addingTimeInterval(5)
         reconnectTask?.cancel()
@@ -751,6 +795,35 @@ final class GlassesCaptureSource: CaptureSource {
         camera?.stop()
         session?.stop()
         recompute()
+    }
+
+    /// Back in the foreground: close the background file, hand it over, restore the camera.
+    private func handleWillEnterForeground() async {
+        guard recordingInBackground else { return }
+        recordingInBackground = false
+        detachCamera()
+        recompute()
+        await finishBackgroundRecording()
+        try? await Task.sleep(for: .milliseconds(500))
+        if wantRunning { attachCameraIfNeeded() }
+    }
+
+    private func finishBackgroundRecording() async {
+        let recorder = backgroundRecorder
+        backgroundRecorder = nil
+        if let segment = await recorder?.finish() {
+            Log.glasses.info("background segment: \(Int(segment.duration)) s")
+            segmentContinuation.yield(segment)
+        }
+    }
+
+    private func detachCamera() {
+        camera?.stop()
+        cameraTokens.clear()
+        camera = nil
+        resetCameraFlags()
+        pendingPhoto.fulfill(nil)
+        pendingStreamPhoto.fulfill(nil)
     }
 
     // MARK: - Derived state
@@ -762,7 +835,7 @@ final class GlassesCaptureSource: CaptureSource {
         } else if !wantRunning {
             next = .idle
         } else if backgroundPaused {
-            next = .paused(reason: "arka plandan dönüldü")
+            next = .paused(reason: "returned from background")
         } else if session == nil {
             next = .waitingForDevice
         } else {
@@ -776,7 +849,7 @@ final class GlassesCaptureSource: CaptureSource {
                 if streamState == .paused || photoState == .started {
                     next = .paused(reason: device.don == .doffed ? Self.doffedReason : Self.tapReason)
                 } else {
-                    next = .paused(reason: "gözlük başka bir deneyime geçti")
+                    next = .paused(reason: "glasses switched to another experience")
                 }
             case .started:
                 next = startedState()
@@ -787,8 +860,8 @@ final class GlassesCaptureSource: CaptureSource {
         state = next
     }
 
-    private static let doffedReason = "gözlük takılı değil; takınca sapa dokun"
-    private static let tapReason = "devam için gözlüğün sapına dokun"
+    private static let doffedReason = "glasses aren't on; put them on and tap the temple"
+    private static let tapReason = "tap the glasses' temple to resume"
 
     private func startedState() -> CaptureState {
         let doffedReason = Self.doffedReason

@@ -11,7 +11,7 @@ struct PreviewView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.s) {
             HStack {
-                Text("Son görülen").font(.headline)
+                Text("Last seen").font(.headline)
                 Spacer()
                 if let lastFrame {
                     Text(lastFrame.at, style: .relative)
@@ -71,7 +71,7 @@ struct PreviewView: View {
                 // backdrop's own accessibility frame overflowed the card).
                 .accessibilityElement(children: .ignore)
                 .accessibilityAddTraits(image == nil ? [] : .isImage)
-                .accessibilityLabel(image == nil ? placeholder : "Son kaydedilen kare")
+                .accessibilityLabel(image == nil ? placeholder : "Last captured frame")
                 .accessibilityValue(lastFrame.map(caption) ?? "")
                 .accessibilityIdentifier("previewBox")
                 .animation(Theme.Motion.standard, value: image == nil)
@@ -91,14 +91,14 @@ struct PreviewView: View {
         switch state {
         case .running:
             return mode.usesScheduler
-                ? "İlk kare birazdan gelir.\nPil için canlı video yok; yalnızca gerekli anlarda kare alınır."
-                : "Görüntü geliyor…"
+                ? "The first frame will arrive shortly.\nTo save battery there's no live video; frames are captured only when needed."
+                : "Waiting for video…"
         case .starting:
-            return "Hazırlanıyor…"
+            return "Preparing…"
         case .waitingForDevice:
-            return "Gözlük bekleniyor"
+            return "Waiting for glasses"
         default:
-            return "Kayıt başlayınca son gördüğün kare burada görünür."
+            return "Once recording starts, the last frame you saw appears here."
         }
     }
 

@@ -71,6 +71,9 @@ actor EnrichmentWorker {
                 status.enriched += 1
                 status.lastError = nil
                 backoff = 2
+            } catch NemotronClient.NemotronError.preempted {
+                // A question took the endpoint; try this frame again right after it.
+                continue
             } catch {
                 await store.markAttemptFailed(id: next.id)
                 status.failed += 1
@@ -104,11 +107,13 @@ actor EnrichmentWorker {
             let result = try await ai.chatJSON(EpisodeSummary.self, system: MemoryPrompts.episodeSystem,
                                                user: MemoryPrompts.episodeUser(episode, records: records),
                                                jsonSchema: MemoryPrompts.episodeSchema, schemaName: "episode",
-                                               maxTokens: 300, temperature: 0.2)
+                                               maxTokens: 300, temperature: 0.2, background: true)
             await store.setEpisodeSummary(id: episode.id, title: result.title, summary: result.summary, summarizedCount: enriched)
             Log.pipeline.info("episode \(episode.id): \(result.title ?? "-", privacy: .public) (\(records.count) frames)")
             status.episodes += 1
             return true
+        } catch NemotronClient.NemotronError.preempted {
+            return false   // a question went first; summarise later
         } catch {
             // Do not retry in a tight loop: mark as done for now, the next new frame re-opens it.
             await store.setEpisodeSummary(id: episode.id, title: episode.title, summary: episode.summary, summarizedCount: enriched)
@@ -133,7 +138,8 @@ actor EnrichmentWorker {
                 jsonSchema: MemoryPrompts.extractionSchema,
                 schemaName: "memory_record",
                 maxTokens: 2500,      // 8-15 objects + pictures; 800 / 1600 cut JSON off
-                temperature: temperature
+                temperature: temperature,
+                background: true
             )
         }
         var extracted: ExtractedRecord

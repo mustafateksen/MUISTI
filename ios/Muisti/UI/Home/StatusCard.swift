@@ -32,7 +32,7 @@ struct StatusCard: View {
             if let warning = status.warning {
                 Label(warning, systemImage: "exclamationmark.triangle.fill")
                     .font(.footnote)
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(.attention)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }

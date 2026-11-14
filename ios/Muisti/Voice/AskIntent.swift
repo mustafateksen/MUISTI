@@ -1,11 +1,11 @@
 import AppIntents
 import Observation
 
-/// Hands-free trigger: "Hey Siri, Muisti'ye sor" or the iPhone Action Button / Shortcuts.
+/// Hands-free trigger: "Hey Siri, ask Muisti" or the iPhone Action Button / Shortcuts.
 /// Opens the app (the glasses session needs the foreground) and starts listening.
 struct AskMuistiIntent: AppIntent {
-    static let title: LocalizedStringResource = "Muisti'ye sor"
-    static let description = IntentDescription("Gözlüğün gördüklerine dair sesli soru sorar.")
+    static let title: LocalizedStringResource = "Ask Muisti"
+    static let description = IntentDescription("Asks a spoken question about what your glasses have seen.")
     static let openAppWhenRun = true
 
     @MainActor
@@ -20,11 +20,11 @@ struct MuistiShortcuts: AppShortcutsProvider {
         AppShortcut(
             intent: AskMuistiIntent(),
             phrases: [
-                "\(.applicationName)'ye sor",
-                "\(.applicationName)'e sor",
                 "Ask \(.applicationName)",
+                "Ask \(.applicationName) a question",
+                "Question for \(.applicationName)",
             ],
-            shortTitle: "Muisti'ye sor",
+            shortTitle: "Ask Muisti",
             systemImageName: "mic.fill"
         )
     }

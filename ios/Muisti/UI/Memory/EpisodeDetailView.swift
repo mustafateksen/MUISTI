@@ -31,7 +31,7 @@ struct EpisodeDetailView: View {
                             .fixedSize(horizontal: false, vertical: true)
                             .padding(.top, Theme.Spacing.xxs)
                     } else {
-                        Label("Özet birazdan hazır olur.", systemImage: "sparkles")
+                        Label("The summary will be ready shortly.", systemImage: "sparkles")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     }
@@ -55,7 +55,7 @@ struct EpisodeDetailView: View {
                 }
             }
 
-            Section("Kareler (\(frames.count))") {
+            Section("Frames (\(frames.count))") {
                 ForEach(frames) { record in
                     NavigationLink(value: record) {
                         MemoryRow(record: record, store: controller.store)

@@ -35,9 +35,9 @@ struct ZoomableImage: View {
                 .onTapGesture(perform: onTap)
         }
         .accessibilityElement()
-        .accessibilityLabel("Fotoğraf")
+        .accessibilityLabel("Photo")
         .accessibilityAddTraits(.isImage)
-        .accessibilityHint("Yakınlaştırmak için iki kez dokun.")
+        .accessibilityHint("Double-tap to zoom.")
         .accessibilityZoomAction { action in
             withAnimation(Theme.Motion.standard) {
                 scale = action.direction == .zoomIn ? min(scale * 1.6, Self.maxScale) : max(scale / 1.6, 1)

@@ -46,19 +46,19 @@ final class MuistiCrashTests: XCTestCase {
     func testVoiceButtonDoesNotCrash() {
         let app = launch(["--mock-autostart", "--mode=intervalPhoto", "--mock-script=stop@0.5"])
         acceptSystemAlerts(for: 4)
-        app.tabBars.buttons["Sor"].tap()
+        app.tabBars.buttons["Ask"].tap()
 
-        let mic = app.buttons["Sesli soru sor"]
+        let mic = app.buttons["Ask by voice"].firstMatch
         XCTAssertTrue(mic.waitForExistence(timeout: 10))
         mic.tap()
         acceptSystemAlerts(for: 8)   // speech recognition + microphone
         assertAlive(app, "after granting speech/mic permissions")
 
         // Second press with permissions already granted: listen, then stop.
-        if app.buttons["Sesli soru sor"].waitForExistence(timeout: 20) {
-            app.buttons["Sesli soru sor"].tap()
+        if app.buttons["Ask by voice"].firstMatch.waitForExistence(timeout: 20) {
+            app.buttons["Ask by voice"].firstMatch.tap()
             sleep(2)
-            if app.buttons["Dinlemeyi bitir"].exists { app.buttons["Dinlemeyi bitir"].tap() }
+            if app.buttons["Stop listening"].firstMatch.exists { app.buttons["Stop listening"].firstMatch.tap() }
         }
         sleep(3)
         assertAlive(app, "after a second listen cycle")
@@ -69,20 +69,26 @@ final class MuistiCrashTests: XCTestCase {
     func testCaptureWithDeviceEventsDoesNotCrash() {
         let app = launch(["--mock-autostart", "--mode=stream",
                           "--mock-script=tap@6,tap@9,fold@12,unfold@15,don@16,battery5@18,hot@19"])
+        // Permission alerts first: on a fresh simulator they cover the island.
+        acceptSystemAlerts(for: 3)
+        // The preview lives in the capture panel, opened from the glasses island.
+        openCapturePanel(app)
         // Layout must not move when the first frame arrives: measure the box before and after.
         let box = app.descendants(matching: .any)["previewBox"].firstMatch
         XCTAssertTrue(box.waitForExistence(timeout: 10), "No preview box")
         let before = box.frame
         acceptSystemAlerts(for: 3)
-        let framed = NSPredicate(format: "label == %@", "Son kaydedilen kare")
+        let framed = NSPredicate(format: "label == %@", "Last captured frame")
         expectation(for: framed, evaluatedWith: box)
-        waitForExpectations(timeout: 25)   // a frame is in the box
+        // A frame is in the box. 45 s: on a fresh simulator Vision first warms up on the CPU.
+        waitForExpectations(timeout: 45)
         let after = box.frame
-        XCTAssertEqual(after.height, 320, accuracy: 1, "Preview box height changed: \(after)")
+        XCTAssertEqual(after.height, before.height, accuracy: 1, "Preview box height changed: \(before) → \(after)")
         XCTAssertEqual(after.minY, before.minY, accuracy: 1, "Layout moved when the frame arrived: \(before) → \(after)")
         XCTAssertLessThanOrEqual(after.maxX, app.windows.firstMatch.frame.maxX, "Preview wider than the screen")
 
-        for tab in ["Sor", "Hafıza", "Kayıt", "Hafıza", "Kayıt"] {
+        app.buttons["Done"].tap()
+        for tab in ["Memory", "Ask", "Memory", "Ask"] {
             app.tabBars.buttons[tab].tap()
             sleep(2)
             assertAlive(app, "on tab \(tab)")
@@ -90,7 +96,8 @@ final class MuistiCrashTests: XCTestCase {
         sleep(8)   // let fold/unfold/don and battery/heat events play out
         assertAlive(app, "after device events")
         // Expected SDK teardown messages must never reach the screen raw.
-        app.tabBars.buttons["Kayıt"].tap()
+        app.tabBars.buttons["Ask"].tap()
+        openCapturePanel(app)
         for raw in ["unavailable", "ended by device"] {
             let shown = app.staticTexts.containing(NSPredicate(format: "label CONTAINS[c] %@", raw)).firstMatch
             XCTAssertFalse(shown.exists, "Raw SDK text on screen: \(shown.label)")
@@ -117,7 +124,7 @@ final class MuistiCrashTests: XCTestCase {
     func testEpisodeAndDetailFitScreen() throws {
         let app = launch(["--script-only=wipe@0,ingest@1", "--ingest=ingest"])
         acceptSystemAlerts(for: 3)
-        app.tabBars.buttons["Hafıza"].tap()
+        app.tabBars.buttons["Memory"].tap()
         let firstEpisode = app.buttons.matching(identifier: "episodeRow").firstMatch
         guard firstEpisode.waitForExistence(timeout: 120) else {
             throw XCTSkip("No sample photos in Documents/ingest")
@@ -172,15 +179,25 @@ final class MuistiCrashTests: XCTestCase {
     func testTypedQuestionAndMemoryList() {
         let app = launch(["--mock-autostart", "--mode=intervalPhoto", "--mock-script=stop@0.5"])
         acceptSystemAlerts(for: 4)
-        app.tabBars.buttons["Sor"].tap()
-        let field = app.textFields["Ya da yazarak sor…"]
+        app.tabBars.buttons["Ask"].tap()
+        let field = app.textFields["Ask Muisti"]
         XCTAssertTrue(field.waitForExistence(timeout: 10))
         field.tap()
-        field.typeText("Dişçinin numarası neydi?\n")
+        field.typeText("What was the dentist's number?\n")
         sleep(8)
         assertAlive(app, "after a typed question")
-        app.tabBars.buttons["Hafıza"].tap()
+        app.tabBars.buttons["Memory"].tap()
         sleep(2)
         assertAlive(app, "on the memory list")
+    }
+
+    /// Island → "Details" (the island may already be expanded after a status change).
+    private func openCapturePanel(_ app: XCUIApplication) {
+        let details = app.buttons["Details"]
+        if !details.waitForExistence(timeout: 3) {
+            let island = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Glasses:")).firstMatch
+            if island.waitForExistence(timeout: 5) { island.tap() }
+        }
+        if details.waitForExistence(timeout: 5) { details.tap() }
     }
 }

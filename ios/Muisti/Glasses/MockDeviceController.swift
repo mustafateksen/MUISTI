@@ -36,9 +36,9 @@ final class MockDeviceController {
 
     var feedLabel: String {
         switch feed {
-        case .bundledDemo: return "Paketteki tabela videosu"
+        case .bundledDemo: return "Bundled sign video"
         case .file(let url): return url.lastPathComponent
-        case .phoneCamera: return "Telefonun arka kamerası"
+        case .phoneCamera: return "iPhone rear camera"
         }
     }
 
@@ -114,7 +114,7 @@ final class MockDeviceController {
             feed = .file(stored)
             applyFeed()
         } catch {
-            lastError = "Video içe aktarılamadı: \(error.localizedDescription)"
+            lastError = "Couldn't import video: \(error.localizedDescription)"
         }
     }
 

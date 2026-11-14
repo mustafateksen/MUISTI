@@ -7,22 +7,22 @@ struct DeveloperCaptureSection: View {
 
     var body: some View {
         Section {
-            Picker("Mod", selection: $config.mode) {
+            Picker("Mode", selection: $config.mode) {
                 ForEach(CaptureMode.allCases) { Text($0.label).tag($0) }
             }
             .disabled(controller.isRunning)
             Text(modeHint)
                 .font(.footnote)
                 .foregroundStyle(.secondary)
-            Button("Şimdi çek", systemImage: "camera.shutter.button", action: captureNow)
+            Button("Capture now", systemImage: "camera.shutter.button", action: captureNow)
                 .disabled(controller.state != .running)
-            Button("Yüksek çözünürlüklü fotoğraf", systemImage: "camera.aperture", action: requestHighRes)
+            Button("High-resolution photo", systemImage: "camera.aperture", action: requestHighRes)
                 .disabled(controller.state != .running)
         } header: {
-            Text("Yakalama modu")
+            Text("Capture mode")
         } footer: {
             if controller.isRunning {
-                Text("Modu değiştirmek için kaydı durdur.")
+                Text("Stop recording to change the mode.")
             }
         }
     }
@@ -30,13 +30,13 @@ struct DeveloperCaptureSection: View {
     private var modeHint: String {
         switch config.mode {
         case .adaptive:
-            return "Sürekli video yok. Kare; yürüdüğün mesafeye, durup bakmana, dönüşlerine, bulanıklık riskine, pil ve ısıya göre alınır."
+            return "No continuous video. Frames are taken based on distance walked, pausing to look, turns, blur risk, battery and heat."
         case .stream:
-            return "Sürekli akış, \(config.streamFPS) kare/sn. Düşük hız kare başına daha iyi kalite verir; pili en çok bu tüketir."
+            return "Continuous stream, \(config.streamFPS) fps. Lower frame rates give better quality per frame; uses the most battery."
         case .streamPlusPhoto:
-            return "Akış + istek üzerine akış içi fotoğraf (Kişi 2 yazı görünce)."
+            return "Stream + in-stream photo on request (when Person 2 spots text)."
         case .intervalPhoto:
-            return "Akış yok; her \(Int(config.intervalSeconds)) saniyede bir fotoğraf. Pil ölçümünde karşılaştırma için."
+            return "No stream; one photo every \(Int(config.intervalSeconds)) seconds. For battery-measurement comparison."
         }
     }
 

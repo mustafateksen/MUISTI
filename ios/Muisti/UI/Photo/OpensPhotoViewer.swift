@@ -38,12 +38,12 @@ struct OpensPhotoViewer: ViewModifier {
         .buttonStyle(PhotoPressStyle())
         .modifier(ZoomSource(id: url, namespace: zoom))
         .contextMenu {
-            Button("Büyüt", systemImage: "arrow.up.left.and.arrow.down.right") { presented = true }
-            Button("Fotoğraflara kaydet", systemImage: "square.and.arrow.down", action: save)
+            Button("View full screen", systemImage: "arrow.up.left.and.arrow.down.right") { presented = true }
+            Button("Save to Photos", systemImage: "square.and.arrow.down", action: save)
         }
-        .accessibilityLabel(title.map { "\($0), fotoğraf" } ?? "Fotoğraf")
-        .accessibilityHint("Büyütmek için dokun.")
-        .accessibilityAction(named: "Fotoğraflara kaydet", save)
+        .accessibilityLabel(title.map { "\($0), photo" } ?? "Photo")
+        .accessibilityHint("Tap to view full screen.")
+        .accessibilityAction(named: "Save to Photos", save)
         .animation(Theme.Motion.standard, value: toast)
         .fullScreenCover(isPresented: $presented) {
             PhotoViewer(url: url, title: title)
