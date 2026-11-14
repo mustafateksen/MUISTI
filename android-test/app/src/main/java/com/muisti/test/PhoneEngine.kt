@@ -80,12 +80,24 @@ class PhoneEngine(ctx: Context) {
     /** Search docs for the current memory; rebuilt only when the store changed (vectors are kept on the Doc objects). */
     private fun docs(): List<com.muisti.engine.Doc> = synchronized(docsLock) {
         val s = store.sightings()
-        if (s !== docsFor) {
+        if (s !== docsFor || notes.version != notesFor) {
             val old = docsCache.filter { it.vec != null }.associateBy { it.text }
-            docsCache = Asker.docsFromSightings(s).onEach { d -> if (d.vec == null) d.vec = old[d.text]?.vec }
-            docsFor = s
+            docsCache = (Asker.docsFromSightings(s) + notes.docs(store.frameDir.path)).onEach { d -> if (d.vec == null) d.vec = old[d.text]?.vec }
+            docsFor = s; notesFor = notes.version
         }
         docsCache
+    }
+
+    // ---------------- notes ("note it") ----------------
+    val notes = com.muisti.engine.NoteStore(File(appCtx.filesDir, "notes.jsonl"))
+    private var notesFor = -1
+
+    /** The live frame (already privacy-checked and face-blurred by the caller) is kept with the note when asked. */
+    private fun saveNote(text: String, withView: Boolean, liveFrame: ByteArray?, now: Long): String {
+        val frame = if (withView && liveFrame != null) "note_$now.jpg".also { File(store.frameDir, it).writeBytes(liveFrame) } else null
+        notes.add(text, now, frame)
+        warmSoon()
+        return "Saved note: $text" + if (frame != null) " (with the current view)" else ""
     }
 
     /** At most every 8 s while recording: merge + embed new memories so the next question starts warm. */
@@ -117,7 +129,9 @@ class PhoneEngine(ctx: Context) {
         val tEmbed = System.currentTimeMillis() - t1
         val hist = synchronized(history) { history.toList() }
         val answer = try {
-            agent.run(question, hist, docs, now, liveFrame, onForget = { m -> store.forget(now - m * 60_000L) },
+            agent.run(question, hist, docs, now, liveFrame,
+                onForget = { m -> notes.forget(now - m * 60_000L); store.forget(now - m * 60_000L) },
+                onNote = { text, withView -> saveNote(text, withView, liveFrame, now) },
                 onCalendar = { ev -> addToCalendar(ev) }, heard = heard)
         } catch (e: Exception) {
             classic(question, docs, now, liveFrame)

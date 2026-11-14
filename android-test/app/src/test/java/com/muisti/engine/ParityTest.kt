@@ -102,7 +102,9 @@ class ParityTest {
         val heard = System.getProperty("muisti.heard") ?: return
         val q = System.getProperty("muisti.q") ?: return
         val (_, docs, now) = setup()
-        val r = agent!!.run(q, emptyList(), docs, now, heard = heard.split("|"))
+        val hist = System.getProperty("muisti.hist")?.split("|||")?.let { listOf(it[0] to it[1]) } ?: emptyList()
+        val r = agent!!.run(q, hist, docs, now, heard = heard.split("|").filter { it.isNotBlank() },
+            onNote = { t, v -> println("NOTE SAVED: $t (view=$v)"); "Saved note: $t" })
         println("MISHEARD [${r.label}] ${r.answer}   (${r.why})")
     }
 

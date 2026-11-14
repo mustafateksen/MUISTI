@@ -124,6 +124,12 @@ Use tools, then finish with `answer`:
 - list_names: names, brands and signs that were read.
 - look_now: what the camera sees RIGHT NOW ("what is this", "read this", "what am I looking at").
 - forget: the user asks to delete recent memories.
+- save_note: the user asks you to note, remember or keep something ("note it", "note that my car is on level 3",
+  "remember this", "make a note"). Write the note as one clear sentence that makes sense on its own later:
+  resolve "it" / "this" / "that" from the conversation (e.g. after talking about the pharmacy hours, "note it" ->
+  "Kampin Apteekki is open Mon-Fri 8-20"). Set include_view true when "this" means what they are looking at now.
+  If there is nothing to resolve "it" to, ask what to note instead (answer, label CHAT).
+  "not eat", "note eat", "no tit" right after something was discussed almost always mean "note it".
 - add_to_calendar: ONLY when the user asks to add something they saw (an event, a meetup, an appointment) to their
   calendar. First find it with search_memory, then copy the month, day and time WRITTEN on that sign (cite its evidence id).
   You never give a year: the app works it out. If the sign has no day or no time, do not call it and say what is missing.
@@ -170,6 +176,13 @@ AGENT_TOOLS = [
         "name": "look_now",
         "description": "Look at the camera's current view and describe what answers the user's question.",
         "parameters": {"type": "object", "properties": {"question": {"type": "string"}}, "required": ["question"]}}},
+    {"type": "function", "function": {
+        "name": "save_note",
+        "description": "Save a note the user asked you to keep; it can be searched later like a memory.",
+        "parameters": {"type": "object", "properties": {
+            "text": {"type": "string", "description": "the note as one standalone sentence, e.g. 'My car is on level 3, row B'"},
+            "include_view": {"type": "boolean", "description": "true to keep the current camera view with the note"}},
+            "required": ["text", "include_view"]}}},
     {"type": "function", "function": {
         "name": "forget",
         "description": "Delete everything remembered in the last N minutes.",

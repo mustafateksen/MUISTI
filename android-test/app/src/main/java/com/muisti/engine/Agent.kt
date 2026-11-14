@@ -30,6 +30,7 @@ class Agent(private val llm: Llm, private val prompts: Prompts, private val aske
     fun run(question: String, history: List<Pair<String, String>>, docs: List<Doc>, now: Long,
             liveFrame: ByteArray? = null, onForget: (Int) -> Int = { 0 },
             heard: List<String> = emptyList(),
+            onNote: (text: String, withView: Boolean) -> String = { _, _ -> "Notes are not available." },
             onCalendar: (CalendarEvent) -> String = { "Calendar is not available." }): Answer {
         val t0 = System.currentTimeMillis()
         timings.clear()
@@ -119,6 +120,18 @@ class Agent(private val llm: Llm, private val prompts: Prompts, private val aske
                         ev(d)
                     }
                     "add_to_calendar" -> addToCalendar(args, evidence, onCalendar)
+                    "save_note" -> {
+                        val text = args.str("text")?.trim().orEmpty()
+                        if (text.isEmpty()) "Not saved: the note is empty. Ask what to note."
+                        else {
+                            val withView = args.optBoolean("include_view", false) && liveFrame != null
+                            val saved = onNote(text, withView)
+                            // saved: reply right away (one model call fewer); the note itself is the reply
+                            if (saved.startsWith("Saved")) return result("NOTED", "Noted: $text",
+                                why = "note" + if (withView) " + view" else "")
+                            saved
+                        }
+                    }
                     "forget" -> {
                         val m = args.num("minutes", 10.0).toInt().coerceAtLeast(1)
                         val n = onForget(m)
