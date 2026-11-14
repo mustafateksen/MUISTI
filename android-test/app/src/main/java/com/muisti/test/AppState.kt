@@ -62,6 +62,8 @@ class AppState {
     var toastText by mutableStateOf<String?>(null)
     val messages = mutableStateListOf<Msg>()
     var openShot by mutableStateOf<Shot?>(null)   // detail sheet
+    var showGallery by mutableStateOf(false)
+    var gallery by mutableStateOf<List<Shot>?>(null)   // null = loading
 
     fun toast(text: String) { toastText = text }
 }

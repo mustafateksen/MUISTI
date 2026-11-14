@@ -89,6 +89,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.Offset
@@ -152,7 +155,7 @@ fun MuistiApp(act: MainActivity) {
                     Header(s, t) { showSettings = true }
                     LiveCard(act, s, t, expanded || s.messages.isEmpty(), heroMax) { expanded = !expanded }
                     AnimatedVisibility(expanded || s.messages.isEmpty(), enter = fadeIn() + expandVertically(), exit = fadeOut() + shrinkVertically()) {
-                        StatsRow(s, t)
+                        StatsRow(s, t) { act.openGallery() }
                     }
                     Box(Modifier.weight(1f)) {
                         if (s.messages.isEmpty()) Welcome(t) { act.ask(it, spoken = false) }
@@ -162,6 +165,7 @@ fun MuistiApp(act: MainActivity) {
                 }
             }
 
+            if (s.showGallery) GallerySheet(s, t, onOpen = { sh -> s.showGallery = false; s.openShot = sh }) { s.showGallery = false }
             s.openShot?.let { shot -> ShotSheet(shot, t, act) { s.openShot = null } }
             VoiceOverlay(s, t, onClose = { act.stopVoice() }, onOrb = { act.interrupt() })
             Toast(s, t)
@@ -325,9 +329,9 @@ private fun MiniRecord(recording: Boolean, onClick: () -> Unit) {
 
 /** Three glanceable facts under the live view. */
 @Composable
-private fun StatsRow(s: AppState, t: Tones) {
+private fun StatsRow(s: AppState, t: Tones, onMemories: () -> Unit) {
     Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-        StatTile(Modifier.weight(1f), t, "Memories", "${s.memories}", BrandBlue)
+        StatTile(Modifier.weight(1f).clip(RoundedCornerShape(20.dp)).clickable { onMemories() }, t, "Memories", "${s.memories}  ›", BrandBlue)
         StatTile(Modifier.weight(1f), t, "Privacy", if (s.facesBlurred > 0) "${s.facesBlurred} blurred" else "Blur on", Color(0xFF34C759))
         StatTile(Modifier.weight(1f), t, "Place", s.street ?: (if (s.hasLocation) "Locating…" else "—"), Violet)
     }
@@ -444,10 +448,10 @@ private fun Transcript(act: MainActivity, s: AppState, t: Tones) {
         LazyColumn(state = list, modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp, 14.dp, 16.dp, 16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)) {
             itemsIndexed(s.messages) { _, m ->
-                when (m) {
+                Appear { when (m) {
                     is Msg.Question -> QuestionBubble(m.text)
                     is Msg.Answer -> AnswerBlock(m, t, onOpen = { s.openShot = it }) { uri -> act.openMap(uri) }
-                }
+                } }
             }
         }
         // content fades out under the live card, like the iOS top bar
@@ -774,12 +778,13 @@ private fun ShotSheet(shot: Shot, t: Tones, act: MainActivity, onClose: () -> Un
             // actions
             val phone = d?.phone
             val copyText = d?.signText()
-            if (phone != null || shot.mapUri != null || copyText != null) {
+            run {
                 Spacer(Modifier.height(14.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     if (phone != null) ActionButton(Modifier.weight(1f), "📞", "Call", Color(0xFF34C759)) { act.dial(phone) }
                     if (shot.mapUri != null) ActionButton(Modifier.weight(1f), "🗺", "Maps", BrandBlue) { act.openMap(shot.mapUri) }
                     if (copyText != null) ActionButton(Modifier.weight(1f), "📋", "Copy", Violet) { act.copyText(copyText) }
+                    ActionButton(Modifier.weight(1f), "💬", "Ask", Amber) { act.askAbout(shot) }
                 }
                 if (phone != null) Text(phone, color = t.sub, fontSize = 13.sp, modifier = Modifier.padding(top = 6.dp, start = 4.dp))
             }
@@ -836,4 +841,62 @@ private fun Section(t: Tones, title: String, content: @Composable () -> Unit) {
     Text(title.uppercase(), color = t.sub, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
     Spacer(Modifier.height(8.dp))
     Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp)).background(t.card).padding(horizontal = 16.dp, vertical = 12.dp)) { content() }
+}
+
+// ---------------- memory gallery ----------------
+
+/** All recent memories as a grid; tap one for its detail sheet. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun GallerySheet(s: AppState, t: Tones, onOpen: (Shot) -> Unit, onClose: () -> Unit) {
+    val sheet = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val scope = rememberCoroutineScope()
+    val close: () -> Unit = { scope.launch { sheet.hide() }.invokeOnCompletion { onClose() } }
+    ModalBottomSheet(onDismissRequest = onClose, sheetState = sheet, containerColor = t.bg,
+        shape = RoundedCornerShape(topStart = 30.dp, topEnd = 30.dp),
+        dragHandle = { Box(Modifier.padding(top = 10.dp, bottom = 4.dp).size(38.dp, 5.dp).clip(CircleShape).background(t.sub.copy(alpha = 0.45f))) }) {
+        Column(Modifier.fillMaxWidth().fillMaxHeight(0.9f).padding(horizontal = 16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 4.dp, bottom = 14.dp)) {
+                Column(Modifier.weight(1f)) {
+                    Text("YOUR VISUAL MEMORY", color = BrandBlue, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.2.sp)
+                    Text("Memories", color = t.text, fontSize = 26.sp, fontWeight = FontWeight.Bold, letterSpacing = (-0.4).sp)
+                }
+                Box(Modifier.size(36.dp).clip(CircleShape).background(t.card).clickable(onClick = close), contentAlignment = Alignment.Center) {
+                    Icon(Icons.Rounded.Close, "Close", tint = t.text, modifier = Modifier.size(18.dp))
+                }
+            }
+            val shots = s.gallery
+            when {
+                shots == null -> Box(Modifier.fillMaxWidth().height(200.dp), contentAlignment = Alignment.Center) { ThinkingDots() }
+                shots.isEmpty() -> Text("Nothing remembered yet. Tap record and look around.", color = t.sub, fontSize = 15.sp)
+                else -> LazyVerticalGrid(GridCells.Fixed(2), horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(bottom = 24.dp)) {
+                    items(shots.size) { i ->
+                        val sh = shots[i]
+                        Column(Modifier.clip(RoundedCornerShape(20.dp)).background(t.card).border(0.5.dp, t.hair, RoundedCornerShape(20.dp))
+                            .clickable { onOpen(sh) }.padding(6.dp)) {
+                            Image(sh.image, contentDescription = null, contentScale = ContentScale.Crop,
+                                modifier = Modifier.fillMaxWidth().height(130.dp).clip(RoundedCornerShape(15.dp)))
+                            Column(Modifier.padding(horizontal = 6.dp, vertical = 7.dp)) {
+                                // the place type is the title; text read on a sign is shown as a quote (OCR can garble it)
+                                val kind = sh.detail?.kind?.replaceFirstChar { it.uppercase() }
+                                val read = sh.detail?.title?.takeIf { it != kind && sh.detail.signLines.isNotEmpty() }
+                                Text(kind ?: sh.detail?.title ?: "Memory", color = t.text, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                                if (read != null) Text("“$read”", color = BrandBlue, fontSize = 12.sp, fontWeight = FontWeight.Medium, maxLines = 1)
+                                Text(listOfNotNull(sh.whenText, sh.place).joinToString(" · "), color = t.sub, fontSize = 12.sp, maxLines = 1)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** New chat messages slide up and fade in instead of popping. */
+@Composable
+private fun Appear(content: @Composable () -> Unit) {
+    val p = remember { androidx.compose.animation.core.Animatable(0f) }
+    LaunchedEffect(Unit) { p.animateTo(1f, spring(dampingRatio = 0.8f, stiffness = 300f)) }
+    Box(Modifier.graphicsLayer { alpha = p.value; translationY = (1f - p.value) * 40f }) { content() }
 }

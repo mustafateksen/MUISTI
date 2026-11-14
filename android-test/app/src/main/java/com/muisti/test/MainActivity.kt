@@ -255,6 +255,45 @@ class MainActivity : ComponentActivity() {
         state.toast("Copied")
     }
 
+    /** Recent memories for the gallery: newest first, one card per memory (its best frame). */
+    fun openGallery() {
+        state.showGallery = true
+        state.gallery = null
+        lifecycleScope.launch {
+            state.gallery = withContext(Dispatchers.IO) {
+                val now = System.currentTimeMillis()
+                engine.store.sightings().sortedByDescending { it.optLong("seen_at") }.take(40).mapNotNull { s ->
+                    val frame = s.optString("evidence_frame").ifEmpty { null } ?: return@mapNotNull null
+                    val file = engine.frameFile(frame)
+                    if (!file.exists()) return@mapNotNull null
+                    val img = BitmapFactory.decodeFile(file.path, BitmapFactory.Options().apply { inSampleSize = 2 })?.asImageBitmap()
+                        ?: return@mapNotNull null
+                    val seen = s.optLong("seen_at")
+                    val mins = ((now - seen) / 60000).toInt()
+                    val whenText = when {
+                        mins < 2 -> "Just now"
+                        mins < 60 -> "$mins min ago"
+                        else -> "Today " + java.text.SimpleDateFormat("HH:mm", java.util.Locale.US).format(java.util.Date(seen))
+                    }
+                    val lat = if (s.has("lat") && !s.isNull("lat")) s.getDouble("lat") else null
+                    val lon = if (s.has("lon") && !s.isNull("lon")) s.getDouble("lon") else null
+                    val street = if (s.has("street") && !s.isNull("street")) s.optString("street") else null
+                    val place = street ?: lat?.let { "%.4f, %.4f".format(it, lon) }
+                    val uri = lat?.let { "geo:$it,$lon?q=$it,$lon(${android.net.Uri.encode(street ?: "Seen here")})" }
+                    Shot(img, whenText, place, uri, null, detailFor(frame, seen, whenText))
+                }
+            }
+        }
+    }
+
+    /** "Ask about this" from the detail sheet. */
+    fun askAbout(shot: Shot) {
+        state.openShot = null
+        state.showGallery = false
+        val name = shot.detail?.title ?: "this"
+        ask("Tell me more about what I saw at $name", spoken = false)
+    }
+
     fun openMap(uri: String) {
         runCatching { startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(uri))) }
             .onFailure { state.toast("No maps app found.") }
