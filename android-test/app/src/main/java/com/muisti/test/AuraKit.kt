@@ -41,6 +41,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PointMode
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipPath
@@ -71,60 +72,94 @@ object Aura {
 }
 
 /**
- * Siri-like voice orb: a blue→violet sphere with glowing halos and live sine waves inside.
- * [level] is the microphone level (0..1); while speaking or thinking the waves move on their own.
+ * JARVIS-style HUD orb (no text): wobbly rings made of teal particles, thin concentric HUD circles with a
+ * notched ring, and a slowly turning wireframe sphere in the middle. [level] is the microphone level (0..1);
+ * the rings swell with the voice, keep their own rhythm while speaking and spin faster while thinking.
+ * [halo] = false draws the compact version (composer button).
  */
 @Composable
 fun WaveOrb(phase: VoicePhase, level: Float, modifier: Modifier, halo: Boolean = true) {
-    val tr = rememberInfiniteTransition(label = "wave")
-    val t by tr.animateFloat(0f, (2 * PI).toFloat(), infiniteRepeatable(tween(2400, easing = LinearEasing)), label = "t")
-    val slow by tr.animateFloat(0f, (2 * PI).toFloat(), infiniteRepeatable(tween(7000, easing = LinearEasing)), label = "s")
-    val lvl by animateFloatAsState(level.coerceIn(0f, 1f), spring(stiffness = 220f), label = "lvl")
-    // how "loud" the waves are: real mic level when listening, a living rhythm when speaking, small when thinking
+    val tr = rememberInfiniteTransition(label = "hud")
+    val t by tr.animateFloat(0f, (2 * PI).toFloat(), infiniteRepeatable(tween(6000, easing = LinearEasing)), label = "t")
+    val spin by tr.animateFloat(0f, (2 * PI).toFloat(),
+        infiniteRepeatable(tween(if (phase == VoicePhase.Thinking) 3500 else 14000, easing = LinearEasing)), label = "spin")
+    val lvl by animateFloatAsState(level.coerceIn(0f, 1f), spring(stiffness = 200f), label = "lvl")
     val energy = when (phase) {
-        VoicePhase.Listening -> 0.18f + 0.82f * lvl
-        VoicePhase.Speaking -> 0.55f + 0.35f * ((sin(t * 3) + 1) / 2)
-        VoicePhase.Thinking -> 0.22f
-        VoicePhase.Idle -> 0.12f
+        VoicePhase.Listening -> 0.25f + 0.75f * lvl
+        VoicePhase.Speaking -> 0.5f + 0.4f * ((sin(t * 6) + 1) / 2)
+        VoicePhase.Thinking -> 0.35f
+        VoicePhase.Idle -> 0.2f
+    }
+    val compact = !halo
+    // particle bands: fixed random jitter per particle, so the rings look like dust, not lines
+    val bands = remember(compact) {
+        val rnd = java.util.Random(7)
+        listOf(0.93f to (if (compact) 180 else 1500), 0.85f to (if (compact) 140 else 1200), 0.99f to (if (compact) 0 else 600)).map { (rf, n) ->
+            Triple(rf, FloatArray(n) { rnd.nextFloat() * 2 - 1 }, FloatArray(n) { rnd.nextFloat() })
+        }
     }
     Canvas(modifier) {
-        val r = size.minDimension / 2 * (if (halo) 0.62f else 0.96f)
         val c = center
-        if (halo) {
-            // two soft halos, breathing with the voice
-            val h1 = r * (1.55f + 0.12f * energy + 0.03f * sin(slow))
-            val h2 = r * (1.25f + 0.08f * energy)
-            drawCircle(Brush.radialGradient(listOf(Aura.Violet.copy(alpha = 0.22f), Color.Transparent), c, h1), h1, c)
-            drawCircle(Brush.radialGradient(listOf(Aura.Blue.copy(alpha = 0.32f), Aura.Violet.copy(alpha = 0.18f), Color.Transparent), c, h2), h2, c)
-        }
-        // core sphere
-        drawCircle(Brush.linearGradient(listOf(Aura.Blue, Aura.Blurple, Aura.Violet),
-            start = Offset(c.x - r, c.y - r), end = Offset(c.x + r, c.y + r)), r, c)
-        val oval = Path().apply { addOval(androidx.compose.ui.geometry.Rect(c, r)) }
-        clipPath(oval) {
-            // moving light inside the sphere
-            val lx = c.x + r * 0.35f * sin(slow); val ly = c.y - r * 0.25f * sin(slow * 2)
-            drawCircle(Brush.radialGradient(listOf(Aura.Cyan.copy(alpha = 0.45f), Color.Transparent), Offset(lx, ly), r * 0.9f), r * 0.9f, Offset(lx, ly))
-            // three sine waves (Siri style): amplitude fades towards the sphere's edge
-            val waves = listOf(Triple(Color.White, 1.0f, 0f), Triple(Aura.Cyan, 0.75f, 2.1f), Triple(Aura.Pink, 0.6f, 4.2f))
-            for ((col, k, off) in waves) {
-                val p = Path()
-                val steps = 64
-                for (i in 0..steps) {
-                    val x = -1f + 2f * i / steps                    // -1..1 across the sphere
-                    val envelope = exp(-3.2f * x * x)              // calm at the edges
-                    val y = sin(x * 5.5f * k + t * (1.3f + 0.4f * k) + off) * envelope * energy * r * 0.42f * k
-                    val px = c.x + x * r; val py = c.y + y
-                    if (i == 0) p.moveTo(px, py) else p.lineTo(px, py)
-                }
-                drawPath(p, col.copy(alpha = if (col == Color.White) 0.95f else 0.7f),
-                    style = Stroke(width = r * (if (col == Color.White) 0.055f else 0.04f), cap = StrokeCap.Round))
+        val R = size.minDimension / 2 * (if (compact) 0.92f else 0.9f) * (1f + 0.05f * energy)
+        val dot = if (compact) 1.8f else 2.6f
+        // soft teal glow behind everything
+        drawCircle(Brush.radialGradient(listOf(Hud.Teal.copy(alpha = 0.16f), Color.Transparent), c, R * 1.25f), R * 1.25f, c)
+        // 1) wobbly particle rings
+        bands.forEachIndexed { b, (rf, jit, ph) ->
+            val n = jit.size
+            if (n == 0) return@forEachIndexed
+            val pts = ArrayList<Offset>(n)
+            for (i in 0 until n) {
+                val a = (2 * PI * i / n).toFloat() + spin * (if (b % 2 == 0) 0.15f else -0.1f)
+                val wob = 0.045f * sin(3 * a + t * 1.3f + b) + 0.03f * sin(5 * a - t * 2.1f + 2 * b) + 0.018f * sin(9 * a + t * 3.2f)
+                val band = jit[i] * 0.045f * (0.7f + 0.3f * sin(t * 4 + ph[i] * 6.28f))
+                val r = R * rf * (1f + (0.35f + energy) * wob + band)
+                pts.add(Offset(c.x + r * kotlin.math.cos(a), c.y + r * sin(a)))
             }
-            // glassy highlight
-            drawCircle(Brush.radialGradient(listOf(Color.White.copy(alpha = 0.28f), Color.Transparent),
-                Offset(c.x - r * 0.35f, c.y - r * 0.45f), r * 0.6f), r * 0.6f, Offset(c.x - r * 0.35f, c.y - r * 0.45f))
+            drawPoints(pts, PointMode.Points, Hud.Teal.copy(alpha = if (b == 2) 0.4f else 0.85f), strokeWidth = dot, cap = StrokeCap.Round)
+        }
+        if (!compact) {
+            // 2) thin HUD circles + a notched ring turning slowly
+            drawCircle(Hud.Teal.copy(alpha = 0.30f), R * 0.66f, c, style = Stroke(1.2f))
+            drawCircle(Hud.Teal.copy(alpha = 0.18f), R * 0.47f, c, style = Stroke(1f))
+            val notch = R * 0.57f
+            for (k in 0 until 12) {
+                drawArc(Hud.Teal.copy(alpha = 0.45f), startAngle = k * 30f + spin * 57.3f * 0.3f, sweepAngle = 19f, useCenter = false,
+                    topLeft = Offset(c.x - notch, c.y - notch), size = androidx.compose.ui.geometry.Size(notch * 2, notch * 2), style = Stroke(2.2f))
+            }
+        }
+        // 3) wireframe sphere (meridians turn, parallels stay) with a glowing shell
+        val rc = R * (if (compact) 0.42f else 0.3f) * (1f + 0.04f * energy)
+        drawCircle(Brush.radialGradient(listOf(Hud.Teal.copy(alpha = 0.22f), Hud.Teal.copy(alpha = 0.04f)), c, rc), rc, c)
+        drawCircle(Hud.Teal.copy(alpha = 0.85f), rc, c, style = Stroke(if (compact) 1.4f else 2f))
+        val line = Hud.Teal.copy(alpha = 0.5f)
+        val w = if (compact) 1f else 1.3f
+        for (k in 0 until 6) {
+            val a = (PI * k / 6).toFloat() + spin
+            val hw = rc * kotlin.math.abs(kotlin.math.cos(a))
+            drawOval(line, Offset(c.x - hw, c.y - rc), androidx.compose.ui.geometry.Size(hw * 2, rc * 2), style = Stroke(w))
+        }
+        for (lat in listOf(-60f, -30f, 0f, 30f, 60f)) {
+            val y = rc * sin(Math.toRadians(lat.toDouble()).toFloat())
+            val hw = rc * kotlin.math.cos(Math.toRadians(lat.toDouble()).toFloat())
+            drawLine(line, Offset(c.x - hw, c.y + y), Offset(c.x + hw, c.y + y), w)
+        }
+        if (!compact) {
+            // a few bright nodes riding on the sphere
+            for (k in 0 until 7) {
+                val a = spin * 1.2f + k * 0.9f
+                val lat = sin(k * 1.7f) * 0.8f
+                val x = c.x + rc * kotlin.math.cos(lat) * sin(a)
+                val y = c.y + rc * sin(lat)
+                if (kotlin.math.cos(a) > 0) drawCircle(Color.White.copy(alpha = 0.8f), 2.6f, Offset(x, y))
+            }
         }
     }
+}
+
+/** JARVIS HUD colours for the voice orb. */
+object Hud {
+    val Teal = Color(0xFF4FE3D4)
 }
 
 enum class Tab(val label: String, val icon: ImageVector) {

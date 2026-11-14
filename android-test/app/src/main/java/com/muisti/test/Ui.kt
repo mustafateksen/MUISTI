@@ -59,6 +59,10 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.Call
+import androidx.compose.material.icons.rounded.ChatBubbleOutline
+import androidx.compose.material.icons.rounded.ContentCopy
+import androidx.compose.material.icons.rounded.Map
 import androidx.compose.material.icons.rounded.ArrowUpward
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Mic
@@ -724,7 +728,7 @@ private fun VoiceOverlay(s: AppState, t: Tones, onClose: () -> Unit, onOrb: () -
                     VoicePhase.Thinking -> "THINKING"
                     VoicePhase.Speaking -> "SPEAKING · TAP TO INTERRUPT"
                     VoicePhase.Idle -> "CONNECTING"
-                }, color = Aura.Lilac, fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
+                }, color = Hud.Teal, fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
                 Spacer(Modifier.height(14.dp))
                 val lastQ = s.messages.filterIsInstance<Msg.Question>().lastOrNull()?.text
                 val answer = (s.messages.lastOrNull() as? Msg.Answer)?.takeIf { !it.pending }?.text
@@ -883,10 +887,13 @@ private fun ShotSheet(shot: Shot, t: Tones, act: MainActivity, onClose: () -> Un
             run {
                 Spacer(Modifier.height(14.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    if (phone != null) ActionButton(Modifier.weight(1f), "📞", "Call", Color(0xFF34C759)) { act.dial(phone) }
-                    if (shot.mapUri != null) ActionButton(Modifier.weight(1f), "🗺", "Maps", BrandBlue) { act.openMap(shot.mapUri) }
-                    if (copyText != null) ActionButton(Modifier.weight(1f), "📋", "Copy", Violet) { act.copyText(copyText) }
-                    ActionButton(Modifier.weight(1f), "💬", "Ask", Amber) { act.askAbout(shot) }
+                    // black & white (Aura): the first action is the white primary, the rest graphite
+                    var first = true
+                    fun primary() = first.also { first = false }
+                    if (phone != null) ActionButton(Modifier.weight(1f), Icons.Rounded.Call, "Call", primary()) { act.dial(phone) }
+                    if (shot.mapUri != null) ActionButton(Modifier.weight(1f), Icons.Rounded.Map, "Maps", primary()) { act.openMap(shot.mapUri) }
+                    if (copyText != null) ActionButton(Modifier.weight(1f), Icons.Rounded.ContentCopy, "Copy", primary()) { act.copyText(copyText) }
+                    ActionButton(Modifier.weight(1f), Icons.Rounded.ChatBubbleOutline, "Ask", primary()) { act.askAbout(shot) }
                 }
                 if (phone != null) Text(phone, color = t.sub, fontSize = 13.sp, modifier = Modifier.padding(top = 6.dp, start = 4.dp))
             }
@@ -941,12 +948,15 @@ private fun InfoTile(modifier: Modifier, t: Tones, title: String, value: String)
 }
 
 @Composable
-private fun ActionButton(modifier: Modifier, icon: String, label: String, color: Color, onClick: () -> Unit) {
-    Column(modifier.clip(RoundedCornerShape(18.dp)).background(color.copy(alpha = 0.14f)).clickable(onClick = onClick)
-        .padding(vertical = 12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-        Text(icon, fontSize = 22.sp)
-        Spacer(Modifier.height(2.dp))
-        Text(label, color = color, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+private fun ActionButton(modifier: Modifier, icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, primary: Boolean, onClick: () -> Unit) {
+    val bg = if (primary) Color(0xFFF1F3F4) else Aura.Card2
+    val fg = if (primary) Color(0xFF111113) else Aura.Text
+    Column(modifier.clip(RoundedCornerShape(18.dp)).background(bg)
+        .border(0.5.dp, if (primary) Color.Transparent else Aura.Hair, RoundedCornerShape(18.dp)).clickable(onClick = onClick)
+        .padding(vertical = 14.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        Icon(icon, label, tint = fg, modifier = Modifier.size(22.dp))
+        Spacer(Modifier.height(6.dp))
+        Text(label, color = fg, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
     }
 }
 
