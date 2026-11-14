@@ -18,7 +18,6 @@ import com.meta.wearable.dat.core.selectors.AutoDeviceSelector
 import com.meta.wearable.dat.core.session.DeviceSession
 import com.meta.wearable.dat.core.session.DeviceSessionState
 import com.meta.wearable.dat.core.types.DeviceCompatibility
-import com.meta.wearable.dat.core.types.HingeState
 import com.meta.wearable.dat.core.types.LinkState
 import com.meta.wearable.dat.core.types.Permission
 import com.meta.wearable.dat.core.types.PermissionStatus
@@ -138,27 +137,32 @@ class GlassesSource(private val activity: ComponentActivity, private val state: 
      * missing meanwhile. Returns the glasses' name, or null (status explains why).
      */
     private suspend fun waitForGlasses(): String? {
-        val deadline = System.currentTimeMillis() + 60_000
+        val start = System.currentTimeMillis()
+        val deadline = start + 60_000
         while (System.currentTimeMillis() < deadline) {
             val devs = Wearables.devices.value.mapNotNull { Wearables.devicesMetadata[it]?.value }
             val ready = devs.firstOrNull { it.linkState == LinkState.CONNECTED && it.compatibility == DeviceCompatibility.COMPATIBLE }
             if (ready != null) return ready.name.ifBlank { "your glasses" }
             val d = devs.firstOrNull()
-            when {
-                d == null -> status("Waiting for your glasses… open the case / put them on, and check they're connected in Meta AI…")
-                d.compatibility == DeviceCompatibility.DEVICE_UPDATE_REQUIRED -> {
-                    state.glassesNeedsUpdate = true; status("Your glasses need an update in Meta AI"); return null
-                }
-                d.compatibility == DeviceCompatibility.SDK_UPDATE_REQUIRED -> { status("This app's glasses SDK is too old for these glasses"); return null }
-                d.hingeState == HingeState.CLOSED -> status("${d.name}: the glasses are folded - unfold them…")
-                d.linkState != LinkState.CONNECTED -> status("${d.name}: ${d.linkState.name.lowercase()} - waiting for Bluetooth…")
-                else -> status("${d.name}: getting ready…")
-            }
+            if (d?.compatibility == DeviceCompatibility.DEVICE_UPDATE_REQUIRED) state.glassesNeedsUpdate = true
+            // the line shown comes from the SDK's own state (D5), e.g. "registered but no devices" = Meta AI's channel is stuck
+            status(com.muisti.capture.GlassesHint.describe(Wearables.registrationState.value.name, devs.map { info(it) },
+                System.currentTimeMillis() - start))
+            if (d?.compatibility == DeviceCompatibility.DEVICE_UPDATE_REQUIRED || d?.compatibility == DeviceCompatibility.SDK_UPDATE_REQUIRED) return null
             kotlinx.coroutines.delay(1000)
         }
-        status("Couldn't find connected glasses. Check Meta AI shows them connected, then Try again")
+        Log.i("MuistiGlasses", "no connected glasses after 60 s: ${state.glassesStatus}")
         return null
     }
+
+    /** The SDK's device state, copied out (battery, heat, worn, folded) for hints and the capture scheduler. */
+    private fun info(d: com.meta.wearable.dat.core.types.Device) = com.muisti.capture.GlassesInfo(d.name.ifBlank { "Glasses" },
+        d.linkState.name, d.compatibility.name, d.hingeState.name, d.donState.name, d.batteryLevel, d.thermalLevel.name)
+
+    /** The connected glasses right now, or null. */
+    fun current(): com.muisti.capture.GlassesInfo? = runCatching {
+        Wearables.devices.value.mapNotNull { Wearables.devicesMetadata[it]?.value }.firstOrNull { it.linkState == LinkState.CONNECTED }?.let { info(it) }
+    }.getOrNull()
 
     private fun startStream(s: DeviceSession) {
         if (camera != null) return
