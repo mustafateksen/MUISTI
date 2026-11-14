@@ -718,9 +718,10 @@ private fun VoiceOverlay(s: AppState, t: Tones, onClose: () -> Unit, onOrb: () -
                     Text("Live with MUISTI", color = t.text, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
                 }
                 Spacer(Modifier.weight(0.45f))
-                Box(Modifier.clip(CircleShape).clickable(interactionSource = remember { MutableInteractionSource() },
+                // no clip: the waves may move past the orb's box
+                Box(Modifier.clickable(interactionSource = remember { MutableInteractionSource() },
                     indication = null, onClick = onOrb)) {
-                    WaveOrb(s.phase, s.level, Modifier.size(280.dp))
+                    WaveOrb(s.phase, s.level, Modifier.size(300.dp))
                 }
                 Spacer(Modifier.height(18.dp))
                 Text(when (s.phase) {
@@ -728,7 +729,7 @@ private fun VoiceOverlay(s: AppState, t: Tones, onClose: () -> Unit, onOrb: () -
                     VoicePhase.Thinking -> "THINKING"
                     VoicePhase.Speaking -> "SPEAKING · TAP TO INTERRUPT"
                     VoicePhase.Idle -> "CONNECTING"
-                }, color = Hud.Teal, fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
+                }, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
                 Spacer(Modifier.height(14.dp))
                 val lastQ = s.messages.filterIsInstance<Msg.Question>().lastOrNull()?.text
                 val answer = (s.messages.lastOrNull() as? Msg.Answer)?.takeIf { !it.pending }?.text
