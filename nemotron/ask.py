@@ -116,6 +116,9 @@ Use tools, then finish with `answer`:
 - list_names: names, brands and signs that were read.
 - look_now: what the camera sees RIGHT NOW ("what is this", "read this", "what am I looking at").
 - forget: the user asks to delete recent memories.
+- add_to_calendar: ONLY when the user asks to add something they saw (an event, a meetup, an appointment) to their
+  calendar. First find it with search_memory, then use the date and time WRITTEN on that sign (cite its evidence id).
+  Never guess a date or time: if the sign has none, do not call it and tell the user what is missing.
 - answer: your final reply. ALWAYS end with it.
 
 Evidence rules for answer:
@@ -156,6 +159,16 @@ AGENT_TOOLS = [
         "name": "forget",
         "description": "Delete everything remembered in the last N minutes.",
         "parameters": {"type": "object", "properties": {"minutes": {"type": "number"}}, "required": ["minutes"]}}},
+    {"type": "function", "function": {
+        "name": "add_to_calendar",
+        "description": "Add an event the user saw on a sign to their phone calendar.",
+        "parameters": {"type": "object", "properties": {
+            "title": {"type": "string", "description": "short event name, e.g. 'Robotics meetup'"},
+            "start": {"type": "string", "description": "local start time as YYYY-MM-DDTHH:MM, taken from the sign"},
+            "end": {"type": ["string", "null"], "description": "local end time YYYY-MM-DDTHH:MM if the sign gives one, else null"},
+            "location": {"type": ["string", "null"], "description": "room or place written on the sign, else null"},
+            "evidence": {"type": "array", "items": {"type": "string"}, "description": "evidence ids of the sign, e.g. ['E2']"}},
+            "required": ["title", "start", "end", "location", "evidence"]}}},
     {"type": "function", "function": {
         "name": "answer",
         "description": "The final spoken reply.",

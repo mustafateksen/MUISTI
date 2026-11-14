@@ -125,7 +125,8 @@ class MainActivity : ComponentActivity() {
             override fun onError(id: String?) { runOnUiThread { afterTurn() } }
         })
 
-        val need = listOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO)
+        val need = listOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO,
+            Manifest.permission.READ_CALENDAR, Manifest.permission.WRITE_CALENDAR)
             .filter { ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED }
         if (need.isEmpty()) startCamera() else permissions.launch(need.toTypedArray())
         pollStats()

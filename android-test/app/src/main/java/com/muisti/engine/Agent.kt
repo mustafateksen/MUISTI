@@ -16,12 +16,16 @@ import java.util.Locale
  * answers get a second look at the stored frame. A failed check is sent back to the model once
  * ("your quote was not found"); if it fails again the reply is an honest "not sure".
  */
+/** An event to put in the phone calendar (start/end in epoch ms, local time). */
+class CalendarEvent(val title: String, val startMs: Long, val endMs: Long, val location: String?, val note: String)
+
 class Agent(private val llm: Llm, private val prompts: Prompts, private val asker: Asker) {
 
     var maxRounds = 4   // the last round must be `answer`
 
     fun run(question: String, history: List<Pair<String, String>>, docs: List<Doc>, now: Long,
-            liveFrame: ByteArray? = null, onForget: (Int) -> Int = { 0 }): Answer {
+            liveFrame: ByteArray? = null, onForget: (Int) -> Int = { 0 },
+            onCalendar: (CalendarEvent) -> String = { "Calendar is not available." }): Answer {
         val t0 = System.currentTimeMillis()
         var calls = 0
         val evidence = ArrayList<Doc>()                  // E1 = evidence[0]
@@ -86,6 +90,7 @@ class Agent(private val llm: Llm, private val prompts: Prompts, private val aske
                         val d = Doc("live", now, null, null, "live", false, "live view", "live", text = "LIVE VIEW right now: $seen")
                         ev(d)
                     }
+                    "add_to_calendar" -> addToCalendar(args, evidence, onCalendar)
                     "forget" -> {
                         val m = args.num("minutes", 10.0).toInt().coerceAtLeast(1)
                         val n = onForget(m)
@@ -98,6 +103,32 @@ class Agent(private val llm: Llm, private val prompts: Prompts, private val aske
             }
         }
         return result("DONT_KNOW", "Sorry, I couldn't work that out.", why = "no answer after $maxRounds rounds")
+    }
+
+    /**
+     * Calendar entries must come from a sign: the day of the month and the hour of `start` have to be
+     * written in the cited evidence (18:00 or 6 pm), otherwise nothing is added and the model is told why.
+     */
+    private fun addToCalendar(a: JSONObject, evidence: List<Doc>, onCalendar: (CalendarEvent) -> String): String {
+        val fmt = SimpleDateFormat("yyyy-MM-dd'T'HH:mm", Locale.US).apply { isLenient = false }
+        val start = runCatching { fmt.parse(a.str("start") ?: "") }.getOrNull()
+            ?: return "Not added: start must be YYYY-MM-DDTHH:MM."
+        val end = a.str("end")?.let { runCatching { fmt.parse(it) }.getOrNull() }
+        val eid = Regex("E\\d+")
+        val cited = a.arr("evidence").strings().filter { eid.matches(it) && it.substring(1).toInt() in 1..evidence.size }
+            .map { evidence[it.substring(1).toInt() - 1] }
+        if (cited.isEmpty()) return "Not added: cite the evidence id of the sign that shows the event."
+        val text = cited.joinToString(" ") { it.text }.lowercase()
+        val cal = java.util.Calendar.getInstance().apply { time = start }
+        val day = cal.get(java.util.Calendar.DAY_OF_MONTH)
+        val hour = cal.get(java.util.Calendar.HOUR_OF_DAY)
+        val h12 = if (hour % 12 == 0) 12 else hour % 12
+        fun has(n: Int) = Regex("(?<!\\d)0?$n(?!\\d)").containsMatchIn(text)
+        if (!has(day)) return "Not added: day $day is not written on the cited sign. Tell the user the date is not on it."
+        if (!has(hour) && !has(h12)) return "Not added: the time $hour:00 is not written on the cited sign. Tell the user the time is not on it."
+        val ev = CalendarEvent(a.str("title") ?: "Event", start.time, (end ?: Date(start.time + 3_600_000)).time,
+            a.str("location"), "Added by MUISTI from a sign you saw: " + cited.first().text.take(200))
+        return onCalendar(ev)
     }
 
     private fun tool(tc: JSONObject, content: String) = JSONObject().put("role", "tool")

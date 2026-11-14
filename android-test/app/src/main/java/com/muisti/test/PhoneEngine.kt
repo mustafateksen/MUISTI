@@ -38,6 +38,7 @@ object AndroidImages : Images {
  * lives in the app's files. Same code paths as the server's /ingest and /ask.
  */
 class PhoneEngine(ctx: Context) {
+    private val appCtx = ctx.applicationContext
     private val cfg = LlmConfig(BuildConfig.LLM_BASE_URL, BuildConfig.LLM_MODEL, BuildConfig.LLM_KEY, BuildConfig.EMBED_KEY)
     private val llm = Llm(cfg)
     private val prompts = Prompts(ctx.assets.open("prompts.json").bufferedReader().use { it.readText() })
@@ -73,12 +74,44 @@ class PhoneEngine(ctx: Context) {
         val docs = Asker.docsFromSightings(store.sightings())
         val hist = synchronized(history) { history.toList() }
         val answer = try {
-            agent.run(question, hist, docs, now, liveFrame, onForget = { m -> store.forget(now - m * 60_000L) })
+            agent.run(question, hist, docs, now, liveFrame, onForget = { m -> store.forget(now - m * 60_000L) },
+                onCalendar = { ev -> addToCalendar(ev) })
         } catch (e: Exception) {
             classic(question, docs, now, liveFrame)
         }
         remember(question, answer.answer)
         return answer
+    }
+
+    /** Writes the event straight into the phone's primary calendar (the user asked for it). */
+    private fun addToCalendar(ev: com.muisti.engine.CalendarEvent): String {
+        val cr = appCtx.contentResolver
+        if (androidx.core.content.ContextCompat.checkSelfPermission(appCtx, android.Manifest.permission.WRITE_CALENDAR)
+            != android.content.pm.PackageManager.PERMISSION_GRANTED) return "Not added: calendar permission is not granted. Tell the user to allow it."
+        val proj = arrayOf(android.provider.CalendarContract.Calendars._ID, android.provider.CalendarContract.Calendars.CALENDAR_DISPLAY_NAME,
+            android.provider.CalendarContract.Calendars.IS_PRIMARY, android.provider.CalendarContract.Calendars.CALENDAR_ACCESS_LEVEL)
+        var calId = -1L; var calName = ""; var bestPrimary = false
+        cr.query(android.provider.CalendarContract.Calendars.CONTENT_URI, proj, "${android.provider.CalendarContract.Calendars.VISIBLE} = 1", null, null)?.use { c ->
+            while (c.moveToNext()) {
+                if (c.getInt(3) < android.provider.CalendarContract.Calendars.CAL_ACCESS_CONTRIBUTOR) continue
+                val primary = c.getInt(2) == 1
+                if (calId < 0 || (primary && !bestPrimary)) { calId = c.getLong(0); calName = c.getString(1) ?: ""; bestPrimary = primary }
+            }
+        }
+        if (calId < 0) return "Not added: no writable calendar on this phone."
+        val v = android.content.ContentValues().apply {
+            put(android.provider.CalendarContract.Events.CALENDAR_ID, calId)
+            put(android.provider.CalendarContract.Events.TITLE, ev.title)
+            put(android.provider.CalendarContract.Events.DTSTART, ev.startMs)
+            put(android.provider.CalendarContract.Events.DTEND, ev.endMs)
+            put(android.provider.CalendarContract.Events.EVENT_TIMEZONE, java.util.TimeZone.getDefault().id)
+            put(android.provider.CalendarContract.Events.DESCRIPTION, ev.note)
+            ev.location?.let { put(android.provider.CalendarContract.Events.EVENT_LOCATION, it) }
+        }
+        runCatching { cr.insert(android.provider.CalendarContract.Events.CONTENT_URI, v) }.getOrNull()
+            ?: return "Not added: the calendar refused the event."
+        val whenTxt = java.text.SimpleDateFormat("EEE d MMM, HH:mm", java.util.Locale.US).format(java.util.Date(ev.startMs))
+        return "Added to the calendar '$calName': ${ev.title}, $whenTxt" + (ev.location?.let { ", at $it" } ?: "") + "."
     }
 
     private fun classic(question: String, docs: List<com.muisti.engine.Doc>, now: Long, liveFrame: ByteArray?): Answer {
