@@ -61,8 +61,42 @@ class PhoneEngine(ctx: Context) {
         val record = extractor.extract(jpeg, lines)
         if (!record.bool("useful")) return false
         store.addFrame(seenAtMs, record, lines, jpeg, dhash, fix?.lat, fix?.lon, fix?.street)
+        warmSoon()
         return true
     }
+
+    // --- speed: memories are turned into search docs + embedded in the background, not when a question comes ---
+
+    private val docsLock = Any()
+    private var docsFor: List<org.json.JSONObject>? = null
+    private var docsCache: List<com.muisti.engine.Doc> = emptyList()
+    @Volatile private var lastWarm = 0L
+    @Volatile private var warming = false
+
+    /** Search docs for the current memory; rebuilt only when the store changed (vectors are kept on the Doc objects). */
+    private fun docs(): List<com.muisti.engine.Doc> = synchronized(docsLock) {
+        val s = store.sightings()
+        if (s !== docsFor) {
+            val old = docsCache.filter { it.vec != null }.associateBy { it.text }
+            docsCache = Asker.docsFromSightings(s).onEach { d -> if (d.vec == null) d.vec = old[d.text]?.vec }
+            docsFor = s
+        }
+        docsCache
+    }
+
+    /** At most every 8 s while recording: merge + embed new memories so the next question starts warm. */
+    private fun warmSoon() {
+        val now = System.currentTimeMillis()
+        if (warming || now - lastWarm < 8_000) return
+        warming = true; lastWarm = now
+        Thread {
+            runCatching { asker.embedDocs(docs()) }
+            warming = false
+        }.start()
+    }
+
+    /** Called when the app opens / the voice session starts: the first question shouldn't pay for setup. */
+    fun warm() { lastWarm = 0; warmSoon() }
 
     /**
      * /ask on the phone: the tool-calling Agent (Nemotron decides which tools to use, sees the
@@ -71,7 +105,12 @@ class PhoneEngine(ctx: Context) {
      */
     fun ask(question: String, liveFrame: ByteArray?): Answer {
         val now = System.currentTimeMillis()
-        val docs = Asker.docsFromSightings(store.sightings())
+        val t0 = System.currentTimeMillis()
+        val docs = docs()
+        val tDocs = System.currentTimeMillis() - t0
+        val t1 = System.currentTimeMillis()
+        asker.semanticSetup(question, docs)      // embeds new memories + the question (cached)
+        val tEmbed = System.currentTimeMillis() - t1
         val hist = synchronized(history) { history.toList() }
         val answer = try {
             agent.run(question, hist, docs, now, liveFrame, onForget = { m -> store.forget(now - m * 60_000L) },
@@ -80,6 +119,8 @@ class PhoneEngine(ctx: Context) {
             classic(question, docs, now, liveFrame)
         }
         remember(question, answer.answer)
+        android.util.Log.i("MuistiTiming", "total ${System.currentTimeMillis() - t0}ms | docs ${tDocs}ms (${docs.size}) | " +
+            "embed ${tEmbed}ms | agent: ${agent.timings.joinToString(", ")} | ${answer.label}")
         return answer
     }
 

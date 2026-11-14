@@ -70,7 +70,7 @@ class ParityTest {
         val prompts = Prompts(File(nem, "docs/prompts.json").readText())
         val llm = Llm(cfg)
         val asker = Asker(llm, prompts, JvmImages, Embedder(cfg.embedKey, File("build/embed_cache.tsv")))
-        agent = Agent(llm, prompts, asker)
+        agent = Agent(llm, prompts, asker).apply { preSearch = System.getProperty("muisti.presearch") != "0" }
 
         val sightings = memFiles().flatMap { f ->
             val start = videoStart(f.path)

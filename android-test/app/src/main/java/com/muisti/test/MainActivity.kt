@@ -98,6 +98,10 @@ class MainActivity : ComponentActivity() {
     private var speech: SpeechRecognizer? = null
     private var tts: TextToSpeech? = null
     private var ttsReady = false
+    private val earcon by lazy { runCatching { android.media.ToneGenerator(android.media.AudioManager.STREAM_MUSIC, 35) }.getOrNull() }
+    private var lastFiller = -1
+    private val fillers = listOf("One sec.", "Let me check.", "Hmm, let me think.", "Looking back at what I saw.",
+        "Give me a moment.", "Let me see.", "Okay, checking.")
 
     private val permissions = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { res ->
         if (res[Manifest.permission.CAMERA] == true) startCamera()
@@ -172,16 +176,26 @@ class MainActivity : ComponentActivity() {
         tts = TextToSpeech(this) { status ->
             if (status == TextToSpeech.SUCCESS) {
                 tts?.language = Locale.US
-                tts?.setSpeechRate(1.02f)
+                // the most natural installed English voice that works offline (no network wait before speaking)
+                runCatching {
+                    tts?.voices?.filter { it.locale.language == "en" && !it.isNetworkConnectionRequired &&
+                        TextToSpeech.Engine.KEY_FEATURE_NOT_INSTALLED !in it.features }
+                        ?.sortedWith(compareByDescending<android.speech.tts.Voice> { it.locale.country == "US" }
+                            .thenByDescending { it.quality }.thenBy { it.latency })
+                        ?.firstOrNull()?.let { tts?.voice = it }
+                }
+                tts?.setSpeechRate(1.05f)
                 ttsReady = true
             }
         }
         tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-            override fun onStart(id: String?) { runOnUiThread { state.phase = VoicePhase.Speaking } }
-            override fun onDone(id: String?) { runOnUiThread { afterTurn() } }
+            override fun onStart(id: String?) { if (id == "answer") runOnUiThread { state.phase = VoicePhase.Speaking } }
+            // a filler ("One sec.") is not the end of the turn: only the answer hands the mic back
+            override fun onDone(id: String?) { if (id == "answer") runOnUiThread { afterTurn() } }
             @Deprecated("Deprecated in Java")
-            override fun onError(id: String?) { runOnUiThread { afterTurn() } }
+            override fun onError(id: String?) { if (id == "answer") runOnUiThread { afterTurn() } }
         })
+        engine.warm()
 
         val need = listOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO,
             Manifest.permission.READ_CALENDAR, Manifest.permission.WRITE_CALENDAR)
@@ -638,6 +652,15 @@ class MainActivity : ComponentActivity() {
         val pending = Msg.Answer(label = "", text = "", pending = true)
         state.messages.add(pending)
         state.phase = if (spoken) VoicePhase.Thinking else VoicePhase.Idle
+        // feels like a person listening: a soft "got it" tick now, and a short spoken filler if the answer takes a while
+        if (spoken) runCatching { earcon?.startTone(android.media.ToneGenerator.TONE_PROP_BEEP, 70) }
+        val filler = if (spoken && ttsReady && state.live) lifecycleScope.launch {
+            delay(1300)
+            var i: Int
+            do { i = fillers.indices.random() } while (i == lastFiller)
+            lastFiller = i
+            tts?.speak(fillers[i], TextToSpeech.QUEUE_FLUSH, null, "filler")
+        } else null
         lifecycleScope.launch {
             val answer = runCatching {
                 // the live frame for "what am I seeing?" is masked too; if masking fails it is not sent
@@ -652,10 +675,12 @@ class MainActivity : ComponentActivity() {
                     mapUri = where?.let { "geo:${it.lat},${it.lon}?q=${it.lat},${it.lon}(${android.net.Uri.encode(it.street ?: "Seen here")})" }
                         .takeIf { r.label == "SEEN" || r.label == "UNSURE" })
             }.getOrElse { Msg.Answer(label = "ERROR", text = "I couldn't reach Nemotron (${it.message?.take(80)}).") }
+            filler?.cancel()
             val i = state.messages.indexOf(pending)
             if (i >= 0) state.messages[i] = answer else state.messages.add(answer)
             if (spoken && ttsReady && state.live) {
-                tts?.speak(answer.text, TextToSpeech.QUEUE_FLUSH, null, "answer")
+                // QUEUE_ADD: if the filler is mid-sentence, the answer follows it instead of cutting it off
+                tts?.speak(answer.text, TextToSpeech.QUEUE_ADD, null, "answer")
             } else if (spoken) afterTurn()
         }
     }
@@ -691,6 +716,7 @@ class MainActivity : ComponentActivity() {
         }
         if (!SpeechRecognizer.isRecognitionAvailable(this)) { state.toast("Speech recognition isn't available on this phone."); return }
         state.live = true
+        engine.warm()
         listen()
     }
 
@@ -718,9 +744,9 @@ class MainActivity : ComponentActivity() {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE, "en-US")
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
             putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
-            // give the user time to think between questions
-            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1500L)
-            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 1500L)
+            // quick turn-taking: ~1 s of silence ends the question (1.5 s felt like the app was lagging)
+            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1000L)
+            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 800L)
         })
     }
 

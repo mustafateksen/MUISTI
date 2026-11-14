@@ -22,11 +22,16 @@ class CalendarEvent(val title: String, val startMs: Long, val endMs: Long, val l
 class Agent(private val llm: Llm, private val prompts: Prompts, private val asker: Asker) {
 
     var maxRounds = 4   // the last round must be `answer`
+    /** Where the last run spent its time ("llm 820ms", "search_memory 40ms", ...), for tuning. */
+    val timings = ArrayList<String>()
+    /** Search with the raw question before the first model call (saves a round trip). */
+    var preSearch = true
 
     fun run(question: String, history: List<Pair<String, String>>, docs: List<Doc>, now: Long,
             liveFrame: ByteArray? = null, onForget: (Int) -> Int = { 0 },
             onCalendar: (CalendarEvent) -> String = { "Calendar is not available." }): Answer {
         val t0 = System.currentTimeMillis()
+        timings.clear()
         var calls = 0
         val evidence = ArrayList<Doc>()                  // E1 = evidence[0]
         val trace = ArrayList<String>()
@@ -53,13 +58,30 @@ class Agent(private val llm: Llm, private val prompts: Prompts, private val aske
         msgs.put(JSONObject().put("role", "user").put("content", question))
         val qvec by lazy { asker.semanticSetup(question, docs) }
 
+        // Speed: search memory with the question itself BEFORE the first model call and hand the result
+        // over as if the model had asked for it. Most questions are then answered in one call instead of
+        // "decide to search" -> "search" -> "answer". The model can still call any tool afterwards.
+        if (preSearch && docs.isNotEmpty()) {
+            val tp = System.currentTimeMillis()
+            val args = JSONObject().put("query", question).put("synonyms", JSONArray()).put("what", "other").put("minutes", JSONObject.NULL)
+            val found = searchMemory(args, docs, now, qvec, ::ev)
+            val call = JSONObject().put("id", "pre_search").put("type", "function")
+                .put("function", JSONObject().put("name", "search_memory").put("arguments", args.toString()))
+            msgs.put(JSONObject().put("role", "assistant").put("content", "").put("tool_calls", JSONArray().put(call)))
+            msgs.put(JSONObject().put("role", "tool").put("tool_call_id", "pre_search").put("name", "search_memory").put("content", found))
+            trace.add("pre_search")
+            timings.add("pre_search ${System.currentTimeMillis() - tp}ms")
+        }
+
         for (round in 0 until maxRounds) {
+            val tl = System.currentTimeMillis()
             // last round: the model must answer with what it has (it used to keep searching on follow-ups)
             val last = round == maxRounds - 1
             if (last) msgs.put(JSONObject().put("role", "user").put("content",
                 "Answer now with the evidence you have (or say you don't know)."))
             val msg = llm.chatTools(msgs, prompts.agentTools,
                 if (last) RawJson("{\"type\": \"function\", \"function\": {\"name\": \"answer\"}}") else RawJson("\"required\"")); calls++
+            timings.add("llm ${System.currentTimeMillis() - tl}ms")
             val toolCalls = msg.optJSONArray("tool_calls") ?: JSONArray()
             if (toolCalls.length() == 0) {
                 // no tool call: treat plain text as a chat reply (it must not claim sightings: no evidence)
@@ -81,6 +103,7 @@ class Agent(private val llm: Llm, private val prompts: Prompts, private val aske
                     }
                     return result(verdict.label, verdict.text, verdict.used, verdict.why)
                 }
+                val tt = System.currentTimeMillis()
                 val out = when (name) {
                     "search_memory" -> searchMemory(args, docs, now, qvec, ::ev)
                     "recent" -> recent(args.num("minutes", 10.0), docs, now, ::ev)
@@ -99,6 +122,7 @@ class Agent(private val llm: Llm, private val prompts: Prompts, private val aske
                     }
                     else -> "Unknown tool $name."
                 }
+                timings.add("$name ${System.currentTimeMillis() - tt}ms")
                 msgs.put(tool(tc, out))
             }
         }

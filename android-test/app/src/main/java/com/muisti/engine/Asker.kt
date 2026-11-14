@@ -180,9 +180,16 @@ class Asker(private val llm: Llm, private val prompts: Prompts, private val imag
     fun semanticSetup(question: String, docs: List<Doc>): FloatArray? {
         val e = embedder ?: return null
         if (!e.available()) return null
+        embedDocs(docs)
+        return e.embed(listOf(question), "query")?.firstOrNull()
+    }
+
+    /** Embeds memories that have no vector yet (done in the background after ingest, so questions don't wait). */
+    fun embedDocs(docs: List<Doc>) {
+        val e = embedder ?: return
+        if (!e.available()) return
         val todo = docs.filter { it.vec == null }
         if (todo.isNotEmpty()) e.embed(todo.map { it.text }, "passage")?.let { vs -> todo.zip(vs).forEach { (d, v) -> d.vec = v } }
-        return e.embed(listOf(question), "query")?.firstOrNull()
     }
 
     fun parseQuestion(q: String): JSONObject {
