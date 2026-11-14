@@ -104,12 +104,59 @@ class MainActivity : ComponentActivity() {
         else state.toast("Camera permission is needed to remember things.")
     }
 
+    /** Temporary: add a photo to memory (picker, "Share to MUISTI", or a test file) - same path as a camera frame. */
+    private val photoPicker = registerForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        uri?.let { u -> importImage { contentResolver.openInputStream(u)?.use { it.readBytes() } } }
+    }
+
+    fun pickPhoto() = photoPicker.launch(androidx.activity.result.PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+
+    private fun handleImportIntent(i: Intent?) {
+        if (i == null) return
+        if (i.action == Intent.ACTION_SEND && i.type?.startsWith("image/") == true) {
+            @Suppress("DEPRECATION")
+            val uri = i.getParcelableExtra<android.net.Uri>(Intent.EXTRA_STREAM) ?: return
+            importImage { contentResolver.openInputStream(uri)?.use { it.readBytes() } }
+        }
+        // test hook (adb): a file inside this app's own storage only
+        i.getStringExtra("muisti_import")?.let { path ->
+            val f = java.io.File(path)
+            if (f.canonicalPath.startsWith(filesDir.canonicalPath)) importImage { f.readBytes() }
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        handleImportIntent(intent)
+    }
+
+    private fun importImage(read: () -> ByteArray?) {
+        state.toast("Adding photo to memory…")
+        lifecycleScope.launch {
+            val msg = runCatching {
+                withContext(Dispatchers.IO) {
+                    val bytes = read() ?: return@withContext "Couldn't read that photo."
+                    var bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: return@withContext "That isn't an image."
+                    val l = maxOf(bmp.width, bmp.height)
+                    if (l > 1536) bmp = Bitmap.createScaledBitmap(bmp, bmp.width * 1536 / l, bmp.height * 1536 / l, true)
+                    val obs = withContext(Dispatchers.Main) { readText(bmp) }
+                    val safe = blurrer.process(bmp) ?: return@withContext "Skipped: privacy check failed."
+                    val jpeg = ByteArrayOutputStream().also { safe.image.compress(Bitmap.CompressFormat.JPEG, 85, it) }.toByteArray()
+                    val ok = engine.ingest(jpeg, obs, System.currentTimeMillis(), dHash(bmp), location.fresh(60_000))
+                    if (ok) { state.memories = engine.store.sightings().size; "Remembered · ${obs.size} text lines" } else "Nothing worth keeping in that photo."
+                }
+            }.getOrElse { "Couldn't add the photo: ${it.message?.take(60)}" }
+            state.toast(msg)
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         state.serverUrl = getPreferences(MODE_PRIVATE).getString("server", "http://10.0.34.200:8000")!!
         previewView = PreviewView(this).apply { scaleType = PreviewView.ScaleType.FILL_CENTER }
         setContent { MuistiApp(this) }
+        handleImportIntent(intent)
 
         tts = TextToSpeech(this) { status ->
             if (status == TextToSpeech.SUCCESS) {

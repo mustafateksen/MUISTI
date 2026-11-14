@@ -110,10 +110,22 @@ class Agent(private val llm: Llm, private val prompts: Prompts, private val aske
      * written in the cited evidence (18:00 or 6 pm), otherwise nothing is added and the model is told why.
      */
     private fun addToCalendar(a: JSONObject, evidence: List<Doc>, onCalendar: (CalendarEvent) -> String): String {
-        val fmt = SimpleDateFormat("yyyy-MM-dd'T'HH:mm", Locale.US).apply { isLenient = false }
-        val start = runCatching { fmt.parse(a.str("start") ?: "") }.getOrNull()
-            ?: return "Not added: start must be YYYY-MM-DDTHH:MM."
-        val end = a.str("end")?.let { runCatching { fmt.parse(it) }.getOrNull() }
+        // The model copies month/day/time from the sign; the year is computed here (this year, or next year
+        // if that day has already passed) so the model never has to "guess" one.
+        fun hm(s: String?): Pair<Int, Int>? = s?.trim()?.split(":")?.takeIf { it.size == 2 }
+            ?.let { (h, m) -> h.toIntOrNull()?.let { hh -> m.toIntOrNull()?.let { mm -> hh to mm } } }?.takeIf { it.first in 0..23 && it.second in 0..59 }
+        val month = a.num("month").toInt(); val dayIn = a.num("day").toInt()
+        val st = hm(a.str("start_time"))
+        if (month !in 1..12 || dayIn !in 1..31 || st == null) return "Not added: give month (1-12), day and start_time HH:MM from the sign."
+        val nowCal = java.util.Calendar.getInstance()
+        fun at(year: Int, t: Pair<Int, Int>) = java.util.Calendar.getInstance().apply {
+            clear(); set(year, month - 1, dayIn, t.first, t.second)
+        }.time
+        var year = nowCal.get(java.util.Calendar.YEAR)
+        val today0 = java.util.Calendar.getInstance().apply { set(java.util.Calendar.HOUR_OF_DAY, 0); set(java.util.Calendar.MINUTE, 0) }.time
+        if (at(year, 23 to 59).before(today0)) year += 1
+        val start = at(year, st)
+        val end = hm(a.str("end_time"))?.let { at(year, it) }?.takeIf { it.after(start) }
         val eid = Regex("E\\d+")
         val cited = a.arr("evidence").strings().filter { eid.matches(it) && it.substring(1).toInt() in 1..evidence.size }
             .map { evidence[it.substring(1).toInt() - 1] }

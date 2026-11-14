@@ -170,7 +170,7 @@ fun MuistiApp(act: MainActivity) {
             VoiceOverlay(s, t, onClose = { act.stopVoice() }, onOrb = { act.interrupt() })
             Toast(s, t)
 
-            if (showSettings) SettingsDialog(s.serverUrl, onSave = { act.saveServer(it); showSettings = false },
+            if (showSettings) SettingsDialog(s.serverUrl, onPhoto = { showSettings = false; act.pickPhoto() }, onSave = { act.saveServer(it); showSettings = false },
                 onClear = { act.clearChat(); showSettings = false }, onDismiss = { showSettings = false })
         }
     }
@@ -713,7 +713,7 @@ private fun Toast(s: AppState, t: Tones) {
 }
 
 @Composable
-private fun SettingsDialog(current: String, onSave: (String) -> Unit, onClear: () -> Unit, onDismiss: () -> Unit) {
+private fun SettingsDialog(current: String, onPhoto: () -> Unit, onSave: (String) -> Unit, onClear: () -> Unit, onDismiss: () -> Unit) {
     var url by remember { mutableStateOf(current) }
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -724,6 +724,7 @@ private fun SettingsDialog(current: String, onSave: (String) -> Unit, onClear: (
                 Text("Everything runs on this phone: Nemotron is called directly and your memories are stored here, " +
                     "not on a server.", fontSize = 14.sp, color = Color(0xFF8E8E93))
                 Spacer(Modifier.height(10.dp))
+                TextButton(onClick = onPhoto) { Text("Add a photo to memory", color = BrandBlue) }
                 TextButton(onClick = onClear) { Text("Clear conversation", color = Rose) }
             }
         },
