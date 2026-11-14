@@ -2,7 +2,14 @@
 
 Kaynak: `nemotron/extract.py` ve `nemotron/ask.py`. Bu dosya koddan otomatik çıkarıldı, metinler **birebir** aynı.
 Makine tarafından okunabilir hali: `docs/prompts.json`.
-Sürüm: **v14** (v13c + directory-screen ismi; eval/tune.py ile 53 etiketli karede seçildi: YouTube + gözlük + gece fotoğrafı). Test (27 kare): kapsam %86–89, doğruluk %90–92, olmayan nesne yazma 0–1. Gözlük soru-cevap: 29–30/31, uydurma ve yanlış cevap 0.
+Sürüm: **v18** (v17 + nesne başına `visibility` alanı; belirsiz nesneler kodda işaretlenir). Ürünle aynı okuyucuyla test (Apple Vision + yakınlaştırma, Mac'te): gözlük soru-cevap **30/31** (2 çalıştırma), 13 tuzak sorunun hepsinde "bilmiyorum", uydurma 0. Nesne testi (53 kare): kapsam %89–99, doğruluk %86–88, emin olunan nesnelerde doğruluk %90–93, afiş/ekran resmi 25/25.
+
+## Telefon tarafı: yazı okuma (Apple Vision)
+
+- Yazıyı **kutularıyla** gönderin: `POST /ingest` içinde `ocr_observations` = `[{text, conf, box:[x,y,w,h]}]` (0..1, sol üst köşe başlangıç). Düz metin (`ocr_text`) gönderilirse tabela satırlarını birleştirme çalışmaz.
+- Vision ayarları `tools/vision_ocr.swift` ile aynı olmalı: `.accurate`, `usesLanguageCorrection = false`, `recognitionLanguages = ["en-US"]`, `minimumTextHeight = 0.015`.
+- İsteğe bağlı yakınlaştırma: `tools/vision_ocr_zoom.swift` (yazı yerini bul → küçük yazıyı büyütüp tekrar oku). Testte 29/31 → 30/31. Telefonda hıza göre karar verilecek.
+- Sunucu gelen satırları kendisi düzeltir (`ocr_adapter.py` + `ocr_repair.py`): kat yazıları ("STH FLOOR" → "5TH FLOOR"), yapışık kelimeler, iki satıra bölünmüş tabela değerleri.
 
 ## iOS'a taşırken mutlaka bilinmesi gerekenler
 
@@ -22,7 +29,7 @@ Prompt tek başına yetmiyor. Test sırasında model "OCR'da yoksa yazma" kural�
   - soru ayrıştırma ve cevap: 400
   - tekrar bakma: 200
 - Görüntü: uzun kenarı 1536 px'e küçültülmüş JPEG, `image_url` olarak data URL.
-- **Mesaj sırası:** system → few-shot user/assistant çiftleri → son user mesajı. Son mesajın içinde önce `OCR_LINES` metni, sonra görüntü gelir.
+- **Mesaj sırası:** system → user mesajı (önce `OCR_LINES` metni, sonra görüntü). Few-shot yok.
 
 **OCR satırları şu formatta verilmeli** (Apple Vision çıktısından):
 ```
@@ -37,7 +44,7 @@ L03 5TH FLOOR  ARDUINO HARDWARE LAB
 - Yazı yoksa: `OCR_LINES:
 (none)`.
 
-**Few-shot uyarısı:** Örneklerdeki nesneler modeli yönlendiriyor (eski örnekteki asansör ve küllük gerçek karelerde uydurulmaya başlamıştı). Örnekleri değiştirirken bunu ölçün.
+**Few-shot YOK:** Örnek sahneler modeli yönlendiriyordu: olmayan asansör ve küllük ekliyor, yön tabelasındaki okları örnekten kopyalıyordu. Örnek kaldırılınca afiş/ekran resimleri de kayboldu. Bu yüzden prompt'un sonuna yazılı format notları (FORMAT NOTES) eklendi. iOS'ta da örnek gönderilmesin ama FORMAT NOTES mutlaka kalsın. Kod kuralları ölçümle gerekli çıktı: kapatılınca kostümlü insan yine "heykel" oldu.
 
 **Kod tarafı kontroller** (`extract.py` içindeki `verify` ve `_clean_visual` fonksiyonları), cevap modelden döndükten sonra:
 1. `name`, `phone` ve `hours` alanları, kendi `*_line` ID'sindeki OCR satırında geçmeli.
@@ -101,7 +108,9 @@ VISUAL rules:
     billboard = a large printed or digital advertisement panel on a building or pole.
     poster = a printed picture or advert on a wall, window or stand. banner = hanging fabric/vinyl.
   For each: name (simple English noun, singular), category, position in the frame (left/center/right), distance (near/mid/far),
-  details (at most 12 words: colour, material, kind, state, what is on it), count (how many of this thing are visible in THIS frame).
+  details (at most 12 words: colour, material, kind, state, what is on it), count (how many of this thing are visible in THIS frame),
+  visibility: clear (plainly visible), partial (cut off, blurred or small but recognisable), unsure (you think it is
+  there but cannot really make it out). Be honest: unsure objects are kept but double-checked later.
   Numbers on plaques, indicators and screens: say in details what the number MEANS only if it is clear
   (e.g. "elevator position indicator showing 4", "floor label 5TH FLOOR at top of directory").
   If you cannot tell what a number means, write "unlabeled number 4". Never decide which floor the viewer is on.
@@ -143,245 +152,17 @@ OTHER:
 
 Return ONLY one JSON object with keys: useful, kind, subtype, name, name_line, phone, phone_line, hours, hours_line, items, other_text, scene, objects, relations, depictions, caption, confidence.
 
-The examples only show the JSON format. They are different places: never add an object because it appeared in an
-example. Describe only what is in THIS photo.
+FORMAT NOTES (there are no examples):
+- depictions: every banner, poster, screen or billboard that shows a PICTURE (photo, drawing, video, map, logo artwork)
+  gets one depictions item. Busy shop, event and street frames usually have 1-4. Leave it empty only if no picture is
+  visible. Text-only signs are not depictions.
+- objects: list what you are sure is physically there. A shorter correct list is better than a long list with guesses.
+  Do not add belongings carried by people (bags, backpacks, phones) and do not guess hidden rooms or buildings.
+- details: 3-12 words; relations: only between objects you listed.
 ```
 
 ## 2. Extraction: few-shot örnekleri
-Her biri system'den sonra bir user/assistant çifti olarak eklenir. Assistant cevabı JSON string olarak gider.
-
-**Örnek 1: user mesajı**
-```
-OCR_LINES:
-L01 DENTAL CLINIC
-L02 Bright Smile Dental
-L03 Tel. 040 123 4567
-L04 Mon-Fri 8-18
-L05 Gentle care for
-L06 the whole family
-```
-**Örnek 1: assistant cevabı**
-```json
-{
-  "useful": true,
-  "kind": "health",
-  "subtype": "dentist",
-  "name": "Bright Smile Dental",
-  "name_line": "L02",
-  "phone": "040 123 4567",
-  "phone_line": "L03",
-  "hours": "Mon-Fri 8-18",
-  "hours_line": "L04",
-  "items": [],
-  "other_text": "DENTAL CLINIC / Gentle care for the whole family",
-  "scene": {
-    "place_type": "street",
-    "indoor": false,
-    "lighting": "bright"
-  },
-  "objects": [
-    {
-      "name": "sign",
-      "category": "sign_screen",
-      "position": "center",
-      "distance": "near",
-      "details": "white dentist sign with blue text",
-      "count": 1
-    },
-    {
-      "name": "door",
-      "category": "navigation",
-      "position": "left",
-      "distance": "near",
-      "details": "glass entrance door of the clinic",
-      "count": 1
-    },
-    {
-      "name": "poster",
-      "category": "sign_screen",
-      "position": "right",
-      "distance": "near",
-      "details": "poster in the clinic window",
-      "count": 1
-    }
-  ],
-  "relations": [
-    {
-      "subject": "sign",
-      "relation": "above",
-      "object": "door"
-    },
-    {
-      "subject": "poster",
-      "relation": "right of",
-      "object": "door"
-    }
-  ],
-  "depictions": [
-    {
-      "medium": "poster",
-      "on": "window poster of Bright Smile Dental",
-      "content": "photo of a smiling woman in a dentist chair",
-      "depicted": [
-        "woman",
-        "dentist chair"
-      ]
-    }
-  ],
-  "caption": "A dentist entrance with a sign above a glass door and a poster in the window.",
-  "confidence": 0.9
-}
-```
-**Örnek 2: user mesajı**
-```
-OCR_LINES:
-L01 3RD FLOOR
-L02 4TH FLOOR CAFE & LOUNGE
-L03 3RD FLOOR WORKSHOP ROOM
-L04 2ND FLOOR
-L05 RECEPTION
-L06 CITYHUB
-```
-**Örnek 2: assistant cevabı**
-```json
-{
-  "useful": true,
-  "kind": "directory",
-  "subtype": "floor directory",
-  "name": "CITYHUB",
-  "name_line": "L06",
-  "phone": null,
-  "phone_line": null,
-  "hours": null,
-  "hours_line": null,
-  "items": [
-    {
-      "label": "4TH FLOOR",
-      "value": "CAFE & LOUNGE",
-      "line": "L02"
-    },
-    {
-      "label": "3RD FLOOR",
-      "value": "WORKSHOP ROOM",
-      "line": "L03"
-    }
-  ],
-  "other_text": null,
-  "scene": {
-    "place_type": "corridor",
-    "indoor": true,
-    "lighting": "bright"
-  },
-  "objects": [
-    {
-      "name": "directory screen",
-      "category": "sign_screen",
-      "position": "left",
-      "distance": "near",
-      "details": "vertical digital directory screen listing floors",
-      "count": 1
-    },
-    {
-      "name": "sign",
-      "category": "sign_screen",
-      "position": "right",
-      "distance": "near",
-      "details": "floor label 3 painted large on the wall",
-      "count": 1
-    },
-    {
-      "name": "door",
-      "category": "navigation",
-      "position": "right",
-      "distance": "mid",
-      "details": "grey corridor door, closed",
-      "count": 1
-    }
-  ],
-  "relations": [
-    {
-      "subject": "directory screen",
-      "relation": "left of",
-      "object": "door"
-    }
-  ],
-  "depictions": [],
-  "caption": "A corridor with a floor directory screen, a large floor label 3 on the wall and a closed door.",
-  "confidence": 0.8
-}
-```
-**Örnek 3: user mesajı**
-```
-OCR_LINES:
-L01 CITY CENTRE
-L02 P + METRO
-```
-**Örnek 3: assistant cevabı**
-```json
-{
-  "useful": true,
-  "kind": "street",
-  "subtype": "road junction",
-  "name": null,
-  "name_line": null,
-  "phone": null,
-  "phone_line": null,
-  "hours": null,
-  "hours_line": null,
-  "items": [],
-  "other_text": "CITY CENTRE / P + METRO",
-  "scene": {
-    "place_type": "street",
-    "indoor": false,
-    "lighting": "dark"
-  },
-  "objects": [
-    {
-      "name": "direction sign",
-      "category": "navigation",
-      "position": "center",
-      "distance": "mid",
-      "details": "arrows: CITY CENTRE straight ahead, P + METRO right",
-      "count": 1
-    },
-    {
-      "name": "street lamp",
-      "category": "furniture",
-      "position": "center",
-      "distance": "mid",
-      "details": "lit lamp posts along the road",
-      "count": 4
-    },
-    {
-      "name": "crosswalk",
-      "category": "navigation",
-      "position": "left",
-      "distance": "near",
-      "details": "white striped crossing",
-      "count": 1
-    },
-    {
-      "name": "bus",
-      "category": "vehicle",
-      "position": "right",
-      "distance": "far",
-      "details": "city bus with lit windows",
-      "count": 1
-    }
-  ],
-  "relations": [
-    {
-      "subject": "direction sign",
-      "relation": "above",
-      "object": "crosswalk"
-    }
-  ],
-  "depictions": [],
-  "caption": "A dark road junction with a direction sign (city centre ahead, parking and metro to the right), four lit street lamps and a crossing.",
-  "confidence": 0.8
-}
-```
-
+Yok. v17'den itibaren örnek gönderilmiyor (bkz. eval/ITERATIONS.md, v15–v17). Format, system prompt'un sonundaki FORMAT NOTES ile öğretiliyor.
 ## 3. Extraction: JSON şeması
 ```json
 {
@@ -549,6 +330,14 @@ L02 P + METRO
           },
           "count": {
             "type": "integer"
+          },
+          "visibility": {
+            "type": "string",
+            "enum": [
+              "clear",
+              "partial",
+              "unsure"
+            ]
           }
         },
         "required": [
@@ -557,7 +346,8 @@ L02 P + METRO
           "position",
           "distance",
           "details",
-          "count"
+          "count",
+          "visibility"
         ]
       }
     },

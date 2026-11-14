@@ -13,7 +13,8 @@ import ask  # noqa: E402
 spec = json.load(open("eval/ask_tests.json", encoding="utf-8"))
 now = dt.datetime.fromisoformat(spec["now"])
 SERVER = sys.argv[sys.argv.index("--server") + 1] if "--server" in sys.argv else None
-docs = None if SERVER else ask.load_memory()
+MEM = sys.argv[sys.argv.index("--memory") + 1] if "--memory" in sys.argv else None
+docs = None if SERVER else (ask.load_memory(f"results/*/{MEM}/results.json") if MEM else ask.load_memory())
 
 
 def run(q, q_now=None):

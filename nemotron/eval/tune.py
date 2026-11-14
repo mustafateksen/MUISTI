@@ -28,7 +28,12 @@ import extract as E  # noqa: E402
 TUNE = os.path.join(ROOT, "results", "tune")
 LABELS = json.load(open(os.path.join(ROOT, "eval", "tune_labels.json"), encoding="utf-8"))["frames"]
 META = {m["file"][:-4]: m for m in json.load(open(os.path.join(TUNE, "frames.json"), encoding="utf-8"))}
-TEXT = json.load(open(os.path.join(TUNE, "ocr.json"), encoding="utf-8"))
+# --ocr paddle -> deterministic PaddleOCR lines (results/tune/ocr_paddle.json) instead of the Nemotron stand-in
+_OCR_ARG = sys.argv[sys.argv.index("--ocr") + 1] if "--ocr" in sys.argv else None
+_OCR_FILE = {"paddle": "ocr_paddle.json", "paddlefix": "ocr_paddle_fix.json",
+             "vision": "ocr_vision.json", "visionfix": "ocr_vision_fix.json",
+             "zoomfix": "ocr_zoom_fix.json"}.get(_OCR_ARG, "ocr.json")
+TEXT = json.load(open(os.path.join(TUNE, _OCR_FILE), encoding="utf-8"))
 
 # Words that name the same kind of thing. Keys are the label vocabulary.
 SYN = {
@@ -106,7 +111,7 @@ def matches(obj: str, label: str) -> bool:
 
 def load_variant(name: str):
     mod = importlib.import_module(f"prompts.{name}")
-    saved = {k: getattr(E, k) for k in ("SYSTEM_PROMPT", "FEW_SHOTS", "EXTRACT_TEMPERATURE", "EXTRACT_MAX_TOKENS")}
+    saved = {k: getattr(E, k) for k in ("SYSTEM_PROMPT", "FEW_SHOTS", "EXTRACT_TEMPERATURE", "EXTRACT_MAX_TOKENS", "DETAIL_RULES")}
     return mod, saved
 
 
@@ -116,6 +121,7 @@ def run_variant(name: str, frames: list[str], workers: int = 8) -> dict:
     E.FEW_SHOTS = getattr(mod, "FEW_SHOTS", saved["FEW_SHOTS"])
     E.EXTRACT_TEMPERATURE = getattr(mod, "TEMPERATURE", saved["EXTRACT_TEMPERATURE"])
     E.EXTRACT_MAX_TOKENS = getattr(mod, "MAX_TOKENS", saved["EXTRACT_MAX_TOKENS"])
+    E.DETAIL_RULES = getattr(mod, "DETAIL_RULES", saved["DETAIL_RULES"])
     hook = getattr(mod, "postprocess", None)
 
     def one(f):
@@ -141,6 +147,7 @@ def run_variant(name: str, frames: list[str], workers: int = 8) -> dict:
 def score(out: dict) -> dict:
     must_hit = must_all = listed = ok_listed = people = absent_hits = fact_hit = fact_all = 0
     absent_list = []
+    c_must_hit = c_must_all = c_listed = c_ok = unc_total = 0
     pic_tp = pic_fn = pic_fp = pic_tn = errors = 0
     suspects, missed = [], []
     lat = []
@@ -150,6 +157,14 @@ def score(out: dict) -> dict:
         if rec.get("error"):
             errors += 1
         objs = [o["name"] for o in rec.get("objects") or []]
+        conf = [o["name"] for o in rec.get("objects") or [] if not o.get("uncertain")]
+        for m in lab["must"]:
+            c_must_all += 1
+            c_must_hit += any(matches(o, m) for o in conf)
+        for o in conf:
+            c_listed += 1
+            c_ok += any(matches(o, x) for x in lab["must"] + lab["ok"])
+        unc_total += len(objs) - len(conf)
         people += sum(1 for r in rec.get("rejected") or [] if r.get("field") == "object") + sum(1 for o in objs if PEOPLE.search(o))
         for m in lab["must"]:
             must_all += 1
@@ -187,6 +202,9 @@ def score(out: dict) -> dict:
         "recall_must": f"{must_hit}/{must_all} ({100 * must_hit / max(1, must_all):.0f}%)",
         "precision_est": f"{ok_listed}/{listed} ({100 * ok_listed / max(1, listed):.0f}%)",
         "objects_per_frame": round(listed / max(1, len(out)), 1),
+        "confident_recall": f"{100 * c_must_hit / max(1, c_must_all):.0f}%",
+        "confident_precision": f"{100 * c_ok / max(1, c_listed):.0f}%",
+        "uncertain_per_frame": round(unc_total / max(1, len(out)), 1),
         "people_as_objects": people,
         "absent_listed": absent_hits,
         "facts": f"{fact_hit}/{fact_all}",
@@ -197,7 +215,7 @@ def score(out: dict) -> dict:
 
 
 if __name__ == "__main__":
-    flags_with_value = {"--split", "--show"}
+    flags_with_value = {"--split", "--show", "--ocr"}
     argv = sys.argv[1:]
     args = [a for i, a in enumerate(argv) if not a.startswith("--") and (i == 0 or argv[i - 1] not in flags_with_value)]
     split = sys.argv[sys.argv.index("--split") + 1] if "--split" in sys.argv else "train"
@@ -212,7 +230,7 @@ if __name__ == "__main__":
             continue
         s = score(out)
         json.dump({"variant": name, "split": split, "score": s, "records": {f: r for f, (r, _) in out.items()}},
-                  open(os.path.join(TUNE, "runs", f"{name}_{split}.json"), "w", encoding="utf-8"), indent=1, ensure_ascii=False)
+                  open(os.path.join(TUNE, "runs", f"{name}_{split}{'_' + _OCR_ARG if _OCR_ARG else ''}.json"), "w", encoding="utf-8"), indent=1, ensure_ascii=False)
         print(f"== {name} [{split}]", json.dumps({k: v for k, v in s.items() if not k.startswith("_")}, ensure_ascii=False))
         print("   suspects:", ", ".join(s["_suspects"][:60]))
         print("   missed:  ", ", ".join(s["_missed"][:60]))

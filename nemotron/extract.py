@@ -45,6 +45,26 @@ client = OpenAI(base_url=BASE_URL, api_key=API_KEY, max_retries=0, timeout=120)
 EXTRACT_TEMPERATURE = 0.2
 EXTRACT_THINKING = False
 EXTRACT_MAX_TOKENS = 2500
+# Code rules that trust the model's own details over its label (screen->sign, costume statue,
+# name/details consistency). On by default; eval/tune.py turns it off to measure their effect.
+DETAIL_RULES = True
+# Objects late in the list or far away are often guesses (eval/tune.py, v17 runs: unmatched 2% for
+# ranks 1-3 vs 42% for rank 10+, 26% for "far"). They are kept but marked uncertain, not deleted.
+UNCERTAIN_RULES = True
+
+
+def _mark_uncertain(objs: list) -> None:
+    for i, o in enumerate(objs):
+        why = []
+        if (o.get("visibility") or "").lower() == "unsure":
+            why.append("model unsure")
+        if i >= 9:
+            why.append("late in list")
+        if i >= 5 and o.get("distance") == "far":
+            why.append("far and late in list")
+        o["uncertain"] = bool(why)
+        if why:
+            o["uncertain_why"] = ", ".join(why)
 
 KINDS = ["booth", "shop", "restaurant", "health", "service", "directory",
          "event", "transport", "notice", "street", "indoor_space", "other"]
@@ -92,8 +112,9 @@ RECORD_SCHEMA = {
                     "distance": {"type": "string", "enum": ["near", "mid", "far"]},
                     "details": {"type": "string"},
                     "count": {"type": "integer"},
+                    "visibility": {"type": "string", "enum": ["clear", "partial", "unsure"]},
                 },
-                "required": ["name", "category", "position", "distance", "details", "count"],
+                "required": ["name", "category", "position", "distance", "details", "count", "visibility"],
             },
         },
         "relations": {
@@ -134,7 +155,7 @@ OCR_PROMPT = """Transcribe the readable English text in this image, one visual r
 - Skip text that is too small, blurry or in a language you cannot read with certainty.
 If there is no readable text, reply with exactly: NO_TEXT"""
 
-# v13c prompt (selected by eval/tune.py on 40 hand-labelled frames; see eval/ITERATIONS.md).
+# v16b prompt: no example scenes, format taught by written rules (selected by eval/tune.py on 40 hand-labelled frames; see eval/ITERATIONS.md).
 SYSTEM_PROMPT = """You turn photos from smart glasses into memory records, so the wearer can later ask
 "where did I see X?" about ANYTHING useful they walked past, not only text.
 
@@ -164,7 +185,9 @@ VISUAL rules:
     billboard = a large printed or digital advertisement panel on a building or pole.
     poster = a printed picture or advert on a wall, window or stand. banner = hanging fabric/vinyl.
   For each: name (simple English noun, singular), category, position in the frame (left/center/right), distance (near/mid/far),
-  details (at most 12 words: colour, material, kind, state, what is on it), count (how many of this thing are visible in THIS frame).
+  details (at most 12 words: colour, material, kind, state, what is on it), count (how many of this thing are visible in THIS frame),
+  visibility: clear (plainly visible), partial (cut off, blurred or small but recognisable), unsure (you think it is
+  there but cannot really make it out). Be honest: unsure objects are kept but double-checked later.
   Numbers on plaques, indicators and screens: say in details what the number MEANS only if it is clear
   (e.g. "elevator position indicator showing 4", "floor label 5TH FLOOR at top of directory").
   If you cannot tell what a number means, write "unlabeled number 4". Never decide which floor the viewer is on.
@@ -206,8 +229,13 @@ OTHER:
 
 Return ONLY one JSON object with keys: useful, kind, subtype, name, name_line, phone, phone_line, hours, hours_line, items, other_text, scene, objects, relations, depictions, caption, confidence.
 
-The examples only show the JSON format. They are different places: never add an object because it appeared in an
-example. Describe only what is in THIS photo."""
+FORMAT NOTES (there are no examples):
+- depictions: every banner, poster, screen or billboard that shows a PICTURE (photo, drawing, video, map, logo artwork)
+  gets one depictions item. Busy shop, event and street frames usually have 1-4. Leave it empty only if no picture is
+  visible. Text-only signs are not depictions.
+- objects: list what you are sure is physically there. A shorter correct list is better than a long list with guesses.
+  Do not add belongings carried by people (bags, backpacks, phones) and do not guess hidden rooms or buildings.
+- details: 3-12 words; relations: only between objects you listed."""
 
 # v13c few-shots: neutral (no elevator/ashtray pairings); third shot = direction sign with arrows.
 _FEW_SHOTS_JSON = r'''[
@@ -417,7 +445,10 @@ _FEW_SHOTS_JSON = r'''[
   }
  ]
 ]'''
-FEW_SHOTS = [tuple(x) for x in json.loads(_FEW_SHOTS_JSON)]
+# v16b: few-shots are NOT sent. They primed the model (elevator next to a directory, ashtray by a door,
+# arrow directions copied from the example). Kept here only for reference / A-B tests.
+FEW_SHOTS_V14 = [tuple(x) for x in json.loads(_FEW_SHOTS_JSON)]
+FEW_SHOTS = []
 
 
 # --- helpers -------------------------------------------------------------------
@@ -490,9 +521,18 @@ def _norm(s: str) -> str:
     return re.sub(r"[^A-Z0-9]+", " ", s.upper()).strip()
 
 
+_ORDINAL_FIX = {"S": "5", "O": "0", "I": "1", "l": "1", "B": "8", "Z": "2", "G": "6"}
+
+
+def _fix_ordinals(line: str) -> str:
+    """OCR reads '5TH FLOOR' as 'STH FLOOR' and '1ST' as 'IST'. Fix a letter that stands where an
+    ordinal number should be (before TH/ST/ND/RD + FLOOR or alone), the same idea as the phone-digit fix."""
+    return re.sub(r"\b([SOIlBZG])(?=(TH|ST|ND|RD)\s*FL|(TH|ST|ND|RD)\b)", lambda m: _ORDINAL_FIX[m.group(1)], line)
+
+
 def fuzzy_in(value: str, line: str, threshold: float = 0.8) -> bool:
     """value appears in line, tolerating small OCR errors (e.g. 'Smi1e' vs 'Smile')."""
-    v, l = _norm(value), _norm(line)
+    v, l = _norm(value), _norm(_fix_ordinals(line))
     if not v:
         return False
     # Numbers are never fuzzy: '5TH FLOOR' must not match '7TH FLOOR'.
@@ -637,14 +677,15 @@ def _clean_visual(record: dict, rejected: list) -> None:
             continue
         name = _singular(name)
         d = o.get("details") or ""
-        # The model's own details sometimes contradict its label; trust the details.
-        if name == "screen" and _SIGNLIKE.search(d) and not _VIDEO.search(d):
-            name = "sign"  # "screen | blue vertical neon sign" is a sign
-        if name in ("statue", "sculpture", "figure", "monument", "mannequin") and _COSTUME.search(d):
-            rejected.append({"field": "object", "value": name, "line": None,
-                             "line_text": "details describe a person in costume"})
-            continue
-        name = _rename_by_details(name, d)  # "ashtray | yellow wet floor sign" -> wet floor sign
+        if DETAIL_RULES:
+            # The model's own details sometimes contradict its label; trust the details.
+            if name == "screen" and _SIGNLIKE.search(d) and not _VIDEO.search(d):
+                name = "sign"  # "screen | blue vertical neon sign" is a sign
+            if name in ("statue", "sculpture", "figure", "monument", "mannequin") and _COSTUME.search(d):
+                rejected.append({"field": "object", "value": name, "line": None,
+                                 "line_text": "details describe a person in costume"})
+                continue
+            name = _rename_by_details(name, d)  # "ashtray | yellow wet floor sign" -> wet floor sign
         if name in seen:
             continue
         seen.add(name)
@@ -654,6 +695,8 @@ def _clean_visual(record: dict, rejected: list) -> None:
             cnt = 1
         objs.append({**o, "name": name, "count": cnt})
     record["objects"] = objs[:15]
+    if UNCERTAIN_RULES:
+        _mark_uncertain(record["objects"])
 
     def known(x: str) -> bool:
         x = (x or "").strip().lower()

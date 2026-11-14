@@ -70,6 +70,8 @@ def _merge_objects(group: list[dict]) -> tuple[list[dict], list[dict]]:
                 objs[o["name"]] = {**o, "support": 1, "frame": fr["file"], "count": o.get("count", 1)}
             else:
                 cur["support"] += 1
+                # stays uncertain only if every frame that listed it was unsure / late / far
+                cur["uncertain"] = bool(cur.get("uncertain")) and bool(o.get("uncertain"))
                 # count = most seen at once in any single frame (frames overlap, so never sum)
                 cur["count"] = max(cur.get("count", 1), o.get("count", 1))
                 if len(o.get("details") or "") > len(cur.get("details") or ""):
@@ -97,7 +99,8 @@ def _vote_items(recs: list[dict], best_rec: dict, same_value: float = 0.6) -> li
     ties go to the reading from the best-evidenced frame."""
     best_keys = {(i["label"].upper(), i["value"].upper()) for i in best_rec.get("items") or []}
     votes = Counter()
-    for r in recs:
+    frames_of: dict[tuple, set] = {}
+    for ri, r in enumerate(recs):
         for it in r.get("items") or []:
             lab, val = it["label"].upper().strip(), it["value"].upper().strip()
             if _sim(lab, val) > 0.8:  # '5TH FLOOR -> 5TH FLOOR' is not a fact
@@ -105,10 +108,15 @@ def _vote_items(recs: list[dict], best_rec: dict, same_value: float = 0.6) -> li
             if not re.search(r"[A-Z]{2}", val):  # '2 -> 11': OCR noise, no words
                 continue
             votes[(lab, val)] += 1
+            frames_of.setdefault((lab, val), set()).add(ri)
 
+    # Two rows read in the SAME frame are different rows, however similar ('MAIN STAGE & HACKING
+    # SPACE' vs 'ARDUINO HARDWARE LAB & HACKING SPACE' on one directory) - never cluster them.
     clusters: list[list[tuple]] = []
     for key in votes:
         for cl in clusters:
+            if any(frames_of[key] & frames_of[other] for other in cl):
+                continue
             if any(_sim(key[1], other[1]) >= same_value for other in cl):
                 cl.append(key)
                 break

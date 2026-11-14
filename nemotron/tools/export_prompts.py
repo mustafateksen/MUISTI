@@ -34,9 +34,7 @@ head = open(os.path.join(ROOT, "tools", "_prompts_header.md"), encoding="utf-8")
 body = f"""## 1. Extraction: system prompt
 {fence(P["EXTRACTION_SYSTEM"])}
 ## 2. Extraction: few-shot örnekleri
-Her biri system'den sonra bir user/assistant çifti olarak eklenir. Assistant cevabı JSON string olarak gider.
-
-{shots}
+{"Yok. v17'den itibaren örnek gönderilmiyor (bkz. eval/ITERATIONS.md, v15–v17). Format, system prompt'un sonundaki FORMAT NOTES ile öğretiliyor." if not shots else "Her biri system'den sonra bir user/assistant çifti olarak eklenir." + chr(10) + chr(10) + shots}
 ## 3. Extraction: JSON şeması
 {fence(P["RECORD_SCHEMA"], "json")}
 ## 4. Soru ayrıştırma: system prompt

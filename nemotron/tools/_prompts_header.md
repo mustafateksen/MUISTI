@@ -2,7 +2,14 @@
 
 Kaynak: `nemotron/extract.py` ve `nemotron/ask.py`. Bu dosya koddan otomatik çıkarıldı, metinler **birebir** aynı.
 Makine tarafından okunabilir hali: `docs/prompts.json`.
-Sürüm: **v14** (v13c + directory-screen ismi; eval/tune.py ile 53 etiketli karede seçildi: YouTube + gözlük + gece fotoğrafı). Test (27 kare): kapsam %86–89, doğruluk %90–92, olmayan nesne yazma 0–1. Gözlük soru-cevap: 29–30/31, uydurma ve yanlış cevap 0.
+Sürüm: **v18** (v17 + nesne başına `visibility` alanı; belirsiz nesneler kodda işaretlenir). Ürünle aynı okuyucuyla test (Apple Vision + yakınlaştırma, Mac'te): gözlük soru-cevap **30/31** (2 çalıştırma), 13 tuzak sorunun hepsinde "bilmiyorum", uydurma 0. Nesne testi (53 kare): kapsam %89–99, doğruluk %86–88, emin olunan nesnelerde doğruluk %90–93, afiş/ekran resmi 25/25.
+
+## Telefon tarafı: yazı okuma (Apple Vision)
+
+- Yazıyı **kutularıyla** gönderin: `POST /ingest` içinde `ocr_observations` = `[{text, conf, box:[x,y,w,h]}]` (0..1, sol üst köşe başlangıç). Düz metin (`ocr_text`) gönderilirse tabela satırlarını birleştirme çalışmaz.
+- Vision ayarları `tools/vision_ocr.swift` ile aynı olmalı: `.accurate`, `usesLanguageCorrection = false`, `recognitionLanguages = ["en-US"]`, `minimumTextHeight = 0.015`.
+- İsteğe bağlı yakınlaştırma: `tools/vision_ocr_zoom.swift` (yazı yerini bul → küçük yazıyı büyütüp tekrar oku). Testte 29/31 → 30/31. Telefonda hıza göre karar verilecek.
+- Sunucu gelen satırları kendisi düzeltir (`ocr_adapter.py` + `ocr_repair.py`): kat yazıları ("STH FLOOR" → "5TH FLOOR"), yapışık kelimeler, iki satıra bölünmüş tabela değerleri.
 
 ## iOS'a taşırken mutlaka bilinmesi gerekenler
 
@@ -22,7 +29,7 @@ Prompt tek başına yetmiyor. Test sırasında model "OCR'da yoksa yazma" kural�
   - soru ayrıştırma ve cevap: 400
   - tekrar bakma: 200
 - Görüntü: uzun kenarı 1536 px'e küçültülmüş JPEG, `image_url` olarak data URL.
-- **Mesaj sırası:** system → few-shot user/assistant çiftleri → son user mesajı. Son mesajın içinde önce `OCR_LINES` metni, sonra görüntü gelir.
+- **Mesaj sırası:** system → user mesajı (önce `OCR_LINES` metni, sonra görüntü). Few-shot yok.
 
 **OCR satırları şu formatta verilmeli** (Apple Vision çıktısından):
 ```
@@ -37,7 +44,7 @@ L03 5TH FLOOR  ARDUINO HARDWARE LAB
 - Yazı yoksa: `OCR_LINES:
 (none)`.
 
-**Few-shot uyarısı:** Örneklerdeki nesneler modeli yönlendiriyor (eski örnekteki asansör ve küllük gerçek karelerde uydurulmaya başlamıştı). Örnekleri değiştirirken bunu ölçün.
+**Few-shot YOK:** Örnek sahneler modeli yönlendiriyordu: olmayan asansör ve küllük ekliyor, yön tabelasındaki okları örnekten kopyalıyordu. Örnek kaldırılınca afiş/ekran resimleri de kayboldu. Bu yüzden prompt'un sonuna yazılı format notları (FORMAT NOTES) eklendi. iOS'ta da örnek gönderilmesin ama FORMAT NOTES mutlaka kalsın. Kod kuralları ölçümle gerekli çıktı: kapatılınca kostümlü insan yine "heykel" oldu.
 
 **Kod tarafı kontroller** (`extract.py` içindeki `verify` ve `_clean_visual` fonksiyonları), cevap modelden döndükten sonra:
 1. `name`, `phone` ve `hours` alanları, kendi `*_line` ID'sindeki OCR satırında geçmeli.

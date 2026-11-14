@@ -31,6 +31,7 @@ from pydantic import BaseModel
 
 import ask as A
 import extract as E
+import ocr_repair
 from ocr_adapter import vision_to_lines
 from store import SqliteStore
 
@@ -41,6 +42,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 store = SqliteStore(os.environ.get("MUISTI_DB", "data/muisti.db"),
                     os.environ.get("MUISTI_FRAMES", "data/frames"))
 app = FastAPI(title="MUISTI")
+# Words read on their own in recent frames: lets ocr_repair split glued tokens ("ARDUINOHARDWARELAB")
+# using only words this user's camera actually read. In memory; rebuilt as frames arrive.
+_RECENT_WORDS: dict[str, int] = {}
 LABEL_TR = {"SEEN": "GORDUM", "WEB": "WEBDEN", "DONT_KNOW": "BILMIYORUM", "UNSURE": "EMIN_DEGILIM"}
 
 
@@ -108,6 +112,12 @@ def ingest(body: IngestIn):
         lines, ocr_src = E.ocr(jpeg), "nemotron_standin"
     else:
         lines, ocr_src = [], "none"
+
+    if lines and ocr_src != "nemotron_standin":
+        # phone OCR (Apple Vision) also misreads ordinals ("STH FLOOR", "SRD FLOOR") and glues words
+        for w, c in ocr_repair.build_vocab(lines).items():
+            _RECENT_WORDS[w] = _RECENT_WORDS.get(w, 0) + c
+        lines = ocr_repair.repair(lines, _RECENT_WORDS)
 
     if not lines and not E.SCENE_MODE:
         return {"stored": False, "reason": "no text in frame", 

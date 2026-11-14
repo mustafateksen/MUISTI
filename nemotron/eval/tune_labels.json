@@ -996,7 +996,8 @@
     "escalator",
     "metro entrance"
    ],
-   "pictures": false
+   "pictures": null,
+   "note": " Language-school ads on the shop fronts show people: pictures=null (was wrongly false)."
   },
   "kz_07": {
    "must": [

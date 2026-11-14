@@ -333,8 +333,80 @@ Every remaining miss is an honest "I don't know":
 
 **Trade-off:** v14 is about 1 question lower on recall but makes fewer hallucinations on the extended set (3 → 0–1). For a memory aid we prefer this direction.
 
+## v15–v17: few-shots vs written rules (2026-11-14)
+
+**Question.** Mustafa's iOS port (main 7b8af7f) dropped all few-shots ("they steered the model") and the code clean-up rules ("the prompt definitions carry that"). Both are cheap to test on our 53-frame set. Test numbers below are averages over 2 runs on the 27 held-out frames.
+
+| Variant | Few-shots | Code rules | Recall | Precision | Pictures found | Absent listed | "P + METRO left" (3 tries) |
+|---|---|---|---|---|---|---|---|
+| v14 (production before) | 3 neutral | on | 87% | 91% | 12.5/14 | 0.5 | 0/3 |
+| v15a | none | on | 94% | 84.5% | **7.5/14** | 0 | ✓ |
+| v15b (≈ Mustafa's iOS) | none | **off** | 93% | 83% | 8/14 | 1 | ✓ |
+| v16a | wayfinding shot without METRO | on | 88.5% | 92% | 13/14 | 0.5 | 0/3 |
+| v16c | v16a + empty-corridor counter-example | on | 87.5% | 93% | 13.5/14 | 0 | 0/3 |
+| v16d | single-panel, single-arrow shot | on | 88.5% | 89.5% | 13.5/14 | 1 | 0/3 (worse wording) |
+| **v16b → v17** | **none, format taught by written rules** | on | **95%** | 84.5% | **14/14** | **0** | **3/3** |
+| v16e | v16b + "no scene stereotypes" rule | on | 93% | 85.5% | 14/14 | 0 | 3/3 |
+
+### Findings
+1. **The shots taught the pictures field.** With no shots and no format notes, half the pictures disappeared. Written format notes ("every banner/poster/screen showing a picture gets a depictions item") bring them back to 14/14 with no invented example content at all.
+2. **The shots also leaked arrow directions, not just objects.** Every variant with a wayfinding shot misread the Espoo sign (P + METRO "straight ahead"). Every variant without one read "P + METRO left". This held even after we removed the word METRO from the shot (v16a) and after we showed a single-arrow panel (v16d). So the earlier "visual limit of the model" conclusion was wrong: the example's per-line directions were being copied.
+3. **The code rules are needed.** With them off (v15b), the costumed Statue-of-Liberty performer came back as a "statue" and an invented elevator returned.
+4. **Without shots the lists are longer (about 9 objects/frame) and include scene stereotypes.** Eye checks found a taxi, bin and railing in a Times Square close-up, a "pink vending machine" at Shibuya, and an escalator at the far end of a mall corridor. Many other "suspects" were real but unlabelled (lamps, glass railings, folding chairs). A rule against stereotypes (v16e) made no measurable difference, so it was not adopted.
+
+**Decision: v16b, adopted as v17.** Recall and pictures go up and wayfinding becomes correct. Precision is lower by about 6 points, but an object-only answer is always re-checked against the stored frame before it is said, whereas something never recorded can never be found. The prompt now contains **no invented example data** (asked for by Ömer), which also matches the iOS approach, while keeping the code rules.
+
+### Glasses Q&A with v17 memory
+| Step | Runs | Hallucinated / wrong |
+|---|---|---|
+| first replay | 26, 28, 28 | **2** / 0 |
+| ↳ cause: the third glasses video had been processed into a folder named `v12`, the same name as the test memory, so it leaked into the Q&A memory (a real drink cooler made the "vending machine" trap answerable). Moved to `scene_v12`. | | |
+| clean memory | 30, 30, 29 | 0 / 0 |
+| + floor filter that matches only real floor information (v17 also lists the ground, e.g. "floor \| dark carpet", which buried the lobby's "5TH FLOOR") | 31, 30, 30 | 0 / 0 |
+| + medium words (picture, photo, display, screen…) no longer drive matching; the named medium breaks ties instead | 30, 30, 29 | 0 / 0 |
+| + stop-words, and synonyms made only of medium words are ignored | **31, 31, 31** | **0 / 0** |
+
+## v18 + real phone OCR: uncertain objects, hybrid search, Apple Vision (2026-11-14)
+
+**v18 (extraction):** each object gets `visibility` (clear / partial / unsure). Code marks an object
+uncertain if visibility=unsure, it is 9th+ in the list, or 5th+ and far. Uncertain objects are kept,
+weighted x0.6 in search and re-checked when used. Precision 84.5% -> 87-89%; on confident objects 91-93%.
+
+**Hybrid search (/ask):** lexical/fuzzy score + semantic score from `nvidia/nemotron-3.5-embed-1b`
+(`embed.py`, disk cache). Semantic adds 8 x (cos - 0.35); cos <= 0.35 is treated as noise.
+
+**Text reader for tests.** The Nemotron stand-in "read" 1345 lines on the 53 tuning frames; Apple Vision
+reads 83. It guessed text from context, so older Q&A scores were optimistic.
+
+| Reader (same extraction, v18) | Q&A (31) | traps hallucinated |
+|---|---|---|
+| Nemotron stand-in (old) | 30-31 | 0 |
+| PaddleOCR (`ocr_paddle.py`) | 27 | 0 |
+| PaddleOCR + `ocr_repair.py` | 28 | 0 |
+| Apple Vision (Mac, `tools/vision_ocr.swift`) | 27 | 0 |
+| + repair, wrapped-line join, QR re-check, list fix, same-frame merge rule | 29, 29 | 0 |
+| + zoom on small text (`tools/vision_ocr_zoom.swift`, merged by `eval/zoom_merge.py`) | **30, 30** | **0** |
+
+Object test with Vision text: recall 89-99%, precision 86-88%, confident precision 90-93%, pictures 25/25.
+
+Fixes found by the Vision run:
+- `ocr_repair.py`: ordinals ("STH FLOOR" -> "5TH FLOOR", digit chosen by suffix), glued words split only
+  into words read on their own elsewhere ("ARDUINOHARDWARELAB"). Applied in `/ingest` for phone text.
+- `ocr_adapter._join_wrapped_values`: a label centred between two value lines gets both lines
+  ("5TH FLOOR  ARDUINO HARDWARE LAB & HACKING SPACE").
+- `merge._vote_items`: two rows read in the same frame are never clustered as one row
+  (it had dropped "3RD FLOOR -> MAIN STAGE").
+- `ask.look_again`: QR codes, logos, signs are printed by nature; the re-check no longer rejects them.
+- `ask` list answers: unnamed scene types ("gaming event") are not listed as booths.
+- Zoom: a zoomed read replaces a full read only if it covers it (>= 80%); fragments are dropped.
+
+Remaining miss: "Which gaming booths did I see?" - Vision's text detector never finds "GAMING".
+
+**Unseen data (TextVQA, 100 photos, 154 questions, Vision + zoom, `eval/textvqa_run.py`):** asked
+against each question's own photo: 53 correct, 98 abstained, 3 wrong (95% precision when answering).
+Most abstentions come from the relevance gate on generic questions ("what year was this taken?").
+
 ## Next ideas to try
-- Apple Vision OCR with bounding boxes instead of the Nemotron stand-in, which would also remove the OCR-stage "Astronomy".
 - Temperature 0 vs 0.2 vs 0.6.
 - Thinking on vs off for extraction (accuracy vs latency).
 - Original-resolution video instead of the WhatsApp copy.

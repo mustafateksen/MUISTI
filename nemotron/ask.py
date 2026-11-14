@@ -19,6 +19,7 @@ import time
 from difflib import SequenceMatcher
 
 import extract as E
+import embed
 
 ATTRIBUTES = ["location", "phone", "hours", "name", "description", "list", "when", "current_location", "other"]
 TIMES = ["just_now", "last_hour", "today", "any"]
@@ -101,7 +102,7 @@ def _video_start(path: str) -> dt.datetime:
     return dt.datetime.fromisoformat(d).replace(hour=h, minute=int(mi), second=int(s)) - dt.timedelta(seconds=90)
 
 
-def load_memory(pattern: str = "results/*/v11/results.json") -> list[dict]:
+def load_memory(pattern: str = "results/*/v18m/results.json") -> list[dict]:
     """Offline mode: build memory from process_video result files."""
     sightings = []
     for path in sorted(glob.glob(pattern)):
@@ -154,7 +155,9 @@ def docs_from_sightings(sightings: list[dict]) -> list[dict]:
                              "text": f"Seen object: {o['name']} ({o.get('category')}). How many at once: {o.get('count', 1)}. Details: {o.get('details')}. "
                                      f"Where: {o.get('position')} of view, {o.get('distance')}, in a {where}."
                                      + (f" Spatial: {'; '.join(rels)}." if rels else "")
-                                     + f" (Noticed in {o.get('support', 1)} video frame(s); this is NOT a count of objects.)"})
+                                     + f" (Noticed in {o.get('support', 1)} video frame(s); this is NOT a count of objects.)"
+                                     + (" UNCERTAIN: the glasses were not sure they saw this." if o.get("uncertain") else ""),
+                             "uncertain": bool(o.get("uncertain"))})
             # Pictures shown ON banners/screens: not real objects, and the text says so.
             for dp in s.get("depictions") or []:
                 # name = what the picture shows, so "photo of people at laptops" matches by name, not only by text
@@ -186,7 +189,9 @@ def _picture_hints(dp: dict) -> str:
 
 # --- search --------------------------------------------------------------------
 
-_GENERIC = {"the", "booth", "stand", "sign", "banner", "poster", "screen", "stall", "of", "on", "at", "a"}
+_GENERIC = {"the", "booth", "stand", "sign", "banner", "poster", "screen", "stall", "of", "on", "at", "a", "an",
+            "with", "in", "for", "and", "to", "from", "by", "near", "was", "were", "is", "did", "do", "i", "my",
+            "which", "what", "where", "there", "it", "that", "this", "some", "any"}
 
 
 def _stem(t: str) -> str:
@@ -197,9 +202,19 @@ def _stem(t: str) -> str:
     return t
 
 
+# Medium words appear in almost every picture/screen memory, so they say little about WHICH one.
+# "picture of a circuit board" must be decided by "circuit board", not by "picture" / "display".
+_MEDIUM = {_stem(w) for w in ("picture", "pictures", "photo", "photos", "image", "images", "display", "displays",
+                              "electronic", "electronics", "screens", "tv", "monitor", "video")}
+
+
 def _tokens(s: str, drop_generic: bool = False) -> list[str]:
     toks = [_stem(t) for t in re.findall(r"[a-z0-9]+", (s or "").lower()) if len(t) > 1]
-    return [t for t in toks if t not in _GENERIC] if drop_generic else toks
+    if not drop_generic:
+        return toks
+    kept = [t for t in toks if t not in _GENERIC and t not in _MEDIUM]
+    # A question made only of generic words ("what was on the screen?") still needs them.
+    return kept or [t for t in toks if t not in _GENERIC] or toks
 
 
 _TOK_CACHE: dict[str, frozenset] = {}
@@ -240,25 +255,44 @@ def _tok_match(q: str, text: str) -> float:
     return hit / len(qt)
 
 
-def search(parsed: dict, docs: list[dict], now: dt.datetime, k: int = 5) -> list[tuple[float, dict]]:
+SEM_WEIGHT, SEM_FLOOR = 8.0, 0.35  # cosine below ~0.35 is noise for this model (trap questions max ~0.37)
+
+
+def search(parsed: dict, docs: list[dict], now: dt.datetime, k: int = 5, qvec=None) -> list[tuple[float, dict]]:
     window = {"just_now": 20, "last_hour": 60, "today": 24 * 60, "any": 10 ** 6}[parsed["time"]]
     scored = []
     for d in docs:
         s = 0.0
         # The user's own word counts fully; model-suggested synonyms count 70%.
-        terms = [(t, 1.0) for t in [parsed.get("target")] if t] + [(t, 0.7) for t in parsed.get("synonyms") or [] if t]
+        # Synonyms that are only medium/generic words ("display", "signage") match every picture: skip them.
+        syns = [t for t in parsed.get("synonyms") or []
+                if t and any(x not in _GENERIC and x not in _MEDIUM and x not in ("signag", "advertis", "advertisement")
+                             for x in _tokens(t))]
+        terms = [(t, 1.0) for t in [parsed.get("target")] if t] + [(t, 0.7) for t in syns]
         if terms:
             s += max(w * (2.0 * _tok_match(t, d.get("name") or "") + 1.0 * _tok_match(t, d["text"])) for t, w in terms)
         if parsed.get("category"):
             s += 1.5 * _tok_match(parsed["category"], f"{d.get('kind')} {d.get('subtype')} {d['text']}")
+        # Meaning, not words: "harbour from above" finds "aerial photo of a waterfront".
+        if qvec is not None and d.get("_vec") is not None:
+            s += SEM_WEIGHT * max(0.0, float(d["_vec"] @ qvec) - SEM_FLOOR)
         if parsed["attribute"] == "location" and d["type"] == "item":
             s += 0.3
+        # Medium words no longer drive the match (see _MEDIUM), but the medium the user named still
+        # breaks ties: "a BANNER with photos of people" prefers the banner picture over a screen picture.
+        if d["type"] == "depiction" and d.get("medium"):
+            asked = re.findall(r"\b(banner|poster|billboard|screen|sign|painting)s?\b", (parsed.get("target") or "").lower())
+            printed = {"banner", "poster", "billboard", "sign", "painting"}
+            if any(a == d["medium"] or (a in printed and d["medium"] in printed) for a in asked):
+                s += 0.8
         if d["type"] == "object" and d.get("support", 1) >= 2:
             s += 0.2  # seen in several frames: more trustworthy
         if parsed["attribute"] in ("description", "name", "phone", "hours") and d["type"] == "sighting"                 and re.search(r"Other text on sign|Phone on sign|Hours on sign", d["text"]):
             s += 0.6  # "what did it say?" -> OCR-verified text beats a visual description of the banner
         if d.get("weak"):
             s *= 0.7  # single-frame, short/low-confidence names are often OCR misreads
+        if d.get("uncertain"):
+            s *= 0.6  # late-in-list / far / model-unsure objects: kept, but a confident memory wins
         age_min = (now - d["seen_at"]).total_seconds() / 60
         if age_min > window:
             s *= 0.5  # soft: wrong time window halves the score, never hides a match
@@ -277,6 +311,23 @@ def _json_call(system: str, user: str, schema: dict, name: str) -> dict:
     except E.BadRequestError:
         out = E._call(msgs, {"type": "json_object"}, max_tokens=400, temperature=0.0)
     return E._parse_json(out)
+
+
+_FLOOR_INFO = re.compile(r"\b(\d{1,2}(st|nd|rd|th)\s*floor|floor\s*(label|number|indicator)|floor\s+\d+|level\s*\d+|[BL]\d{1,2}|\d+\.\s*kat)\b", re.I)
+
+
+def _semantic_setup(question: str, docs: list[dict]):
+    """Attach cached passage vectors to docs (once) and return the question's query vector.
+    Returns None (words-only search) when embeddings are unavailable."""
+    if not embed.available():
+        return None
+    todo = [d for d in docs if "_vec" not in d]
+    if todo:
+        vecs = embed.embed([d["text"] for d in todo], "passage")
+        for d, v in zip(todo, vecs or [None] * len(todo)):
+            d["_vec"] = v
+    q = embed.embed([question], "query")
+    return q[0] if q else None
 
 
 def parse_question(q: str) -> dict:
@@ -300,13 +351,15 @@ def ask(question: str, docs: list[dict], now: dt.datetime, min_score: float = 0.
         # "Where am I now?" is about the LATEST memories, not about matching words.
         recent = [d for d in docs if d["seen_at"] <= now and (now - d["seen_at"]).total_seconds() <= 180]
         recent.sort(key=lambda d: (d["seen_at"], d["type"] != "object"), reverse=True)
-        floorish = [d for d in recent if re.search(r"floor|level|kat|\bfl\b", d["text"], re.I)]
+        # Only real floor INFORMATION ("5TH FLOOR", "floor label B2", "level 3"), not the ground:
+        # since v16b the extractor also lists "floor | dark carpet", which buried the lobby's 5TH FLOOR.
+        floorish = [d for d in recent if _FLOOR_INFO.search(d["text"])]
         pick = (floorish[:3] + [d for d in recent if d not in floorish[:3]])[:5]
         hits = [(1.0, d) for d in pick]
         if not hits:
             hits = []
     else:
-        hits = search(parsed, docs, now)
+        hits = search(parsed, docs, now, qvec=_semantic_setup(question, docs))
 
     def result(label, answer, used=(), why=""):
         ev = [{"id": f"E{i + 1}", "text": d["text"], "frame": d["frame"], "source": d["source"],
@@ -335,14 +388,20 @@ def ask(question: str, docs: list[dict], now: dt.datetime, min_score: float = 0.
         matches = [(s, d) for d in docs if d["type"] == "sighting" and not d.get("weak")
                    for s in [_tok_match(cat, f"{d.get('kind')} {d.get('subtype')} {d.get('name')}")] if s >= 0.5]
         names = []
-        # Named places (booths, shops) are what the user wants listed; generic scene types
-        # ("gaming event") only if nothing named matches.
+        # Named places (booths, shops) are what the user wants listed. Generic scene types
+        # ("gaming event", "gaming convention") are NOT booths: listing them as "I saw 6" was wrong.
         named = [(sc, d) for sc, d in matches if (d.get("name") or "").strip(" /")]
-        pool = sorted(named or matches, key=lambda x: x[1]["seen_at"])
+        pool = sorted(named, key=lambda x: x[1]["seen_at"])
         for sc, d in pool:
             n = (d.get("name") or "").split(" / ")[0].strip() or d.get("subtype")
             if n and not any(n.lower() in x.lower() or x.lower() in n.lower() for x in names):
                 names.append(n)
+        if not names and matches:
+            # the place type matched but nothing was named (no readable booth sign)
+            kinds = sorted({(d.get("subtype") or d.get("kind") or "").strip() for _, d in matches} - {""})[:2]
+            hits[:] = sorted(matches, key=lambda x: -x[0])[:5]
+            return result("UNSURE", f"I was at a {' / '.join(kinds) or cat}, but I didn't read the name of any {cat} booth or place there.",
+                          used=[f"E{i + 1}" for i in range(len(hits))], why="list: category matched only unnamed scenes")
         if not names:
             return result("DONT_KNOW", f"I don't remember seeing any {cat}.", why="list: no sighting matches category")
         hits[:] = pool[:5]
@@ -430,6 +489,16 @@ LOOK_SCHEMA = {
 }
 
 
+# Things that are printed/displayed by nature, so "on a banner" is the real thing, not a depiction of it.
+_PRINTED_NATURE = ("qr code", "barcode", "logo", "sign", "poster", "banner", "label", "sticker", "menu",
+                   "map", "flyer", "leaflet", "brochure", "price tag", "text", "signage", "notice", "board")
+
+
+def _printed_by_nature(name: str) -> bool:
+    n = name.lower().strip()
+    return any(n == p or n.endswith(" " + p) for p in _PRINTED_NATURE)
+
+
 def look_again(doc: dict, question: str) -> tuple[bool, str]:
     """Second look at the stored frame: is the object really there? Returns (present, where)."""
     path = os.path.join(doc.get("frame_dir") or "", doc.get("frame") or "")
@@ -439,6 +508,12 @@ def look_again(doc: dict, question: str) -> tuple[bool, str]:
     if doc["type"] == "depiction":
         ask_txt = (f'Look carefully. Is there a {doc.get("medium") or "banner or screen"} in this photo that shows a picture of: '
                    f'"{doc.get("content")}"? Do not guess. If yes, say briefly where that picture is. '
+                   f'Return JSON {{"present": true/false, "where": "..."}}.')
+    elif _printed_by_nature(doc.get("name") or ""):
+        # QR codes, logos, signs ARE printed things: "not a picture on a banner" made the
+        # re-check reject every real QR code on the Cloudinary banner.
+        ask_txt = (f'Look carefully. Is there a "{doc["name"]}" visible in this photo (printed on a banner, '
+                   f'sign, wall, paper or shown on a screen all count)? Do not guess. If yes, say briefly where it is. '
                    f'Return JSON {{"present": true/false, "where": "..."}}.')
     else:
         ask_txt = (f'Look carefully. Is there a real "{doc["name"]}" physically present in this photo '
