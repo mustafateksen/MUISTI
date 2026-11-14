@@ -791,7 +791,7 @@ class MainActivity : ComponentActivity() {
     private fun pollStats() {
         statsJob?.cancel()
         statsJob = lifecycleScope.launch {
-            state.online = BuildConfig.LLM_KEY.isNotEmpty()
+            state.online = engine.canCall
             while (isActive) {
                 runCatching { state.memories = withContext(Dispatchers.IO) { engine.store.sightings().size } }
                 if (location.running) location.fresh(60_000)?.street?.let { state.street = it }
@@ -962,6 +962,16 @@ class MainActivity : ComponentActivity() {
     }
 
     fun clearChat() = state.messages.clear()
+
+    /** Release builds: pair this phone with the token proxy (the code is shown by the MUISTI server). */
+    fun pair(url: String, code: String) {
+        lifecycleScope.launch {
+            val r = runCatching { withContext(Dispatchers.IO) { engine.tokens.pair(url, code); engine.tokens.token().isNotEmpty() } }
+            state.toast(r.fold({ if (it) "Paired with the MUISTI server" else "Paired, but no token yet (server unreachable?)" },
+                { "Pairing failed: ${it.message?.take(60)}" }))
+            state.online = engine.canCall
+        }
+    }
 
 
 }

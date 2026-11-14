@@ -48,7 +48,20 @@ interface Images {
 /** An image was judged private on the phone, so the request was not made. */
 class PrivacyBlocked(val reason: String = "private view") : RuntimeException("blocked on the phone: $reason")
 
-class LlmConfig(val baseUrl: String, val model: String, val key: String, val embedKey: String)
+/**
+ * Where and how to call the models. Providers, not values: in release builds the base URLs point at the token proxy
+ * and the bearer is a short-lived token that changes (TokenClient); debug builds use the fixed dev key.
+ */
+class LlmConfig(val model: String, private val baseUrlOf: () -> String, private val bearerOf: () -> String,
+                private val retrievalUrlOf: () -> String, private val embedBearerOf: () -> String) {
+    constructor(baseUrl: String, model: String, key: String, embedKey: String, retrievalUrl: String = Embedder.DEFAULT_RETRIEVAL_URL) :
+        this(model, { baseUrl }, { key }, { retrievalUrl }, { embedKey })
+    val baseUrl: String get() = baseUrlOf()
+    val key: String get() = bearerOf()
+    val embedKey: String get() = embedBearerOf()
+    val retrievalUrl: String get() = retrievalUrlOf()
+    fun embedder(cacheFile: java.io.File?) = Embedder(embedBearerOf, cacheFile, retrievalUrlOf)
+}
 
 /** All prompt text comes from docs/prompts.json (exported from the Python code), never copied by hand. */
 class Prompts(private val json: String) {

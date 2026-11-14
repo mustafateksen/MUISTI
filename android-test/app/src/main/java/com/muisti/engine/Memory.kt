@@ -98,8 +98,9 @@ class MemoryStore(private val dir: File) {
  * document/query, batches of 32, unit vectors, cached by (kind, text). "passage" (the Python name) is sent as
  * "document". The cache file name carries the model so vectors of different models never share an index.
  */
-class Embedder(private val key: String, private val cacheFile: File?,
-               private val retrievalUrl: String = DEFAULT_RETRIEVAL_URL) {
+class Embedder(private val keyOf: () -> String, private val cacheFile: File?,
+               private val retrievalUrlOf: () -> String = { DEFAULT_RETRIEVAL_URL }) {
+    constructor(key: String, cacheFile: File?, retrievalUrl: String = DEFAULT_RETRIEVAL_URL) : this({ key }, cacheFile, { retrievalUrl })
     private val http = OkHttpClient.Builder().readTimeout(60, TimeUnit.SECONDS).build()
     // most recently used last; trimmed to MAX_CACHE (the old text cache grew to 180 MB and froze app start for ~27 s)
     private val cache = LinkedHashMap<String, FloatArray>(1024, 0.75f, true)
@@ -148,7 +149,7 @@ class Embedder(private val key: String, private val cacheFile: File?,
         const val MODEL = "nemotron-3.5-embed"
     }
 
-    fun available() = key.isNotEmpty()
+    fun available() = keyOf().isNotEmpty()
 
     private fun k(kind: String, text: String): String {
         val d = MessageDigest.getInstance("SHA-1").digest("$kind\n$text".toByteArray())
@@ -166,8 +167,8 @@ class Embedder(private val key: String, private val cacheFile: File?,
                     for (t in batch) inputs.put(JSONObject().put("content", JSONArray().put(JSONObject().put("type", "text").put("text", t))))
                     val body = JSONObject().put("model", MODEL).put("input_type", if (kind == "query") "query" else "document")
                         .put("embedding_types", JSONArray().put("float")).put("truncate", "END").put("inputs", inputs)
-                    val req = Request.Builder().url(retrievalUrl.trimEnd('/') + "/v2/embed")
-                        .header("Authorization", "Bearer $key")
+                    val req = Request.Builder().url(retrievalUrlOf().trimEnd('/') + "/v2/embed")
+                        .header("Authorization", "Bearer ${keyOf()}")
                         .post(body.toString().toRequestBody("application/json".toMediaType())).build()
                     http.newCall(req).execute().use { resp ->
                         if (!resp.isSuccessful) throw RuntimeException("embed HTTP ${resp.code}")

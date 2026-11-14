@@ -29,8 +29,17 @@ android {
         manifestPlaceholders["mwdat_client_token"] = local.getProperty("mwdat_client_token") ?: ""
         buildConfigField("String", "LLM_BASE_URL", prop("muisti.llmBaseUrl"))
         buildConfigField("String", "LLM_MODEL", prop("muisti.llmModel"))
-        buildConfigField("String", "LLM_KEY", prop("muisti.llmKey"))
-        buildConfigField("String", "EMBED_KEY", prop("muisti.embedKey"))
+        // keys: debug builds only (dev mode); a release APK carries none and pairs with the token proxy instead
+        buildConfigField("boolean", "DEV_KEYS", "false")
+        buildConfigField("String", "LLM_KEY", "\"\"")
+        buildConfigField("String", "EMBED_KEY", "\"\"")
+    }
+    buildTypes {
+        getByName("debug") {
+            buildConfigField("boolean", "DEV_KEYS", "true")
+            buildConfigField("String", "LLM_KEY", prop("muisti.llmKey"))
+            buildConfigField("String", "EMBED_KEY", prop("muisti.embedKey"))
+        }
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -38,6 +47,8 @@ android {
     }
     kotlinOptions { jvmTarget = "17" }
     buildFeatures { compose = true; buildConfig = true }
+    // AGP 8.7 lint crashes on Kotlin 2.2 metadata (KaCallableMemberCall); the release APK itself builds fine
+    lint { checkReleaseBuilds = false }
 }
 
 // The prompts are NOT copied by hand: the app reads the same docs/prompts.json the Python

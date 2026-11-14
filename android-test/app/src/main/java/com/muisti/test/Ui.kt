@@ -171,7 +171,8 @@ fun MuistiApp(act: MainActivity) {
             Toast(s, t)
 
             if (showSettings) SettingsDialog(s.serverUrl, onPhoto = { showSettings = false; act.pickPhoto() }, onSave = { act.saveServer(it); showSettings = false },
-                onClear = { act.clearChat(); showSettings = false }, onPrivacy = { showSettings = false; s.showPrivacy = true }, onDismiss = { showSettings = false })
+                onClear = { act.clearChat(); showSettings = false }, onPrivacy = { showSettings = false; s.showPrivacy = true },
+                pairing = !act.engine.devKeys, onPair = { u, c -> act.pair(u, c); showSettings = false }, onDismiss = { showSettings = false })
             if (s.showPrivacy) {
                 androidx.activity.compose.BackHandler { s.showPrivacy = false }
                 com.muisti.ui.PrivacyScreen(s.privacySettings, null, act.privacyActions)
@@ -741,8 +742,10 @@ private fun Toast(s: AppState, t: Tones) {
 }
 
 @Composable
-private fun SettingsDialog(current: String, onPhoto: () -> Unit, onSave: (String) -> Unit, onClear: () -> Unit, onPrivacy: () -> Unit, onDismiss: () -> Unit) {
+private fun SettingsDialog(current: String, onPhoto: () -> Unit, onSave: (String) -> Unit, onClear: () -> Unit, onPrivacy: () -> Unit,
+                           pairing: Boolean, onPair: (String, String) -> Unit, onDismiss: () -> Unit) {
     var url by remember { mutableStateOf(current) }
+    var code by remember { mutableStateOf("") }
     AlertDialog(
         onDismissRequest = onDismiss,
         shape = RoundedCornerShape(24.dp),
@@ -752,6 +755,12 @@ private fun SettingsDialog(current: String, onPhoto: () -> Unit, onSave: (String
                 Text("Everything runs on this phone: Nemotron is called directly and your memories are stored here, " +
                     "not on a server.", fontSize = 14.sp, color = Color(0xFF8E8E93))
                 Spacer(Modifier.height(10.dp))
+                if (pairing) {
+                    // release build: no key inside the app; pair once with the MUISTI server's token proxy
+                    OutlinedTextField(url, { url = it }, label = { Text("MUISTI server URL") }, singleLine = true)
+                    OutlinedTextField(code, { code = it }, label = { Text("Pairing code") }, singleLine = true)
+                    TextButton(onClick = { onPair(url, code) }, enabled = url.isNotBlank() && code.isNotBlank()) { Text("Pair this phone", color = BrandBlue) }
+                }
                 TextButton(onClick = onPrivacy) { Text("Privacy settings", color = BrandBlue) }
                 TextButton(onClick = onPhoto) { Text("Add a photo to memory", color = BrandBlue) }
                 TextButton(onClick = onClear) { Text("Clear conversation", color = Rose) }

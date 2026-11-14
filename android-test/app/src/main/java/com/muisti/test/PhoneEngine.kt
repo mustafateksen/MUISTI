@@ -39,7 +39,14 @@ object AndroidImages : Images {
  */
 class PhoneEngine(ctx: Context) {
     private val appCtx = ctx.applicationContext
-    private val cfg = LlmConfig(BuildConfig.LLM_BASE_URL, BuildConfig.LLM_MODEL, BuildConfig.LLM_KEY, BuildConfig.EMBED_KEY)
+    /** Release: no key in the APK, everything goes through the paired token proxy. Debug: the dev key from local.properties. */
+    val tokens = com.muisti.engine.TokenClient(PrefsStore(ctx.getSharedPreferences("proxy", Context.MODE_PRIVATE)))
+    val devKeys = BuildConfig.DEV_KEYS && BuildConfig.LLM_KEY.isNotEmpty()
+    private val cfg = if (devKeys) LlmConfig(BuildConfig.LLM_BASE_URL, BuildConfig.LLM_MODEL, BuildConfig.LLM_KEY, BuildConfig.EMBED_KEY)
+        else LlmConfig(BuildConfig.LLM_MODEL, { tokens.proxyUrl + "/proxy/llm/v1" }, tokens::token,
+            { tokens.proxyUrl + "/proxy/retrieval" }, tokens::token)
+    /** True when calls can be authorised (dev key, or paired with the proxy). */
+    val canCall get() = devKeys || tokens.paired
     // fail-closed (PrivacyGate.CLOSED) until the app installs the real on-phone privacy check
     private val llm = Llm(cfg)
 
@@ -48,7 +55,7 @@ class PhoneEngine(ctx: Context) {
     private val prompts = Prompts(ctx.assets.open("prompts.json").bufferedReader().use { it.readText() })
     private val extractor = Extractor(llm, prompts, AndroidImages)
     // v2: vectors from the Verda nemotron-3.5-embed deployment (the old NVIDIA-API cache is dropped, never mixed)
-    private val embedder = Embedder(cfg.embedKey, File(ctx.filesDir, "embed_cache_v2.tsv"))
+    private val embedder = cfg.embedder(File(ctx.filesDir, "embed_cache_v2.tsv"))
         .also { File(ctx.filesDir, "embed_cache.bin").delete() }
     private val asker = Asker(llm, prompts, AndroidImages, embedder)
     private val agent = com.muisti.engine.Agent(llm, prompts, asker)
