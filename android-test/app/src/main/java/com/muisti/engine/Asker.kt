@@ -125,19 +125,45 @@ class Asker(private val llm: Llm, private val prompts: Prompts, private val imag
         return kept.ifEmpty { toks.filter { it !in GENERIC }.ifEmpty { toks } }
     }
 
-    private val tokCache = HashMap<String, Set<String>>()
-    private val simCache = HashMap<String, Double>()
+    private val tokCache = java.util.concurrent.ConcurrentHashMap<String, Set<String>>()
+    private val simCache = HashMap<String, HashMap<String, Double>>()     // query token -> doc token -> ratio
     private fun docTokens(text: String) = tokCache.getOrPut(text) { tokens(text).toSet() }
-    private fun tokSim(a: String, b: String) = simCache.getOrPut("$a\u0000$b") { Difflib.ratio(a, b) }
+
+    /** Tokenises every doc ahead of time (background warm-up), so the first question doesn't pay for it. */
+    fun prewarm(docs: List<Doc>) { for (d in docs) { docTokens(d.text); docTokens(d.name ?: "") } }
+
+    /**
+     * difflib's quick_ratio: 2*common chars/(len a + len b), an upper bound of ratio(). Pairs that can't
+     * reach 0.7 are skipped without the expensive ratio (same results, far fewer comparisons).
+     */
+    private fun quickRatio(a: String, b: String): Double {
+        val c = IntArray(128)
+        for (ch in a) if (ch.code < 128) c[ch.code]++
+        var m = 0
+        for (ch in b) if (ch.code < 128 && c[ch.code] > 0) { c[ch.code]--; m++ }
+        return 2.0 * m / (a.length + b.length)
+    }
+    private val SIGN_TEXT = Regex("Other text on sign|Phone on sign|Hours on sign")
+
+    // query tokens are the same for every doc of a search: tokenise each query string once, not 7,000 times
+    private val queryTokCache = java.util.concurrent.ConcurrentHashMap<String, List<String>>()
 
     fun tokMatch(q: String?, text: String?): Double {
-        val qt = tokens(q, true); val tt = docTokens(text ?: "")
+        val qt = queryTokCache.getOrPut(q ?: "") { tokens(q, true) }; val tt = docTokens(text ?: "")
         if (qt.isEmpty() || tt.isEmpty()) return 0.0
         var hit = 0.0
         for (a in qt) {
             if (a in tt) { hit += 1; continue }
-            val best = tt.filter { Math.abs(a.length - it.length) <= 3 }.maxOfOrNull { tokSim(a, it) } ?: 0.0
-            val prefix = tt.any { b -> a.length >= 4 && b.length >= 4 && (a.startsWith(b) || b.startsWith(a)) }
+            // one pass over the doc's tokens, no temporary lists: best fuzzy ratio + prefix match
+            val sims = simCache.getOrPut(a) { HashMap() }
+            var best = 0.0; var prefix = false
+            for (b in tt) {
+                if (Math.abs(a.length - b.length) <= 3) {
+                    val r = sims.getOrPut(b) { if (quickRatio(a, b) < 0.7) 0.0 else Difflib.ratio(a, b) }
+                    if (r > best) best = r
+                }
+                if (!prefix && a.length >= 4 && b.length >= 4 && (a.startsWith(b) || b.startsWith(a))) prefix = true
+            }
             hit += if (best >= 0.85) 1.0 else if (best >= 0.7 || prefix) 0.5 else 0.0
         }
         return hit / qt.size
@@ -168,7 +194,7 @@ class Asker(private val llm: Llm, private val prompts: Prompts, private val imag
             if (d.type == "depiction" && d.medium != null && asked.any { it == d.medium || (it in printed && d.medium in printed) }) s += 0.8
             if (d.type == "object" && d.support >= 2) s += 0.2
             if (attr in setOf("description", "name", "phone", "hours") && d.type == "sighting" &&
-                Regex("Other text on sign|Phone on sign|Hours on sign").containsMatchIn(d.text)) s += 0.6
+                SIGN_TEXT.containsMatchIn(d.text)) s += 0.6
             if (d.weak) s *= 0.7
             if (d.uncertain) s *= 0.6
             if ((now - d.seenAt) / 60000.0 > window) s *= 0.5
@@ -180,9 +206,14 @@ class Asker(private val llm: Llm, private val prompts: Prompts, private val imag
     fun semanticSetup(question: String, docs: List<Doc>): FloatArray? {
         val e = embedder ?: return null
         if (!e.available()) return null
-        embedDocs(docs)
+        // a few new memories are embedded right away; a big backlog is left to the background warm-up,
+        // and until then those memories are found by keywords only (the question never waits for it)
+        if (docs.count { it.vec == null } <= inlineEmbedLimit) embedDocs(docs)
         return e.embed(listOf(question), "query")?.firstOrNull()
     }
+
+    /** How many un-embedded memories a question may embed itself before answering (tests set it high). */
+    var inlineEmbedLimit = 64
 
     /** Embeds memories that have no vector yet (done in the background after ingest, so questions don't wait). */
     fun embedDocs(docs: List<Doc>) {

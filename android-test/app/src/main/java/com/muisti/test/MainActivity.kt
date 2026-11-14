@@ -1116,7 +1116,9 @@ class MainActivity : ComponentActivity() {
                 val live = withContext(Dispatchers.Default) {
                     liveJpeg?.let { j -> BitmapFactory.decodeByteArray(j, 0, j.size)?.takeIf { !isPrivate(it) }?.let { blurJpeg(j) } }
                 }
-                val r = withContext(Dispatchers.IO) { engine.ask(q, live, heard, location.fresh(60_000)) }
+                // never leave the user waiting: 45 s, then a clear error (the HTTP call is interrupted)
+                val fix = location.fresh(60_000)
+                val r = kotlinx.coroutines.withTimeout(45_000) { kotlinx.coroutines.runInterruptible(Dispatchers.IO) { engine.ask(q, live, heard, fix) } }
                 if (r.label == "FORGOT") state.memories = withContext(Dispatchers.IO) { engine.store.sightings().size }
                 val shots = withContext(Dispatchers.IO) { loadShots(r) }
                 val used = r.evidence.filter { it.id in r.used }.ifEmpty { r.evidence.take(1) }
@@ -1132,7 +1134,11 @@ class MainActivity : ComponentActivity() {
                     place = where?.let { it.street ?: "%.5f, %.5f".format(it.lat, it.lon) }.takeIf { r.label == "SEEN" || r.label == "UNSURE" },
                     mapUri = where?.let { "geo:${it.lat},${it.lon}?q=${it.lat},${it.lon}(${android.net.Uri.encode(it.street ?: "Seen here")})" }
                         .takeIf { r.label == "SEEN" || r.label == "UNSURE" })
-            }.getOrElse { Msg.Answer(label = "ERROR", text = "I couldn't reach Nemotron (${it.message?.take(80)}).") }
+            }.getOrElse {
+                val msg = if (it is kotlinx.coroutines.TimeoutCancellationException) "That took too long, so I stopped. Please ask again."
+                    else "I couldn't reach Nemotron (${it.message?.take(80)})."
+                Msg.Answer(label = "ERROR", text = msg)
+            }
             filler?.cancel()
             val i = state.messages.indexOf(pending)
             if (i >= 0) state.messages[i] = answer else state.messages.add(answer)

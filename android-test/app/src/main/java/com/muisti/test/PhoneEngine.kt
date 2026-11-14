@@ -159,7 +159,7 @@ class PhoneEngine(ctx: Context) {
         if (warming || now - lastWarm < 8_000) return
         warming = true; lastWarm = now
         Thread {
-            runCatching { asker.embedDocs(docs()) }
+            runCatching { val d = docs(); asker.prewarm(d); asker.embedDocs(d) }
             warming = false
         }.start()
     }

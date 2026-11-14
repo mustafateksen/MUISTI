@@ -75,7 +75,7 @@ class ParityTest {
         val prompts = Prompts(File(nem, "docs/prompts.json").readText())
         // PC evaluation of stored test frames: no phone privacy model here (the app never uses OPEN)
         val llm = Llm(cfg).apply { gate = com.muisti.privacy.PrivacyGate.OPEN }
-        val asker = Asker(llm, prompts, JvmImages, Embedder(cfg.embedKey, File("build/embed_cache.tsv")))
+        val asker = Asker(llm, prompts, JvmImages, Embedder(cfg.embedKey, File("build/embed_cache.tsv"))).apply { inlineEmbedLimit = Int.MAX_VALUE }
         agent = Agent(llm, prompts, asker).apply { preSearch = System.getProperty("muisti.presearch") != "0" }
 
         val sightings = memFiles().flatMap { f ->

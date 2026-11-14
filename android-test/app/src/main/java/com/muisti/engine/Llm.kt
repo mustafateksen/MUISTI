@@ -97,7 +97,7 @@ class Unreachable(msg: String) : RuntimeException(msg)
 /** OpenAI-compatible chat client for Nemotron (extract._call) with the same retry/backoff. */
 class Llm(private val cfg: LlmConfig) {
     private val http = OkHttpClient.Builder()
-        .connectTimeout(20, TimeUnit.SECONDS).readTimeout(120, TimeUnit.SECONDS).build()
+        .connectTimeout(10, TimeUnit.SECONDS).readTimeout(30, TimeUnit.SECONDS).build()   // API guide: 30 s for chat
     private val jsonType = "application/json".toMediaType()
 
     /**
@@ -148,7 +148,7 @@ class Llm(private val cfg: LlmConfig) {
         // response_format is spliced in as text so the schema's key order survives
         val bodyText = body.toString().let { it.substring(0, it.length - 1) + ", \"response_format\": " + responseFormat.text + "}" }
         var lastErr: Exception? = null
-        for (attempt in 0 until 5) {
+        for (attempt in 0 until 4) {
             try {
                 val req = Request.Builder().url(cfg.baseUrl.trimEnd('/') + "/chat/completions")
                     .header("Authorization", "Bearer " + cfg.key)
@@ -171,7 +171,7 @@ class Llm(private val cfg: LlmConfig) {
             } catch (e: java.io.IOException) {
                 lastErr = e
             }
-            Thread.sleep((minOf(30.0, Math.pow(2.0, attempt.toDouble())) * 1000 + Math.random() * 1000).toLong())
+            Thread.sleep((500L shl attempt) + (Math.random() * 300).toLong())   // 0.5 / 1 / 2 / 4 s + jitter
         }
         throw Unreachable("Nemotron unavailable after retries: ${lastErr?.message}")
     }
@@ -201,7 +201,7 @@ class Llm(private val cfg: LlmConfig) {
                     return JSONObject(out).getJSONArray("choices").getJSONObject(0).getJSONObject("message")
                 }
             } catch (e: RetryableHttp) { lastErr = e } catch (e: java.io.IOException) { lastErr = e }
-            Thread.sleep((minOf(20.0, Math.pow(2.0, attempt.toDouble())) * 1000 + Math.random() * 500).toLong())
+            Thread.sleep((500L shl attempt) + (Math.random() * 300).toLong())   // 0.5 / 1 / 2 / 4 s + jitter
         }
         throw Unreachable("Nemotron unavailable after retries: ${lastErr?.message}")
     }

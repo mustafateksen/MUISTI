@@ -149,7 +149,8 @@ class Embedder(private val keyOf: () -> String, private val cacheFile: File?,
     }
 
     companion object {
-        const val MAX_CACHE = 4000
+        // must stay well above the number of search docs (a few thousand), or vectors in use get evicted and re-fetched forever
+        const val MAX_CACHE = 15000
         const val DEFAULT_RETRIEVAL_URL = "https://containers.datacrunch.io/muisti-retrieval"
         const val MODEL = "nemotron-3.5-embed"
     }
@@ -163,36 +164,41 @@ class Embedder(private val keyOf: () -> String, private val cacheFile: File?,
 
     fun embed(texts: List<String>, kind: String): List<FloatArray>? {
         if (!available() || texts.isEmpty()) return null
-        synchronized(lock) {
-            ensureLoaded()
-            val missing = texts.distinct().filter { k(kind, it) !in cache }
-            try {
-                for (batch in missing.chunked(32)) {
-                    val inputs = JSONArray()
-                    for (t in batch) inputs.put(JSONObject().put("content", JSONArray().put(JSONObject().put("type", "text").put("text", t))))
-                    val body = JSONObject().put("model", MODEL).put("input_type", if (kind == "query") "query" else "document")
-                        .put("embedding_types", JSONArray().put("float")).put("truncate", "END").put("inputs", inputs)
-                    val req = Request.Builder().url(retrievalUrlOf().trimEnd('/') + "/v2/embed")
-                        .header("Authorization", "Bearer ${keyOf()}")
-                        .post(body.toString().toRequestBody("application/json".toMediaType())).build()
-                    http.newCall(req).execute().use { resp ->
-                        if (!resp.isSuccessful) throw RuntimeException("embed HTTP ${resp.code}")
-                        val data = JSONObject(resp.body!!.string()).getJSONObject("embeddings").getJSONArray("float")
-                        for ((i, t) in batch.withIndex()) {
-                            val e = data.getJSONArray(i)
-                            val v = FloatArray(e.length()) { e.getDouble(it).toFloat() }
-                            var n = 0.0; for (x in v) n += x * x
-                            val norm = maxOf(Math.sqrt(n), 1e-8).toFloat()
-                            for (j in v.indices) v[j] /= norm
-                            cache[k(kind, t)] = v
-                            binFile?.let { f -> java.io.DataOutputStream(java.io.FileOutputStream(f, true).buffered()).use { write(it, k(kind, t), v) } }
-                        }
+        // the lock only guards the cache, never a network call: a question's embedding must not
+        // wait behind a background pass over thousands of memories
+        val missing = synchronized(lock) { ensureLoaded(); texts.distinct().filter { k(kind, it) !in cache } }
+        try {
+            for (batch in missing.chunked(32)) {
+                val inputs = JSONArray()
+                for (t in batch) inputs.put(JSONObject().put("content", JSONArray().put(JSONObject().put("type", "text").put("text", t))))
+                val body = JSONObject().put("model", MODEL).put("input_type", if (kind == "query") "query" else "document")
+                    .put("embedding_types", JSONArray().put("float")).put("truncate", "END").put("inputs", inputs)
+                val req = Request.Builder().url(retrievalUrlOf().trimEnd('/') + "/v2/embed")
+                    .header("Authorization", "Bearer ${keyOf()}")
+                    .post(body.toString().toRequestBody("application/json".toMediaType())).build()
+                val vecs = http.newCall(req).execute().use { resp ->
+                    if (!resp.isSuccessful) throw RuntimeException("embed HTTP ${resp.code}")
+                    val data = JSONObject(resp.body!!.string()).getJSONObject("embeddings").getJSONArray("float")
+                    batch.indices.map { i ->
+                        val e = data.getJSONArray(i)
+                        val v = FloatArray(e.length()) { e.getDouble(it).toFloat() }
+                        var n = 0.0; for (x in v) n += x * x
+                        val norm = maxOf(Math.sqrt(n), 1e-8).toFloat()
+                        for (j in v.indices) v[j] /= norm
+                        v
                     }
                 }
-            } catch (e: Exception) {
-                if (missing.isNotEmpty()) return null
+                synchronized(lock) {
+                    binFile?.let { f ->
+                        java.io.DataOutputStream(java.io.FileOutputStream(f, true).buffered()).use { out ->
+                            for ((t, v) in batch.zip(vecs)) { cache[k(kind, t)] = v; write(out, k(kind, t), v) }
+                        }
+                    } ?: batch.zip(vecs).forEach { (t, v) -> cache[k(kind, t)] = v }
+                }
             }
-            return texts.map { cache[k(kind, it)]!! }
+        } catch (e: Exception) {
+            if (missing.isNotEmpty()) return null
         }
+        return synchronized(lock) { texts.map { cache[k(kind, it)] ?: return null } }
     }
 }
