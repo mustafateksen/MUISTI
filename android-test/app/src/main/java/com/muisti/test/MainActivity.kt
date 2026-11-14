@@ -145,8 +145,10 @@ class MainActivity : ComponentActivity() {
                     if (l > 1536) bmp = Bitmap.createScaledBitmap(bmp, bmp.width * 1536 / l, bmp.height * 1536 / l, true)
                     val obs = withContext(Dispatchers.Main) { readText(bmp) }
                     // the same privacy gate as the live stream (one photo: judged on its own)
-                    val sc = if (privacy.available) privacy.score(bmp) else null
-                    if (sc != null) {
+                    if (!privacy.available) return@withContext "Not saved: the privacy check isn't available (nothing was sent)."
+                    val sc = runCatching { privacy.score(bmp) }.getOrNull()
+                        ?: return@withContext "Not saved: the privacy check failed (nothing was sent)."
+                    run {
                         android.util.Log.i("MuistiPrivacy", "import: stop %.2f (%s) pin %.2f text %.2f, %d ms".format(sc.stop, sc.stopClass, sc.pin, sc.textual, sc.ms))
                         if (sc.stop >= 0.6f) return@withContext "Not saved: this looks like a private place (privacy)."
                         if (sc.pin >= 0.7f) return@withContext "Not saved: a PIN pad or card terminal (privacy)."
@@ -252,16 +254,23 @@ class MainActivity : ComponentActivity() {
     private class Held(val bmp: Bitmap, val hash: Long, val at: Long)
     private val held = ArrayDeque<Held>()
 
-    /** Local scene check on a frame (~2/s). Nothing here leaves the phone. */
-    private fun privacyCheck(bmp: Bitmap, now: Long) {
-        if (!privacy.available) return
-        val s = runCatching { privacy.score(bmp) }.getOrNull() ?: return
+    /**
+     * THE gate, on the phone, for every image before it can leave the phone (memory stream, "what am I
+     * seeing?", imports). True = this image must not go to Nemotron. Fail-closed: if the model is missing or
+     * the check throws, the image is treated as private. Also drives the pause/resume state.
+     */
+    @Synchronized
+    private fun isPrivate(bmp: Bitmap, now: Long = System.currentTimeMillis()): Boolean {
+        if (!privacy.available) { state.privacy = state.privacy ?: "an unchecked view (privacy model missing)"; return true }
+        val s = runCatching { privacy.score(bmp) }.getOrNull() ?: return true
         state.privacyScore = s.priv
         when (privacy.update(s, now)) {
             PrivacyGuard.Event.ENTER, PrivacyGuard.Event.UPGRADE -> onPrivacyEnter()
             PrivacyGuard.Event.EXIT -> onPrivacyExit()
             null -> {}
         }
+        // during a pause nothing leaves; outside a pause, a single frame that leans private is still not sent
+        return privacy.paused || s.stop >= 0.5f || s.pin >= 0.5f
     }
 
     private fun onPrivacyEnter() {
@@ -481,9 +490,10 @@ class MainActivity : ComponentActivity() {
         if (now - lastLiveAt >= 500) {
             lastLiveAt = now
             val b = bitmap()
-            privacyCheck(b, now)
-            // while private, the assistant can't look either ("what am I seeing?" gets nothing)
-            liveJpeg = if (privacy.paused) null
+            // not recording: this tick is what keeps the pause state current (while recording, offerFrame does it).
+            // The live frame is checked again, on its own, when a question actually wants to send it.
+            val priv = if (!state.recording) isPrivate(b, now) else privacy.paused
+            liveJpeg = if (priv) null
                 else ByteArrayOutputStream().also { b.compress(Bitmap.CompressFormat.JPEG, 85, it) }.toByteArray()
         }
         releaseHeld(now)
@@ -569,7 +579,8 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun offerFrame(bmp: Bitmap, score: Double) {
-        if (privacy.paused) { state.privacyDropped++; return }   // private: not kept, not sent
+        // every frame that could be remembered is checked itself, on the phone, before anything else
+        if (isPrivate(bmp)) { state.privacyDropped++; return }   // private: not kept, not sent
         if (isBlurry(score)) { state.blurrySkipped++; state.lastFrame = "Skipped · blurry"; return }
         val h = dHash(bmp)
         if (lastSentHash != -1L && java.lang.Long.bitCount(h xor lastSentHash) <= 6) {
@@ -740,7 +751,10 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch {
             val answer = runCatching {
                 // the live frame for "what am I seeing?" is masked too; if masking fails it is not sent
-                val live = withContext(Dispatchers.Default) { liveJpeg?.let { blurJpeg(it) } }
+                // the live frame is checked on the phone right now; a private view is never sent with a question
+                val live = withContext(Dispatchers.Default) {
+                    liveJpeg?.let { j -> BitmapFactory.decodeByteArray(j, 0, j.size)?.takeIf { !isPrivate(it) }?.let { blurJpeg(j) } }
+                }
                 val r = withContext(Dispatchers.IO) { engine.ask(q, live) }
                 if (r.label == "FORGOT") state.memories = withContext(Dispatchers.IO) { engine.store.sightings().size }
                 val shots = withContext(Dispatchers.IO) { loadShots(r) }
