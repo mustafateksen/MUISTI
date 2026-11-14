@@ -10,6 +10,7 @@ Endpoints (contract from the team plan, section 05):
   GET  /memories merged sightings (for the phone's source screen / timeline)
   GET  /frames/{id}.jpg   evidence frame
   GET  /stats
+  /proxy/*       token proxy for the Android app (token_proxy.py: pair once, short-lived tokens, key stays here)
 
 Env:
   STANDIN_OCR=1   if a frame arrives without OCR, use Nemotron as OCR (default 1 until Apple Vision lands)
@@ -34,6 +35,7 @@ import extract as E
 import ocr_repair
 from ocr_adapter import vision_to_lines
 from store import SqliteStore
+from token_proxy import router as token_router
 
 STANDIN_OCR = os.environ.get("STANDIN_OCR", "1") == "1"
 DEMO_CLOCK = os.environ.get("DEMO_CLOCK", "latest")
@@ -42,6 +44,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 store = SqliteStore(os.environ.get("MUISTI_DB", "data/muisti.db"),
                     os.environ.get("MUISTI_FRAMES", "data/frames"))
 app = FastAPI(title="MUISTI")
+app.include_router(token_router)   # /proxy/*: the phone app calls Nemotron through here, the key stays on the server
 # Words read on their own in recent frames: lets ocr_repair split glued tokens ("ARDUINOHARDWARELAB")
 # using only words this user's camera actually read. In memory; rebuilt as frames arrive.
 _RECENT_WORDS: dict[str, int] = {}
