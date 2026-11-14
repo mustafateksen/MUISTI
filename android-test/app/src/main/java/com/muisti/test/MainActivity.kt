@@ -35,7 +35,7 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import com.google.mlkit.vision.common.InputImage
 import com.muisti.engine.Obs
-import com.muisti.privacy.PrivacySettingsRepo
+import com.muisti.privacy.OldMemoryScan
 import com.muisti.privacy.PrivacyText
 import com.muisti.privacy.SceneRules
 import com.google.mlkit.vision.text.TextRecognition
@@ -73,7 +73,7 @@ import kotlin.coroutines.resume
 class MainActivity : ComponentActivity() {
 
     val state = AppState()
-    val engine by lazy { PhoneEngine(applicationContext) }
+    val engine get() = AppGraph.engine
     /** Ray-Ban Meta camera (created here: it registers activity-result launchers). */
     private val glasses = GlassesSource(this, state) { onGlassesFrame(it) }
     /** Ahmet's head masking: nothing leaves the phone or is stored unblurred. */
@@ -177,11 +177,11 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        AppGraph.init(applicationContext)
         enableEdgeToEdge()
         state.serverUrl = getPreferences(MODE_PRIVATE).getString("server", "http://10.0.34.200:8000")!!
         previewView = PreviewView(this).apply { scaleType = PreviewView.ScaleType.FILL_CENTER }
         setContent { MuistiApp(this) }
-        PrivacyText.enabledProvider = { privacySettings.current.sensitiveOcr }
         state.privacySettings = privacySettings.current
         privacySettings.listen { s -> runOnUiThread { state.privacySettings = s } }
         handleImportIntent(intent)
@@ -213,16 +213,8 @@ class MainActivity : ComponentActivity() {
             // loads the model; from now on every image leaving the phone is checked at the exit too (fail-closed before this)
             privacy.loadError?.let { e -> runOnUiThread { state.toast("Privacy model missing: nothing will be sent ($e)") } }
             engine.setGate(privacy.gate)
-            // once: memories stored before the privacy gate existed are checked, private ones deleted on the phone
-            val prefs = getSharedPreferences("privacy", MODE_PRIVATE)
-            if (privacy.available && !prefs.getBoolean("oldMemoryScanned", false)) {
-                val n = runCatching { engine.store.removePrivate { privacy.isPrivateImage(it) } }.getOrNull()
-                if (n != null) {
-                    prefs.edit().putBoolean("oldMemoryScanned", true).apply()
-                    if (n > 0) runOnUiThread { state.memories = engine.store.sightings().size; state.toast("Privacy: removed $n private frame(s) from memory") }
-                    android.util.Log.i("MuistiPrivacy", "old memory scan: removed $n")
-                }
-            }
+            // memories stored before the privacy gate existed: checked in WorkManager, resumable (OldMemoryScanWorker)
+            OldMemoryScanWorker.schedule(applicationContext)
         }.start()
 
         val need = listOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO,
@@ -267,10 +259,15 @@ class MainActivity : ComponentActivity() {
 
     // ---------------- privacy gate (see PrivacyGuard) ----------------
     /** The user's privacy choices (persisted); every check below reads the live copy. */
-    val privacySettings by lazy { PrivacySettingsRepo(PrefsStore(getSharedPreferences("privacy", MODE_PRIVATE))) }
-    private val privacy by lazy { PrivacyGuard(applicationContext) { privacySettings.current } }
+    val privacySettings get() = AppGraph.privacySettings
+    private val privacy get() = AppGraph.privacy
     val privacyActions = object : com.muisti.ui.PrivacyActions {
-        override fun setClass(cls: String, on: Boolean) { privacySettings.update { it.withClass(cls, on) } }
+        override fun setClass(cls: String, on: Boolean) {
+            // a newly switched-on class also applies to older memories: check them again
+            privacySettings.update { s -> s.withClass(cls, on).let { n -> if (on && !s.isActive(cls)) OldMemoryScan.restart(n) else n } }
+            if (on) OldMemoryScanWorker.schedule(applicationContext)
+        }
+        override fun scanNow() { OldMemoryScanWorker.now(applicationContext); state.toast("Checking older memories…") }
         override fun setSensitiveOcr(on: Boolean) { privacySettings.update { it.copy(sensitiveOcr = on) } }
         override fun close() { state.showPrivacy = false }
     }

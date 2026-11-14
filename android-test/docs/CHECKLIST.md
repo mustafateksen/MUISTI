@@ -38,15 +38,15 @@ is absent. Tasks whose "Done when" needs the device or those memories cannot be 
 | ID | Task | Status | Evidence (test / log / screenshot) | Commit | Notes / limits |
 |----|------|--------|------------------------------------|--------|----------------|
 | S0 | Audit, checklist, baseline | DONE | docs/BASELINE.md, FixtureRegressionTest 20/20 | | on-device baseline BLOCKED (no device) |
-| P1.1 | Privacy settings model and screen | PARTIAL | PrivacySettingsTest (defaults, locked classes, restart via store, toggle changes decision) | next | Settings screen (Settings → Privacy settings) wired; on-device P_atm_0.jpg import check BLOCKED: no device |
-| P1.2 | Sensitive OCR, tested | PARTIAL | PrivacyTextTest: 19 positive + 19 negative cases, setting gate | next | live + import paths use PrivacyText.check(SceneHint); on-device card-photo import BLOCKED: no device. Default off (team decision) |
-| P1.3 | Fail-safe audit of every image exit | DONE | PrivacyGateTest (6): extract/liveLook/lookAgain send 0 requests when gate blocks, throws, or is default; source scan finds no other image builder | next | Llm.gate defaults to CLOSED; PrivacyGuard.gate installed after model load |
-| P1.4 | Old-memory scan that survives restarts | TODO | | | |
+| P1.1 | Privacy settings model and screen | PARTIAL | PrivacySettingsTest (defaults, locked classes, restart via store, toggle changes decision) | 6b74a08 | Settings screen (Settings → Privacy settings) wired; on-device P_atm_0.jpg import check BLOCKED: no device |
+| P1.2 | Sensitive OCR, tested | PARTIAL | PrivacyTextTest: 19 positive + 19 negative cases, setting gate | 6b74a08 | live + import paths use PrivacyText.check(SceneHint); on-device card-photo import BLOCKED: no device. Default off (team decision) |
+| P1.3 | Fail-safe audit of every image exit | DONE | PrivacyGateTest (6): extract/liveLook/lookAgain send 0 requests when gate blocks, throws, or is default; source scan finds no other image builder | 6b74a08 | Llm.gate defaults to CLOSED; PrivacyGuard.gate installed after model load |
+| P1.4 | Old-memory scan that survives restarts | PARTIAL | OldMemoryScanTest: killed after 900 of 1100 frames, a new process resumes after id 900; frames 845-852, 915, 1006, 1029 deleted; crash = private | next | WorkManager (battery-not-low + idle; Check now = battery only); progress in Privacy settings. On-device kill/resume and the real toilet frames: BLOCKED (no device) |
 | P1.5 | License-plate privacy | TODO | | | |
 | P1.6 | API keys out of the APK | TODO | | | |
 | P1.7 | Network resilience | TODO | | | |
 | P1.8 | Retrieval reliability baseline (JSON report) | TODO | | | |
-| D1 | Old-memory scan never finishes | TODO | | | = P1.4 |
+| D1 | Old-memory scan never finishes | PARTIAL | see P1.4 | next | fixed in code + JVM test; device check BLOCKED |
 | D2 | Sentence vectors can go stale | TODO | | | |
 | D3 | Agent regression lost points (30 → 27/31) | TODO | | | |
 | D4 | Speech-correction gap ("not eat") | TODO | | | |

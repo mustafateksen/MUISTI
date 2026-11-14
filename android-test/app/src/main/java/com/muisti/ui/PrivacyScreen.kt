@@ -34,6 +34,7 @@ import com.muisti.privacy.Zone
 interface PrivacyActions {
     fun setClass(cls: String, on: Boolean)
     fun setSensitiveOcr(on: Boolean)
+    fun scanNow()
     fun close()
 }
 
@@ -62,6 +63,18 @@ fun PrivacyScreen(s: PrivacySettings, insideZone: String?, a: PrivacyActions) {
             Section("Text on frames")
             ToggleRow("Block frames with card numbers / IBAN / ID numbers / PINs",
                 "Checked on the phone's OCR (Luhn, IBAN, Finnish ID). Off by team decision.", s.sensitiveOcr) { a.setSensitiveOcr(it) }
+            Section("Older memories")
+            val sc = s.scan
+            when {
+                sc.done -> Text("Checked all ${sc.total} older frames · removed ${sc.removed}.", color = sub, fontSize = 14.sp)
+                sc.total > 0 -> {
+                    Text("Checking older frames… up to #${sc.lastScannedId} of ${sc.total} · removed ${sc.removed}", color = sub, fontSize = 14.sp)
+                    Spacer(Modifier.height(6.dp))
+                    LinearProgressIndicator(progress = { (sc.lastScannedId.toFloat() / sc.total).coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth())
+                }
+                else -> Text("Waiting to check older frames (runs when the phone is idle).", color = sub, fontSize = 14.sp)
+            }
+            if (!sc.done) TextButton(onClick = a::scanNow) { Text("Check now") }
             Spacer(Modifier.height(40.dp))
         }
     }
