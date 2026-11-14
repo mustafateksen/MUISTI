@@ -35,14 +35,16 @@ actor MemoryPipeline {
     }
 
     /// Returns the new memory id if the frame was kept.
-    func handle(_ frame: CapturedFrame, street: String?) async -> Int64? {
+    func handle(_ frame: CapturedFrame, street: String?, onPeanut: (@Sendable (PeanutLabel) async -> Void)? = nil) async -> Int64? {
         if recordRaw { await recorder.write(frame) }
         if frame.trigger == .stream {
             // OCR on every 7 fps frame would burn the battery; look at one in N.
             streamCounter += 1
             guard streamCounter % streamEveryN == 0 else { return nil }
         }
-        switch await perception.process(frame, street: street) {
+        let (result, alert) = await perception.analyze(frame, street: street, checkPeanut: onPeanut != nil)
+        if let alert, let onPeanut { await onPeanut(alert) }
+        switch result {
         case .drop(let reason):
             stats.dropped[reason, default: 0] += 1
             return nil

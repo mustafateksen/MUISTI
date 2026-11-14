@@ -20,6 +20,27 @@ struct RootView: View {
                 .tabItem { Label("Memory", systemImage: "square.stack.3d.up") }
                 .tag(AppTab.memory)
         }
+        .alert("Remember your peanut allergy?", isPresented: Binding(get: { controller.voice.confirmPeanut },
+            set: { controller.voice.confirmPeanut = $0 })) {
+            Button("Remember and alert") { controller.voice.setPeanut(true) }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("During capture, Muisti can warn you about peanut wording it can read. Change this in Privacy.")
+        }
+        .safeAreaInset(edge: .top) {
+            if let alert = controller.voice.labelEvidence {
+                VStack(alignment: .leading) {
+                    Text(alert.reading.message).bold()
+                    Text(alert.quotes.joined(separator: " · "))
+                    HStack {
+                        Text(alert.at, style: .time)
+                        Text("OCR: " + alert.lineNumbers.map { String($0) }.joined(separator: ", "))
+                        Spacer()
+                        Button("Dismiss") { controller.voice.dismissLabel() }
+                    }.font(.caption)
+                }.padding(8).background(.regularMaterial)
+            }
+        }
         // One palette everywhere: toggles, pickers and links follow the brand colour too.
         .tint(.brand)
         .onChange(of: signals.pendingListen) { _, pending in

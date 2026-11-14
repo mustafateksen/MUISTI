@@ -56,6 +56,7 @@ actor PerceptionEngine {
     var zones: [NoRecordZone] = []
     private var recentHashes: [(hash: UInt64, at: Date, text: String, memoryId: Int64?)] = []
     private var lastTextlessKeep: Date?
+    private var lastPanelRetry: (hash: UInt64, at: Date)?
     private let context = CIContext(options: [.cacheIntermediates: false])
 
     func configure(zones: [NoRecordZone]) { self.zones = zones }
@@ -71,7 +72,13 @@ actor PerceptionEngine {
         _ = HeadBlur.heads(in: image)
     }
 
-    func process(_ frame: CapturedFrame, street: String?) -> PerceptionResult {
+    func analyze(_ frame: CapturedFrame, street: String?, checkPeanut: Bool) -> (PerceptionResult, PeanutLabel?) {
+        var alert: PeanutLabel?
+        let result = process(frame, street: street, checkPeanut: checkPeanut, alert: &alert)
+        return (result, alert)
+    }
+
+    private func process(_ frame: CapturedFrame, street: String?, checkPeanut: Bool, alert: inout PeanutLabel?) -> PerceptionResult {
         if let lat = frame.latitude, let lon = frame.longitude, zones.contains(where: { $0.contains(latitude: lat, longitude: lon) }) {
             return .drop(.noRecordZone)
         }
@@ -99,6 +106,28 @@ actor PerceptionEngine {
         let textLines = lines.filter { !Self.looksLikePlate($0.text) }
         let ocrText = Self.visualRows(textLines).joined(separator: "\n")
 
+        if checkPeanut {
+            var labelLines = textLines
+            // A missed target word cannot trigger a line crop. Independently retry a
+            // recognizable ingredients panel once per similar view in a short burst.
+            let panel = labelLines.contains { PeanutLabel.panel($0.text) }
+            let mention = labelLines.contains { PeanutLabel.mentions($0.text) }
+            let recentRetry = lastPanelRetry.map {
+                (0..<20).contains(frame.capturedAt.timeIntervalSince($0.at)) && ($0.hash ^ hash).nonzeroBitCount <= 6
+            } ?? false
+            if panel && !mention && !recentRetry {
+                lastPanelRetry = (hash,frame.capturedAt)
+                let fine = Self.recognizeText(ocrImage, correction:false, minHeight:0.006)
+                // Keep indications visible only on the retry as unconfirmed mentions.
+                // Avoid switching context or treating a retry-only word as a declaration.
+                labelLines += fine.filter { PeanutLabel.mentions($0.text) }.map {
+                    TextLine(text:$0.text,box:$0.box,confidence:min($0.confidence,0.64))
+                }
+            }
+            alert = PeanutLabel.evaluate(labelLines, hash: hash, frame: frame) { i in
+                Self.reread(labelLines[i], in: ocrImage)
+            }
+        }
         let manual = frame.trigger == .manual
         // Same view (image hash) with the same text, or the same sign read again while it
         // slides across the frame (text overlap) — unless this read is clearly more complete.
@@ -179,12 +208,26 @@ actor PerceptionEngine {
         let confidence: Float
     }
 
-    static func recognizeText(_ image: CGImage) -> [TextLine] {
+    static func reread(_ line: TextLine, in image: CGImage) -> TextLine? {
+        let w = CGFloat(image.width), h = CGFloat(image.height)
+        let b = line.box
+        let rect = CGRect(x:b.minX*w, y:(1-b.maxY)*h, width:b.width*w, height:b.height*h)
+            .insetBy(dx:-4,dy:-3).integral
+        guard let crop = image.cropping(to:rect.intersection(CGRect(x:0,y:0,width:w,height:h))) else { return nil }
+        let parts = recognizeText(crop, correction:false)
+        guard let anchor = parts.first, parts.allSatisfy({
+            abs($0.box.midY - anchor.box.midY) <= 0.45 * min($0.box.height,anchor.box.height)
+        }), let confidence = parts.map(\.confidence).min() else { return nil }
+        let quote = parts.sorted { $0.box.minX < $1.box.minX }.map(\.text).joined(separator:" ")
+        return TextLine(text:quote,box:b,confidence:confidence)
+    }
+
+    static func recognizeText(_ image: CGImage, correction: Bool = true, minHeight: Float = 0.012) -> [TextLine] {
         let request = VNRecognizeTextRequest()
         HeadBlur.prepare(request)
         request.recognitionLevel = .accurate
-        request.usesLanguageCorrection = true
-        request.minimumTextHeight = 0.012
+        request.usesLanguageCorrection = correction
+        request.minimumTextHeight = minHeight
         let wanted = ["fi-FI", "sv-SE", "en-US", "tr-TR", "de-DE"]
         if let supported = try? request.supportedRecognitionLanguages() {
             request.recognitionLanguages = wanted.filter { supported.contains($0) }

@@ -19,6 +19,37 @@ final class VoiceAssistant {
     private(set) var history: [AskResult] = []
     var localeIdentifier = "en-US"
     var speakAnswers = true
+    private(set) var peanutEnabled = KeychainStore.read("peanut-alert") == "on"
+    var confirmPeanut = false
+    private(set) var labelEvidence: PeanutLabel?
+    @ObservationIgnored private var latestLabelRead: PeanutLabel?
+    func dismissLabel() { labelEvidence = nil }
+    @ObservationIgnored private let warningSpeech = AVSpeechSynthesizer()
+
+    func setPeanut(_ enabled: Bool) {
+        if KeychainStore.write(enabled ? "on" : "", for: "peanut-alert") {
+            peanutEnabled = enabled
+            labelEvidence = nil
+            latestLabelRead = nil
+            warningSpeech.stopSpeaking(at: .immediate)
+        }
+    }
+
+    func receive(_ alert: PeanutLabel) {
+        guard peanutEnabled else { return }
+        let previousRead = latestLabelRead
+        latestLabelRead = alert
+        if let previous = previousRead, previous.reading == alert.reading,
+           previous.quotes == alert.quotes, (previous.hash ^ alert.hash).nonzeroBitCount <= 6,
+           (0..<20).contains(alert.at.timeIntervalSince(previous.at)) { return }
+        labelEvidence = alert
+        // Keep an in-progress question intact; the warning remains visible.
+        guard !isBusy else { return }
+        warningSpeech.stopSpeaking(at: .immediate)
+        let utterance = AVSpeechUtterance(string: alert.reading.message)
+        utterance.voice = AVSpeechSynthesisVoice(language: "en-US")
+        warningSpeech.speak(utterance)
+    }
     /// Microphone spectrum and spoken-word pulses for the visualizer.
     let levels = VoiceLevels()
 
@@ -133,6 +164,15 @@ final class VoiceAssistant {
 
     /// Typed question (also used by tests and when speech is unavailable).
     func ask(_ question: String) async {
+        let command = question.lowercased().trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters))
+        if ["remember my peanut allergy", "i am allergic to peanuts", "i’m allergic to peanuts",
+            "i'm allergic to peanuts", "yer fıstığına alerjim var", "yer fıstığı alerjimi hatırla"].contains(command) {
+            transcript = ""
+            phase = .idle
+            Self.deactivateAudioSession()
+            confirmPeanut = true
+            return
+        }
         transcript = question
         phase = .thinking
         let result = await engine.ask(question, location: location.freshFix(maxAge: 120))

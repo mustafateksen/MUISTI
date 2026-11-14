@@ -94,7 +94,15 @@ final class CaptureController {
         let pipeline = pipeline
         tasks.append(Task.detached { [weak self] in
             for await item in pipelineStream {
-                let id = await pipeline.handle(item.frame, street: item.street)
+                let id: Int64?
+                let enabled = await self?.voice.peanutEnabled ?? false
+                if enabled {
+                    id = await pipeline.handle(item.frame, street: item.street, onPeanut: { [weak self] hit in
+                        await self?.voice.receive(hit)
+                    })
+                } else {
+                    id = await pipeline.handle(item.frame, street: item.street)
+                }
                 let stats = await pipeline.stats
                 await self?.pipelineDidProcess(kept: id != nil, stats: stats)
             }

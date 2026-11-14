@@ -9,6 +9,13 @@ struct PrivacySettingsSection: View {
 
     var body: some View {
         Section {
+            Toggle("Peanut label alerts", isOn: Binding(get: { controller.voice.peanutEnabled },
+                set: { controller.voice.setPeanut($0) }))
+        } footer: {
+            Text("Checks readable English, Finnish and Swedish peanut wording during capture. Silence does not confirm a product is safe.")
+        }
+
+        Section {
             Stepper("Keep memories for \(config.retentionDays) days", value: $config.retentionDays, in: 1...30)
             Button("Forget the last 10 minutes", systemImage: "clock.arrow.circlepath", role: .destructive) {
                 confirmForget = true
