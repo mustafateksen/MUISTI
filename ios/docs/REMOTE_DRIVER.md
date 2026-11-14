@@ -43,7 +43,16 @@ python3 tools/muisti-drive state
 | `muisti-drive reply yes\|no\|not_now` | Answers a yes/no question Muisti is waiting on (see `state`) |
 | `muisti-drive location <lat> <lon> [--course DEG] [--speed M/S]` | Tells Muisti where the user is now |
 | `muisti-drive motion walking\|stationary\|automotive\|…` | Tells Muisti how the user is moving |
-| `muisti-drive tick` | Lets the agent check the clock and position right now (it also does this by itself every 15 s) |
+| `muisti-drive tick [--review]` | Lets the agent check the clock and position right now (it also does this by itself every 15 s). `--review`: also its own look at how the day is going, at once |
+| `muisti-drive log <object> <value> [--at "yyyy-MM-dd HH:mm"] [--kind action\|state]` | Adds an entry to the safety log (`log medicine taken --at "2026-11-13 08:15"`): earlier days for the habits demo |
+| `muisti-drive habits` | What Muisti counts as the user's habits from the log, and whether each happened today |
+| `muisti-drive chat` / `chat-clear` | The conversation as the app's Ask tab shows it; start a new one |
+| `muisti-drive memories [--limit 30]` | The newest memories (id, time, title, street) |
+| `muisti-drive delete-memory <id>` / `forget <minutes>` | Delete one memory; forget the last N minutes |
+| `muisti-drive intent <id> done\|remove` | Finish or remove a reminder (ids are in `state`) |
+| `muisti-drive rule <id> on\|off\|delete` | A safety rule (ids are in `state`) |
+| `muisti-drive settings [key=value …]` | The assistant's switches and limits (run without arguments to see them) |
+| `muisti-drive screen ask\|memory\|safety\|notes\|back` | What the phone shows, for a screen recording |
 | `muisti-drive reset --yes` | Deletes all memories, rules and notes in the app. Only when a clean start is wanted |
 
 Labels in answers: `GORDUM` = seen, answered from evidence; `EMIN_DEGILIM` = not sure; `BILMIYORUM` = not seen / not known.
@@ -87,15 +96,22 @@ Muisti is an agent: much of what matters is what it says **without being asked**
 - **Safety rules:** `ask "Warn me if I leave the stove on when I go out"`, `reply yes`, show `stove_on.jpg` twice a few seconds apart, then `ask "I'm leaving"`.
 - **Working things out:** a board with an equation, a price tag with a discount, a menu to translate: `frame … --no-store` and ask.
 - **Forgetting:** `ask "Forget the last 10 minutes"`.
+- **Places:** give frames positions (`location` before `frame`/`video`), then ask about a place: `ask "Did I see a pharmacy in Istanbul?"` answers plainly that nothing was seen there, without showing something from elsewhere; `ask "Did I see one here?"` searches only around the current `location`.
+- **Habits:** `log medicine taken --at "<yesterday> 08:15"` for the last four or five days, then (after the usual hour today) `tick --review`; `events` shows Muisti asking about the medicine by itself. Add `log medicine taken` for today and the next review stays silent.
+- **Did I do it?:** with a safety rule or automatic watching on, play a clip at `--step 1` in which a door is locked or a stove turned off (hands in view), then `ask "Did I lock the door?"`: the answer comes with the frames of that moment (`safety_frames` in the result), and says so honestly when the frames show the door but not the locking.
 
 For the demo recording itself, the person holds the phone and screen-records it while you drive, or records the terminal: what you see in `ask` and `events` is exactly what the app shows and would say.
+
+## Doing things while a video plays
+
+`video` returns at once and the video keeps playing in the app. While it plays you can run any other command — `ask`, `events`, `location`, `screen` — exactly as a person would talk to Muisti while walking. For a demo, play the clip at `--speed 1` (real time), start the screen recording on the phone, and send your questions at the moments the script calls for.
 
 ## Giving a video a position
 
 A video file has no GPS. Without a position, place and direction features stay off. Two ways:
 
 - one position for the whole clip: `muisti-drive location 60.1719 24.9414` before `video`;
-- a track: a JSON file `[{"t": 0, "lat": 60.1719, "lon": 24.9414}, {"t": 12, "lat": 60.1722, "lon": 24.9409}, …]` (`t` = seconds into the video) passed with `--track` (this option only works when the file is given by path on the same machine as the app, i.e. on a simulator; over Wi-Fi send `location` commands while the video plays).
+- a track: a JSON file `[{"t": 0, "lat": 60.1719, "lon": 24.9414}, {"t": 12, "lat": 60.1722, "lon": 24.9409}, …]` (`t` = seconds into the video) passed with `--track`.
 
 ## What this does not test
 
@@ -106,7 +122,8 @@ A video file has no GPS. Without a position, place and direction features stay o
 
 ## Things to know
 
-- Faces and number plates are blurred on the phone before anything is stored or sent. A frame showing a bathroom, toilet or shower is withheld entirely (`frame` answers `"withheld": true`).
+- Faces and number plates are blurred on the phone before anything is stored or sent. A frame showing a bathroom, toilet or shower is withheld entirely (`frame` answers `"withheld": true`), and so is every frame of the 20 seconds after it (`settings private_pause=0` switches that wait off for tests that show unrelated photos one after another).
+- An answer that something was not seen comes without evidence frames; nothing "closest" is shown in its place.
 - Frames that are blurry, or the same as the one before, are dropped on purpose: `"kept": false` is normal for many frames of a video.
 - Each kept frame is described by the model after it is stored (1–3 s each). Until `wait` returns, answers may miss the newest frames.
 - A video of a few minutes at `--step 1` is a few hundred frames: allow several minutes. Keep clips under ~200 MB (the upload is held in the phone's memory).
@@ -116,6 +133,6 @@ A video file has no GPS. Without a position, place and direction features stay o
 ## For the owner of the app (not needed for driving)
 
 - The driver exists only in DEBUG builds (`Muisti/Debug/RemoteDriver.swift`, `#if DEBUG`). It is off until switched on in the Developer screen, or started with the launch argument `--remote-driver=<port>|<token>` (add `--remote-driver-speak` to keep the voice on).
-- On a Mac with Xcode the same tool works against the simulator: launch with the argument, leave `MUISTI_DRIVER_URL` unset (`http://127.0.0.1:8765`), and videos are read by path instead of being uploaded.
+- On a Mac with Xcode the same tool works against the simulator: launch with the argument, leave `MUISTI_DRIVER_URL` unset (`http://127.0.0.1:8765`).
 - New versions of the app have to be installed by cable from the owner's Mac; with a free Apple developer account an installed build stops opening after 7 days.
 - The model key travels inside the installed app (from the git-ignored `Muisti/Resources/Secrets.plist`); it is never needed on the driving side.

@@ -103,18 +103,23 @@ Bu cümleler günlük bütçeye ve aralık kuralına takılmaz (kullanıcının 
 
 ## Kendiliğinden kolladıkları
 
-Zenginleştirmenin işaretine ek olarak üç sabit "görünce" ipucu her karede embedding + rerank ile denenir (`AgentCenter.standing`): yakından görülen ilaç, bırakılmış kişisel eşya, evde açık kalan şey. Eşleşirse hakem, notlara ve güvenlik günlüğüne bakıp söyler ya da sorar.
+Zenginleştirmenin işaretine ek olarak dört sabit "görünce" ipucu her karede embedding + rerank ile denenir (`AgentCenter.standing`): yakından görülen ilaç, bırakılmış kişisel eşya, evde açık kalan şey, yürünen yerdeki tehlike (ıslak zemin levhası, kırmızı yaya ışığı, bisiklet yolu, kazı). Eşleşirse hakem, notlara ve güvenlik günlüğüne bakıp söyler ya da sorar. Tehlike ipucu yalnız kare 20 saniyeden yeniyse hakeme gider.
+
+## Rutinler
+
+`Habits` (yeni dosya) güvenlik günlüğünün son 14 gününü sayar: aynı kayıt (nesne + değer, ör. "medicine taken", "front door locked") önceki günlerin en az 3'ünde ve günlük tutulan günlerin en az yarısında varsa alışkanlık sayılır; ilk görülme saatlerinin en erkeni ve en geçi "olağan aralık"tır. Kod neyin ilaç neyin kapı olduğunu bilmez, günlükte ne varsa onu sayar. Olağan saat 30 dakika geçtiği halde bugün kayıt yoksa bu, ajanın periyodik bakışını (`review`) tetikler; satırlar hakeme verilir ve ne diyeceğine hakem karar verir (istem: yapmadığını iddia etme, soru olarak sor; gözlük görmemiş olabilir). Aynı satırlar akşam özetine de girer. Sürücüde `log` komutu geçmiş günlere kayıt ekler (demo verisi), `habits` satırları gösterir, `tick --review` bakışı hemen çalıştırır.
 
 ## Gizlilik kapısı
 
-Banyo, tuvalet ya da duş sahnesi gösteren kare telefondan çıkmaz ve kaydedilmez (`PerceptionEngine.showsPrivateScene`, Apple'ın telefondaki sahne sınıflandırıcısı; fikir Android tarafından). Bellek, güvenlik bakışı ve canlı bakış aynı kapıdan geçer. Mac'te aynı Vision isteğiyle: 11 banyo fotoğrafının 8'i 0,45–0,97 puan aldı (eşik 0,40), 106 sıradan test fotoğrafının en yükseği 0,27. Simülatörde sınıflandırıcı çalışmadığı için orada kapı kapalıdır; telefonda sınıflandırıcı hata verirse kare geri çevrilir.
+Özel sahneden sonraki 20 saniye boyunca hiçbir kare tutulmaz (sınıflandırıcı aynı odanın bazı açılarını kaçırıyor; her özel kare süreyi yeniden başlatır; `PerceptionEngine.privatePause`). Banyo, tuvalet ya da duş sahnesi gösteren kare telefondan çıkmaz ve kaydedilmez (`PerceptionEngine.showsPrivateScene`, Apple'ın telefondaki sahne sınıflandırıcısı; fikir Android tarafından). Bellek, güvenlik bakışı ve canlı bakış aynı kapıdan geçer. Mac'te aynı Vision isteğiyle: 11 banyo fotoğrafının 8'i 0,45–0,97 puan aldı (eşik 0,40), 106 sıradan test fotoğrafının en yükseği 0,27. Simülatörde sınıflandırıcı çalışmadığı için orada kapı kapalıdır; telefonda sınıflandırıcı hata verirse kare geri çevrilir.
 
 ## Yapılmayanlar
 
 - Pusula yönü kullanılmıyor; "sağında / arkanda" GPS rotasından hesaplanıyor, dururken pusula yönü ("kuzeyde") verilir.
 - Toplu taşıma, fiş/garanti, son kullanma tarihi için ayrı kod yok; hakem + `note_for_later` bunları kapsıyorsa çalışır, ölçülmedi.
 - Akşam özeti yalnız o saatte uygulama çalışıyorsa üretilir.
-- Eylem algılama (ocağı kapattı mı, ilacı aldı mı) hâlâ tek kareye bakıyor; art arda karelerden şerit denenmedi (elde eylem içeren görüntü yok).
+- Eylem algılama (kapıyı kilitledi mi, ocağı kapattı mı, ilacı aldı mı) art arda karelerden şeritle yapılıyor ve cevap kareleriyle doğrulanıyor, ama gerçek eylem görüntüsüyle ölçülmedi (elde eylem içeren çekim yok).
+- Rutinler yalnız güvenlik günlüğünden sayılıyor; bellekteki kayıtlardan ("3 gündür sebze görmedim") rutin çıkarılmıyor.
 - Arka plan uyanmaları (bölge, ziyaret, yenileme) simülatörde tetiklenemedi; yalnız derlendi.
 
 ## Ölçüm

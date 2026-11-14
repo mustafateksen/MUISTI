@@ -1,4 +1,5 @@
 #if DEBUG
+import CoreLocation
 import Foundation
 
 /// Retrieval + answer evaluation on the simulator (DEBUG only).
@@ -15,6 +16,8 @@ enum EvalRunner {
         let q: String
         let expect: [String]
         let must: [String]?
+        /// Where the user stands while asking (latitude, longitude), for questions about "here".
+        var at: [Double]?
     }
 
     struct Outcome: Encodable {
@@ -42,14 +45,17 @@ enum EvalRunner {
         var outcomes: [Outcome] = []
         for c in cases {
             let negative = c.expect.isEmpty && c.must == nil
-            let result = await controller.queryEngine.ask(c.q, location: nil)
+            let fix = c.at.flatMap { $0.count == 2 ? LocationFix(CLLocation(latitude: $0[0], longitude: $0[1])) : nil }
+            let result = await controller.queryEngine.ask(c.q, location: fix,
+                                                          position: fix.map { String(format: "%.5f, %.5f", $0.latitude, $0.longitude) })
             let expected = Set(c.expect.compactMap { ids[$0] })
             let rank = result.ranked.firstIndex { group in group.contains { expected.contains($0) } }.map { $0 + 1 }
             let seen = result.label == .seen
             let answer = normalize(result.answer)
             let pass: Bool
             if negative {
-                pass = !seen
+                // Not seen, and no frame offered in its place.
+                pass = !seen && result.evidence.isEmpty
             } else {
                 let must = (c.must ?? []).map(normalize)
                 pass = seen && (must.isEmpty || must.contains { answer.contains($0) })

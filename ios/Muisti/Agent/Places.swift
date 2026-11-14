@@ -30,6 +30,32 @@ enum Places {
         .sorted { $0.location.distance(from: here) < $1.location.distance(from: here) }
     }
 
+    /// The area a place name stands for, for searching the memory by place: the spot the user
+    /// is at ("here"), one of their named places, or what Apple's geocoder knows by that name
+    /// (a city or district comes with its own extent). `maps` off: named places and "here" only.
+    static func area(_ name: String, known: [NamedPlace], here: LocationFix?, maps: Bool) async -> MemoryArea? {
+        let wanted = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !wanted.isEmpty else { return nil }
+        if wanted.caseInsensitiveCompare("here") == .orderedSame {
+            guard let here else { return nil }
+            return MemoryArea(name: "here", latitude: here.latitude, longitude: here.longitude,
+                              radius: MemoryArea.venueRadius + min(max(here.accuracy, 0), 100))
+        }
+        if let place = known.first(where: { $0.name.caseInsensitiveCompare(wanted) == .orderedSame }) {
+            return MemoryArea(name: place.name, latitude: place.latitude, longitude: place.longitude,
+                              radius: max(place.radius, MemoryArea.venueRadius))
+        }
+        guard maps else { return nil }
+        let found = await withTimeout(seconds: 2.5) { () -> MemoryArea? in
+            guard let mark = try await CLGeocoder().geocodeAddressString(wanted).first, let centre = mark.location?.coordinate,
+                  CLLocationCoordinate2DIsValid(centre) else { return nil }
+            // A city's region is its extent; a single address gets the reach of a venue.
+            let extent = (mark.region as? CLCircularRegion)?.radius ?? 0
+            return MemoryArea(name: wanted, latitude: centre.latitude, longitude: centre.longitude, radius: max(extent, 150))
+        }
+        return found ?? nil
+    }
+
     /// Compass bearing from one point to another, degrees.
     static func bearing(from: CLLocationCoordinate2D, to: CLLocationCoordinate2D) -> Double {
         let lat1 = from.latitude * .pi / 180, lat2 = to.latitude * .pi / 180

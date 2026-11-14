@@ -373,6 +373,7 @@ enum AgentEval {
            let files = try? FileManager.default.contentsOfDirectory(at: documents.appendingPathComponent("agentset"), includingPropertiesForKeys: nil) {
             let jpgs = files.filter { $0.pathExtension == "jpg" }
             var withheld = 0, privateCount = 0, passed = 0, ordinary = 0
+            PerceptionEngine.privatePause = 0   // unrelated photos one after another
             for file in jpgs {
                 guard let raw = try? Data(contentsOf: file) else { continue }
                 guard let image = ImageData.thumbnail(raw, maxPixel: 1280) else { continue }
@@ -425,6 +426,38 @@ enum AgentEval {
         await agent.tick()
         check("evening summary: made once at its hour", first == 1 && notes.all.count + box.all.count == 1, (notes.all + box.all).last ?? "nothing")
         agent.settings.digestHour = 20
+
+        // 13. Habits: something logged on most earlier mornings and not today is brought up by
+        // Muisti itself; once it is in today's log, nothing is said. (The log is made up here.)
+        await agent.store.deleteAll()
+        await agent.reload()
+        agent.settings.minGapMinutes = 0
+        let calendar = Calendar.current
+        let ten = calendar.date(bySettingHour: 10, minute: 30, second: 0, of: Date()) ?? Date()
+        func morning(_ daysAgo: Int, _ minute: Int) -> SafetyEvent {
+            let day = calendar.date(byAdding: .day, value: -daysAgo, to: calendar.startOfDay(for: ten)) ?? ten
+            return SafetyEvent(at: day.addingTimeInterval(Double(8 * 60 + minute) * 60), kind: .action, object: "medicine", value: "taken",
+                               confidence: nil, source: .vision, frameFile: nil)
+        }
+        let earlier = [morning(1, 10), morning(2, 25), morning(3, 5), morning(4, 32), morning(5, 18)]
+            + (1...5).map { d in SafetyEvent(at: morning(d, 50).at, kind: .state, object: "front door", value: "locked", confidence: nil, source: .vision, frameFile: nil) }
+        let doorToday = SafetyEvent(at: morning(0, 48).at, kind: .state, object: "front door", value: "locked", confidence: nil, source: .vision, frameFile: nil)
+        let missing = earlier + [doorToday]
+        agent.safetyEvents = { _ in missing }
+        let found = await agent.habits(now: ten)
+        check("habits: counted from the log (medicine missed today, door done)",
+              found.contains { $0.what == "medicine taken" && $0.overdue(at: ten) } && found.contains { $0.what == "front door locked" && !$0.overdue(at: ten) },
+              Habits.lines(found, now: ten).joined(separator: " | "))
+        box.clear(); notes.clear()
+        await agent.review(now: ten, forced: true)
+        let missedSaid = (box.all + notes.all).last
+        check("habits: a habit missed today is brought up unasked", missedSaid != nil, missedSaid ?? agent.lastJudgement)
+        let usual = earlier + [doorToday, morning(0, 20)]
+        agent.safetyEvents = { _ in usual }
+        box.clear(); notes.clear()
+        await agent.review(now: ten, forced: true)
+        check("habits: nothing is said when the day went as usual", (box.all + notes.all).isEmpty, (box.all + notes.all).last ?? "silent")
+        agent.safetyEvents = nil
 
         agent.settings.dailySpokenBudget = 40
         agent.settings.minGapMinutes = 2

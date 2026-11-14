@@ -1,8 +1,8 @@
 import AVFoundation
 import Speech
 
-/// Apple's newer on-device speech model (iOS 26 `SpeechAnalyzer` + `SpeechTranscriber`), for
-/// spoken questions. Clearly more accurate than `SFSpeechRecognizer` on published benchmarks
+/// Apple's newer on-device speech models (iOS 26 `SpeechAnalyzer`: `SpeechTranscriber` plus
+/// `DictationTranscriber` on the same audio, see `AnalyzerSpeechSession`), for spoken questions. Clearly more accurate than `SFSpeechRecognizer` on published benchmarks
 /// (LibriSpeech word error 2–5 % vs 9–16 %). Its language model is downloaded once by the
 /// system; until it is installed Muisti keeps using `SFSpeechRecognizer`.
 @available(iOS 26, *)
@@ -22,8 +22,8 @@ enum AnalyzerSpeech {
         guard SpeechTranscriber.isAvailable,
               let locale = await SpeechTranscriber.supportedLocale(equivalentTo: Locale(identifier: identifier))
         else { return nil }
-        let probe = makeTranscriber(locale)
-        switch await AssetInventory.status(forModules: [probe]) {
+        let probe = modules(locale)
+        switch await AssetInventory.status(forModules: probe) {
         case .installed:
             break
         case .supported, .downloading:
@@ -32,7 +32,7 @@ enum AnalyzerSpeech {
         default:
             return nil
         }
-        guard let format = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [probe]) else { return nil }
+        guard let format = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: probe) else { return nil }
         let ready = Prepared(locale: locale, format: format)
         await cache.set(identifier, ready)
         return ready
@@ -43,10 +43,21 @@ enum AnalyzerSpeech {
         SpeechTranscriber(locale: locale, transcriptionOptions: [], reportingOptions: [.volatileResults], attributeOptions: [])
     }
 
+    /// The dictation model on the same audio: it takes the names in memory as contextual
+    /// strings ("Otakaari", "Harry the K's"), which `SpeechTranscriber` ignores.
+    static func makeDictation(_ locale: Locale) -> DictationTranscriber {
+        DictationTranscriber(locale: locale, contentHints: [.shortForm], transcriptionOptions: [],
+                             reportingOptions: [.volatileResults, .frequentFinalization], attributeOptions: [])
+    }
+
+    static func modules(_ locale: Locale) -> [any SpeechModule] {
+        [makeTranscriber(locale), makeDictation(locale)]
+    }
+
     private static func install(_ locale: Locale) async {
         do {
             _ = try? await AssetInventory.reserve(locale: locale)
-            if let request = try await AssetInventory.assetInstallationRequest(supporting: [makeTranscriber(locale)]) {
+            if let request = try await AssetInventory.assetInstallationRequest(supporting: modules(locale)) {
                 try await request.downloadAndInstall()
                 Log.pipeline.info("speech model installed for \(locale.identifier, privacy: .public)")
             }

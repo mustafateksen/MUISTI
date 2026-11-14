@@ -18,6 +18,8 @@ enum EvalSwitch {
     static let noUnsure = has("--no-unsure")
     /// `--no-look-again`: skip the visual re-check of answers.
     static let noLookAgain = has("--no-look-again")
+    /// `--no-second-search`: no second search round for questions the first one could not answer.
+    static let noSecondSearch = has("--no-second-search")
     /// `--picture-cell=640`: cell size of the answer picture grid.
     static let pictureCell: CGFloat? = {
         #if DEBUG

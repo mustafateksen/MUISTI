@@ -33,41 +33,86 @@ final class AnalyzerSpeechSession: ListeningSession, @unchecked Sendable {
                onError: @escaping @Sendable (String) -> Void,
                onFrame: @escaping @Sendable (SpectrumAnalyzer.Frame) -> Void) throws {
         let transcriber = AnalyzerSpeech.makeTranscriber(prepared.locale)
+        let dictation = AnalyzerSpeech.makeDictation(prepared.locale)
         let (stream, continuation) = AsyncStream<AnalyzerInput>.makeStream(bufferingPolicy: .unbounded)
         input = continuation
         let context = AnalysisContext()
         context.contextualStrings[.general] = contextualStrings
-        analyzer = SpeechAnalyzer(inputSequence: stream, modules: [transcriber], analysisContext: context)
+        analyzer = SpeechAnalyzer(inputSequence: stream, modules: [transcriber, dictation], analysisContext: context)
 
-        let text = text, final = final
-        resultsTask = Task {
-            do {
-                for try await result in transcriber.results {
-                    let piece = String(result.text.characters)
-                    let full = text.withLock { t -> String in
-                        if result.isFinal {
-                            t.finalized = Self.join(t.finalized, piece)
-                            t.volatile = ""
-                        } else {
-                            t.volatile = piece
-                        }
-                        return Self.join(t.finalized, t.volatile)
-                    }
-                    onText(full, false)
+        // Two hearings of the same audio. While speaking the user sees the general model's text;
+        // at the end the dictation text wins if it caught more of the names in memory.
+        let speechText = text, dictationText = OSAllocatedUnfairLock(initialState: (finalized: "", volatile: ""))
+        let final = final, vocabulary = contextualStrings
+        let ended = OSAllocatedUnfairLock(initialState: 0)
+        @Sendable func finished() {
+            guard ended.withLock({ $0 += 1; return $0 }) == 2 else { return }
+            let general = speechText.withLock { Self.join($0.finalized, $0.volatile) }
+            let dictated = dictationText.withLock { Self.join($0.finalized, $0.volatile) }
+            let pick = Self.namesCaught(in: dictated, vocabulary) > Self.namesCaught(in: general, vocabulary) ? dictated : general
+            if pick == dictated, pick != general { Log.pipeline.info("speech: dictation hearing kept (names from memory)") }
+            final.deliver(pick.isEmpty ? nil : pick)
+        }
+        @Sendable func take(_ state: OSAllocatedUnfairLock<(finalized: String, volatile: String)>, _ piece: String, _ isFinal: Bool) -> String {
+            state.withLock { t -> String in
+                if isFinal {
+                    t.finalized = Self.join(t.finalized, piece)
+                    t.volatile = ""
+                } else {
+                    t.volatile = piece
                 }
-                final.deliver(text.withLock { Self.join($0.finalized, $0.volatile) })
-            } catch {
-                final.deliver(nil)
-                if !Task.isCancelled { onError(error.localizedDescription) }
+                return Self.join(t.finalized, t.volatile)
+            }
+        }
+        resultsTask = Task {
+            await withTaskGroup(of: Void.self) { group in
+                group.addTask {
+                    do {
+                        for try await result in transcriber.results {
+                            onText(take(speechText, String(result.text.characters), result.isFinal), false)
+                        }
+                    } catch {
+                        if !Task.isCancelled { onError(error.localizedDescription) }
+                    }
+                    finished()
+                }
+                group.addTask {
+                    do {
+                        for try await result in dictation.results {
+                            _ = take(dictationText, String(result.text.characters), result.isFinal)
+                        }
+                    } catch {}
+                    finished()
+                }
             }
         }
 
         let feeder = Feeder(target: prepared.format, continuation: continuation)
         let analyzer = SpectrumAnalyzer()
+        // While the user is audibly speaking, repeat the current text: the listener restarts
+        // its end-of-question timer on every update, so it only ends after real silence, not
+        // when the model goes quiet for a few seconds before finalising a phrase.
+        let activity = VoiceActivity()
+        let lastBeat = OSAllocatedUnfairLock(initialState: Date.distantPast)
+        let heartbeat: @Sendable (AVAudioPCMBuffer) -> Void = { buffer in
+            guard activity.isVoice(buffer) else { return }
+            let now = Date()
+            guard lastBeat.withLock({ last in
+                guard now.timeIntervalSince(last) > 0.25 else { return false }
+                last = now
+                return true
+            }) else { return }
+            // Only once words have been heard: before that a click or a breath must not swap
+            // the "nothing said yet" wait for the short end-of-question one.
+            let current = speechText.withLock { Self.join($0.finalized, $0.volatile) }
+            guard !current.isEmpty else { return }
+            onText(current, false)
+        }
         switch source {
         case .glasses(let tap):
             tap.setConsumer { buffer in
                 feeder.feed(buffer)
+                heartbeat(buffer)
                 if let frame = analyzer.process(buffer) { onFrame(frame) }
             }
         case .microphone:
@@ -80,6 +125,7 @@ final class AnalyzerSpeechSession: ListeningSession, @unchecked Sendable {
             node.removeTap(onBus: 0)
             node.installTap(onBus: 0, bufferSize: 1024, format: nil) { @Sendable buffer, _ in
                 feeder.feed(buffer)
+                heartbeat(buffer)
                 if let frame = analyzer.process(buffer) { onFrame(frame) }
             }
             audioEngine.prepare()
@@ -113,6 +159,15 @@ final class AnalyzerSpeechSession: ListeningSession, @unchecked Sendable {
             audioEngine.inputNode.removeTap(onBus: 0)
             audioEngine.stop()
         }
+    }
+
+    /// How many of the names in memory a hearing contains (case and accents ignored).
+    private static func namesCaught(in text: String, _ names: [String]) -> Int {
+        func fold(_ s: String) -> String {
+            s.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil).replacingOccurrences(of: "’", with: "'")
+        }
+        let heard = fold(text)
+        return names.filter { $0.count >= 3 && heard.contains(fold($0)) }.count
     }
 
     private static func join(_ a: String, _ b: String) -> String {

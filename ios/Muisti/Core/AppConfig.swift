@@ -59,21 +59,21 @@ enum StillQuality: String, Codable, Sendable, CaseIterable, Identifiable {
 
 /// Tunables for the adaptive scheduler. Distances in metres, times in seconds.
 struct AdaptiveTuning: Codable, Sendable, Equatable {
-    var minInterval: Double = 1            // never faster than this (stream frames arrive at once)
-    var maxPerMinute: Int = 60
+    var minInterval: Double = 0.1          // up to ten frames a second when the view keeps changing
+    var maxPerMinute: Int = 600
     var walkingDistance: Double = 8        // new still every ~8 m walked
-    var walkingMaxInterval: Double = 1.5   // ...or every 1.5 s while walking
+    var walkingMaxInterval: Double = 0.5   // ...or every 0.5 s while walking
     var fastDistance: Double = 25          // cycling / vehicle
-    var fastMaxInterval: Double = 1.5
+    var fastMaxInterval: Double = 0.5
     var headingChange: Double = 35         // degrees; GPS course or phone yaw
     var viewChange: Double = 25            // degrees the head (glasses IMU) turned since the last still
     var lookSettle: Double = 0.6           // ...and has held still this long: looking at something new
     var headSteadyRate: Double = 0.35      // rad/s; below this the head counts as still
     var headWalkingEnergy: Double = 0.06   // g RMS of head acceleration; above this = walking
     var dwellSeconds: Double = 1.2         // stopped this long after moving → one still
-    var stationaryRefresh: Double = 3      // standing still: a refresh this often
-    var stationaryMaxStills: Int = 12      // ...then 2.5× slower until the view or place changes
-    var unknownActivityInterval: Double = 2 // no motion data at all: plain timer
+    var stationaryRefresh: Double = 0.3    // standing still: a look this often (an unchanged view is dropped before any reading)
+    var stationaryMaxStills: Int = 60      // ...then 2.5× slower until the view or place changes
+    var unknownActivityInterval: Double = 0.3 // no motion data at all: plain timer
     var blurGateMaxWait: Double = 1.2      // wait at most this long for a steady moment
     var blurAccelThreshold: Double = 0.18  // g, user acceleration magnitude
     var blurRotationThreshold: Double = 1.2 // rad/s (phone); the head uses half of it
@@ -180,6 +180,12 @@ final class AppConfig {
         // 12 MP stills crawl over the Bluetooth link (10–18 s each, field 14 Nov) and the
         // keyframe is cut to 1536 px anyway: default to a smaller, faster still.
         // Capture intervals were shortened (real-time stream frames): drop stored tuning once.
+        // 14 Nov: the fixed gaps between frames went (up to 10 a second, unchanged views dropped early).
+        if !defaults.bool(forKey: "migratedTuning5") {
+            defaults.set(true, forKey: "migratedTuning5")
+            defaults.set(true, forKey: "migratedTuning4")
+            defaults.removeObject(forKey: "tuning")
+        }
         if !defaults.bool(forKey: "migratedTuning4") {
             defaults.set(true, forKey: "migratedTuning4")
             defaults.set(true, forKey: "migratedTuning3")

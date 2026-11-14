@@ -65,7 +65,10 @@ final class VoiceAssistant {
 
     /// End of a question = this long without a new word. The search already starts
     /// `prepareAfter` into the pause, so the wait is not lost time.
-    static let endOfQuestionSilence = 1.2
+    /// 1.2 s cut people off in real use (14 Nov, on the phone: "What about 2nd floor? What",
+    /// "Do you know" — a breath or an "uh" in the middle of a sentence): back to 1.8 s. The
+    /// search already starts 0.45 s into the pause, so most of the wait is not lost.
+    static let endOfQuestionSilence = 1.8
     static let prepareAfter = 0.45
 
     init(engine: QueryEngine, location: LocationProvider) {
@@ -110,7 +113,18 @@ final class VoiceAssistant {
                 Log.pipeline.info("listening on the glasses mic (camera stream audio)")
                 session = modern?(.glasses(tap), names) ?? TapSpeechSession(recognizer: recognizer, contextualStrings: names, tap: tap)
             } else {
-                try Self.activateAudioSession(glassesMic: prefersGlassesMic())
+                let wantsDevice = prefersGlassesMic()
+                try Self.activateAudioSession(glassesMic: wantsDevice)
+                // A headset is connected (the glasses, earbuds): its microphone is the one to
+                // listen on. The switch to it takes a moment; starting the recogniser before the
+                // route has changed leaves it on the phone's microphone, or with no sound at all.
+                let audio = AVAudioSession.sharedInstance()
+                if wantsDevice, audio.availableInputs?.contains(where: { $0.portType == .bluetoothHFP }) == true,
+                   !audio.currentRoute.inputs.contains(where: { $0.portType == .bluetoothHFP }) {
+                    _ = await Self.prepareGlassesMic()
+                }
+                Log.pipeline.info("listening on \(audio.currentRoute.inputs.first?.portName ?? "no input", privacy: .public)")
+                Trace.note("listening on \(audio.currentRoute.inputs.first?.portName ?? "no input")")
                 session = modern?(.microphone, names) ?? SpeechSession(recognizer: recognizer, contextualStrings: names)
             }
             Log.pipeline.info("speech engine: \(modern == nil ? "SFSpeechRecognizer" : "SpeechAnalyzer", privacy: .public) (\(self.localeIdentifier, privacy: .public))")
@@ -126,7 +140,7 @@ final class VoiceAssistant {
             turn.mark("mic open")
             armSilenceTimer(after: 6)   // nothing said within 6 s → give up quietly
             maxTask = Task { [weak self] in
-                try? await Task.sleep(for: .seconds(15))
+                try? await Task.sleep(for: .seconds(25))
                 await self?.finishListening()
             }
         } catch {

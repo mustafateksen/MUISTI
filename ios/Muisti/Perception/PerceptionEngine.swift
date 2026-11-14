@@ -4,6 +4,7 @@ import CoreLocation
 import Foundation
 import ImageIO
 import Vision
+import os
 
 /// A place where nothing is recorded (home, work…). Plan: "no-record" zones.
 struct NoRecordZone: Codable, Sendable, Identifiable, Equatable {
@@ -55,6 +56,9 @@ actor PerceptionEngine {
     var tuning = Tuning()
     var zones: [NoRecordZone] = []
     private var recentHashes: [(hash: UInt64, at: Date, text: String, memoryId: Int64?)] = []
+    /// Every view that was read in the last few seconds, kept or not (a view with no text, a
+    /// repeat of a sign): the same view again is not read again.
+    private var justRead: [(hash: UInt64, at: Date)] = []
     private var lastTextlessKeep: Date?
     private let context = CIContext(options: [.cacheIntermediates: false])
 
@@ -75,9 +79,7 @@ actor PerceptionEngine {
         if let lat = frame.latitude, let lon = frame.longitude, zones.contains(where: { $0.contains(latitude: lat, longitude: lon) }) {
             return .drop(.noRecordZone)
         }
-        guard let analysis = ImageData.thumbnail(frame.jpeg, maxPixel: 512),
-              let ocrImage = ImageData.thumbnail(frame.jpeg, maxPixel: tuning.ocrMaxPixel)
-        else { return .drop(.unreadable) }
+        guard let analysis = ImageData.thumbnail(frame.jpeg, maxPixel: 512) else { return .drop(.unreadable) }
 
         // Sharpness first: cheapest way to drop motion-blurred frames.
         let sharpness = Self.laplacianVariance(analysis)
@@ -90,6 +92,15 @@ actor PerceptionEngine {
         let hash = Self.dHash(analysis)
         var replaces: Int64?
         recentHashes.removeAll { frame.capturedAt.timeIntervalSince($0.at) > tuning.duplicateWindow }
+        // The very same view as a moment ago: dropped here, before any text is read. Frames may
+        // come up to ten a second; while nothing in front of the camera changes they cost a
+        // small picture and a hash, and the first frame that differs is read at once.
+        justRead.removeAll { abs(frame.capturedAt.timeIntervalSince($0.at)) > 4 }
+        if frame.trigger != .manual, justRead.contains(where: { ($0.hash ^ hash).nonzeroBitCount <= 2 }) {
+            return .drop(.duplicate)
+        }
+        justRead.append((hash, frame.capturedAt))
+        guard let ocrImage = ImageData.thumbnail(frame.jpeg, maxPixel: tuning.ocrMaxPixel) else { return .drop(.unreadable) }
 
         // OCR and head detection in parallel on the same ~2400 px copy (12 MP is slower and not
         // more legible for Vision). Heads are only used if the frame is kept below.
@@ -102,6 +113,8 @@ actor PerceptionEngine {
         let loose = candidates.filter { !Self.isHyphenatedPlate(lines[$0].text) }
         let plateIndices = Set(candidates.filter { Self.isHyphenatedPlate(lines[$0].text) })
             .union(loose.isEmpty || !Self.showsVehicle(analysis) ? [] : loose)
+            // A card or bank account number is masked and left out of the text the same way.
+            .union(lines.indices.filter { Self.isCardOrAccountNumber(lines[$0].text) })
         let plates = plateIndices.sorted().map { lines[$0] }
         let textLines = lines.indices.filter { !plateIndices.contains($0) }.map { lines[$0] }
         let ocrText = Self.visualRows(textLines).joined(separator: "\n")
@@ -186,12 +199,27 @@ actor PerceptionEngine {
             default: box.isPrivate = showsPrivateScene(image)
             }
         }
+        let now = Date()
         if box.isPrivate {
             Trace.note("frame withheld: private scene")
+            privateUntil.withLock { $0 = now.addingTimeInterval(privatePause) }
+            return ([], nil)
+        }
+        // Just after a private scene: the classifier misses some angles of the same room (3 of
+        // 11 bathroom photos on 14 Nov), so nothing is kept until the room has been out of
+        // view for a while. Every private frame starts the wait again.
+        if now < privateUntil.withLock({ $0 }) {
+            Trace.note("frame withheld: just after a private scene")
             return ([], nil)
         }
         return (box.lines, box.heads)
     }
+
+    /// How long after a private scene nothing is kept (seconds; 0 switches the wait off).
+    nonisolated(unsafe) static var privatePause: TimeInterval = 20
+    private static let privateUntil = OSAllocatedUnfairLock(initialState: Date.distantPast)
+    /// Ends the wait now (tests feed unrelated photos one after another).
+    static func endPrivatePause() { privateUntil.withLock { $0 = .distantPast } }
 
     /// A bathroom, toilet or shower in view, by the phone's own scene classifier (the idea is
     /// the Android side's privacy gate; here with Vision instead of a bundled model). Threshold
@@ -214,9 +242,43 @@ actor PerceptionEngine {
         return (request.results ?? []).contains { privateSceneLabels.contains($0.identifier) && $0.confidence >= 0.40 }
     }
 
+    /// Also a cash machine or a card terminal's keypad in view (a PIN being typed): 4 of 4 ATM
+    /// photos scored 0.61–0.98 and payment terminals 0.42–0.75 on "keypad"; the highest ordinary
+    /// photo was 0.17. Passports and bare cards are not reliably recognised by this classifier
+    /// (0 of 4, 1 of 4): their numbers are masked from the text instead (`isCardOrAccountNumber`).
     private static let privateSceneLabels: Set<String> = [
         "bathroom_room", "bathroom", "bath", "shower", "toilet_seat", "bathrobe", "swimsuit", "sunbathing",
+        "atm", "keypad",
     ]
+
+    /// A payment card number (13–19 digits passing the Luhn check) or an IBAN (passing its
+    /// mod-97 check), however it is spaced. Such a line is masked in the picture like a number
+    /// plate and never stored as text. The checks make an accidental match of an ordinary
+    /// number unlikely (one in ten for Luhn at that length, one in 97 for an IBAN-shaped text).
+    static func isCardOrAccountNumber(_ text: String) -> Bool {
+        let compact = text.uppercased().filter { $0.isLetter || $0.isNumber }
+        // Card: digits only (spaces and dashes allowed in between).
+        let stripped = text.filter { !$0.isWhitespace && $0 != "-" }
+        if (13...19).contains(stripped.count), stripped.allSatisfy(\.isNumber) {
+            var sum = 0
+            for (index, character) in stripped.reversed().enumerated() {
+                guard let digit = character.wholeNumberValue else { return false }
+                let doubled = index % 2 == 1 ? digit * 2 : digit
+                sum += doubled > 9 ? doubled - 9 : doubled
+            }
+            if sum % 10 == 0, Set(stripped).count > 1 { return true }
+        }
+        // IBAN: two letters, two check digits, then 11–30 letters or digits; mod 97 must be 1.
+        let characters = Array(compact)
+        guard (15...34).contains(characters.count), characters[0].isLetter, characters[1].isLetter,
+              characters[2].isNumber, characters[3].isNumber, compact.allSatisfy({ $0.isASCII }) else { return false }
+        var remainder = 0
+        for character in characters[4...] + characters[..<4] {
+            guard let value = character.isNumber ? character.wholeNumberValue : character.asciiValue.map({ Int($0) - 55 }) else { return false }
+            for digit in String(value) { remainder = (remainder * 10 + (digit.wholeNumberValue ?? 0)) % 97 }
+        }
+        return remainder == 1
+    }
 
     /// The OCR lines and head boxes of the frames just analysed, so the safety check and the
     /// live look use the memory pipeline's reading of the same frame instead of running text

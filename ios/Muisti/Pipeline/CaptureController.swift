@@ -193,8 +193,13 @@ final class CaptureController {
             },
             frames: { ids in await safety.frames(forEvents: ids) }
         )
+        agent.safetyContext = { await safety.promptContext() }
+        agent.safetyEvents = { since in await safetyStore.events(since: since, limit: 3000) }
         let engine = queryEngine
-        Task { await engine.setSafety(bridge) }
+        Task {
+            await engine.setSafety(bridge)
+            await engine.setPlaceResolver { name, here in await agent.area(named: name, here: here) }
+        }
 
         let (pipelineStream, pipelineInput) = AsyncStream.makeStream(of: PipelineItem.self, bufferingPolicy: .bufferingNewest(6))
         self.pipelineInput = pipelineInput
@@ -598,7 +603,7 @@ final class CaptureController {
     private func startSchedulerLoop() {
         schedulerTask = Task { [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(for: .milliseconds(500))
+                try? await Task.sleep(for: .milliseconds(100))   // the scheduler may take up to ten frames a second
                 guard let self, self.isRunning else { return }
                 await self.tick()
             }

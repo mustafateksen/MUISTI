@@ -12,10 +12,10 @@ Commands:
   state                         what Muisti keeps and where things stand (JSON)
   ask "<question>"              ask like a user; prints the answer, label, evidence
   frame <photo.jpg> [--no-store]  show one photo as what the glasses see now
-  video <file.mp4|.mov> [--step 1.0] [--speed 4] [--track track.json] [--motion walking] [--upload]
+  video <file.mp4|.mov> [--step 1.0] [--speed 4] [--track track.json] [--motion walking]
                                 play a video as the glasses' view (a frame every STEP s of the
                                 video, SPEED times faster than real time; 0 = as fast as possible)
-                                (the file is uploaded automatically when the app is not on this Mac)
+                                The file is uploaded to the app.
   evidence <record id> <out.jpg>  save the stored (blurred) frame of a memory record
   events [--since N] [--all]    what Muisti said or kept to itself since entry N
   wait [--timeout 180]          until the video is fed and every frame is processed
@@ -23,6 +23,17 @@ Commands:
   motion <stationary|walking|running|cycling|automotive>
   reply <yes|no|not_now>        answer Muisti's pending question
   tick                          let the agent look at the clock and position now
+  chat                          the conversation as the app shows it
+  chat-clear                    start a new conversation
+  memories [--limit 30]         the newest memories (id, title, time, text)
+  delete-memory <id>            delete one memory
+  forget <minutes>              forget the last N minutes
+  intent <id> done|remove       finish or remove a reminder (ids are in `state`)
+  rule <id> on|off|delete       a safety rule (ids are in `state`)
+  settings [key=value ...]      assistant switches: assistant, noticing, navigation, people, map_search,
+                                evening_summary, safety_auto (true/false); spoken_per_day, minutes_apart,
+                                quiet_from, quiet_to (numbers). Without arguments: prints them
+  screen ask|memory|safety|notes|back   what the phone shows (for a screen recording)
   reset --yes                   delete all memories, rules and notes in the app
 """
 import json, os, sys, urllib.request, urllib.error
@@ -110,10 +121,14 @@ def main():
         speed = option(args, "--speed", 4.0, float)
         track_file = option(args, "--track")
         motion = option(args, "--motion")
-        upload = flag(args, "--upload") or not any(h in BASE for h in ("127.0.0.1", "localhost"))
+        flag(args, "--upload")
+        upload = not flag(args, "--by-path")   # by path only works when the app can read this Mac's files
         path = os.path.abspath(args[0])
         if upload:
+            import urllib.parse
             query = f"?step={step}&speed={speed}" + (f"&motion={motion}" if motion else "")
+            if track_file:
+                query += "&track=" + urllib.parse.quote(json.dumps(json.load(open(track_file))))
             with open(path, "rb") as handle:
                 kind = "video/quicktime" if path.lower().endswith(".mov") else "video/mp4"
                 show(call("POST", "/video" + query, raw=handle.read(), content_type=kind))
@@ -158,7 +173,45 @@ def main():
     elif command == "reply":
         show(call("POST", "/reply", {"answer": args[0]}))
     elif command == "tick":
-        show(call("POST", "/tick", {}))
+        show(call("POST", "/tick", {"review": flag(args, "--review")}))
+    elif command == "log":
+        body = {"object": args[0], "value": args[1], "kind": option(args, "--kind", "action")}
+        at = option(args, "--at", None)
+        if at:
+            body["at"] = at
+        show(call("POST", "/log", body))
+    elif command == "habits":
+        for line in call("GET", "/habits").get("habits", []):
+            print(line)
+    elif command == "chat":
+        for turn in call("GET", "/chat").get("turns", []):
+            who = "Muisti (by itself)" if turn.get("by_muisti") else "you"
+            if not turn.get("by_muisti"):
+                print(f"you: {turn['question']}")
+            print(f"{'Muisti' if not turn.get('by_muisti') else who}: {turn['answer']}")
+    elif command == "chat-clear":
+        show(call("POST", "/chat/clear", {}))
+    elif command == "memories":
+        limit = option(args, "--limit", 30, int)
+        for m in call("GET", f"/memories?limit={limit}").get("memories", []):
+            where = f" · {m['street']}" if m.get("street") else ""
+            print(f"#{m['id']} {m['seen_at'][11:19]} {m['title']}{where}")
+    elif command == "delete-memory":
+        show(call("POST", "/memory/delete", {"id": int(args[0])}))
+    elif command == "forget":
+        show(call("POST", "/forget", {"minutes": int(args[0])}))
+    elif command == "intent":
+        show(call("POST", "/intent", {"id": args[0], "action": args[1] if len(args) > 1 else "done"}))
+    elif command == "rule":
+        show(call("POST", "/rule", {"id": args[0], "action": args[1] if len(args) > 1 else "on"}))
+    elif command == "settings":
+        body = {}
+        for pair in args:
+            key, _, value = pair.partition("=")
+            body[key] = True if value in ("true", "on", "1") else False if value in ("false", "off", "0") else float(value)
+        show(call("POST", "/settings", body))
+    elif command == "screen":
+        show(call("POST", "/screen", {"show": args[0]}))
     elif command == "reset":
         if "--yes" not in args:
             sys.exit("this deletes everything in the app; add --yes")

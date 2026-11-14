@@ -149,6 +149,15 @@ Telefonda (gözlükle) `silence→sound` ölçümü henüz yapılmadı.
 - **Etkinlik ve bağlantı düğmeleri:** anı ekranında tarih, web adresi, e-posta ve adres de algılanır (`UI/Memory/MemoryDetections.swift`).
 - **Ajan:** kendiliğinden devreye giren taraf ayrı belgede: `AGENT.md`.
 
+## 7c. Yer süzgeci, ikinci arama, "en yakın sonuç"un kaldırılması (14 Kasım gece)
+
+- **Yer süzgeci:** `search_memory` aracı `place` alır: kullanıcının söylediği şehir, semt, sokak, bina ya da mekân adı, Muisti'nin tuttuğu bir yer ("ev", "iş") ya da "here" (şu an bulunulan nokta). `Places.area` adı bir daireye çevirir: önce adlı yerler, sonra Apple'ın geocoder'ı (şehir kendi genişliğiyle gelir; tek adres 150 m). Arama yalnız o dairede çekilmiş kayıtlarda yapılır (`MemorySearch.within`; GPS'siz kayıtlar, saklanan çevre/sokak metninde yerin adı geçiyorsa sayılır). Orada hiç kayıt yoksa cevap modeline bu açıkça yazılır ve cevap "orada görmedim" olur; başka yerde görülen şey söylenmez. Yer bulunamazsa süzgeç uygulanmaz, iz satırına yazılır.
+- **Aynı mekân ağırlığı:** soru sorulurken konum biliniyorsa, o noktanın 80 m çevresinde çekilmiş kayıtlar birleştirme puanında 1,3 katı sayılır ve sıralayıcı puanına +0,75 eklenir (`MemorySearch.here`, `QueryEngine.sameVenueBonus`). Süzgeç değildir; yalnız sırayı etkiler.
+- **İkinci arama turu:** ilk cevap "görmedim" ise model bir kez daha sorulur (`TurnTools.againTools`: başka sözcüklerle `search_memory` ya da `give_up`). Yeni arama ilk turda gösterilmemiş bir kayıt getirirse cevap yeniden üretilir; getirmezse ilk cevap kalır. Kullanıcının söylediği yer ve zaman aralığı ikinci turda değiştirilemez. `--no-second-search` ile kapatılır.
+- **"En yakın sonuç" yok:** "görmedim" cevabıyla birlikte artık kare gösterilmez (önceden sıralamanın ilk karesi "en yakın eşleşme" diye gösteriliyordu); cevap istemi de yerine başka bir şey önermemeyi söyler. Kartın etiketi "Görülmedi" / "Emin değilim".
+- **"Yaptım mı?" doğrulaması:** eylem görülen güvenlik bakışında o anın önceki kareleri (en çok 7, maskelenmiş) kanıt karesinin yanına kaydedilir (`SafetyStore.saveStrip`). Cevap bir günlük kaydına dayanıyorsa bu kareler sırayla modele bir kez daha gösterilir (`QueryEngine.doneCheck`, çoklu resim; uç 400 verirse 4'lük tek sayfa). Kareler iddiayı göstermiyorsa cevap, karelerin gösterdiği şeye çevrilir ("kapıda olduğunu gördüm ama kilitlediğini görmedim") ve "emin değilim" etiketi alır. Kareler cevapla birlikte kanıt olarak gösterilir. Kullanıcının sözle bildirdiği kayıtların karesi yoktur, onlar denetlenmez.
+- **Eylem şeridi 8 kare:** eller görünürken güvenlik bakışına son 12 saniyenin en çok 8 karesi ayrı resimler olarak gider; uç birden fazla resmi reddederse son 4 kare tek sayfada gönderilir.
+
 ## 7b. Yeni model uçları (14 Kasım akşamı)
 
 Ekibin kendi Verda kapsayıcıları (`NemotronClient.muistiChatBase`, `muistiRetrievalBase`): sohbet `…/muisti-nemotron/v1`, embedding `…/muisti-retrieval/v2/embed`, sıralama `…/muisti-retrieval/classify` (istek başına bir çift; hepsi aynı anda gönderilir). Tek anahtar ikisinde de geçer.

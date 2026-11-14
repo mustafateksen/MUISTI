@@ -242,11 +242,12 @@ enum MemoryPrompts {
     records show there; when the position is unknown, use the most recent records. "Area" on a \
     record is the named place, district and city it was seen in (and the floor, when the phone \
     knew it): use it for questions about a city, district or building. \
-    Prefer records that fit the reference; if none fits, say what you did see and when.
+    Only records that fit the reference answer such a question; if none fits, say that you \
+    saw none there or then.
     - "Type" is the specific kind of place or thing (cafe, pharmacy, dentist). Match the kind of \
     thing asked about. If the user asks about a restaurant and the records \
-    only show a café, do not call the café a restaurant: say you did not see a restaurant; you \
-    may mention the café as the closest thing you saw. If the user asks about a specific medium \
+    only show a café, do not call the café a restaurant: say you did not see a restaurant, and \
+    leave it at that. If the user asks about a specific medium \
     (poster, banner, screen) and it was on a different one, say so ("not on a poster, but a \
     screen showed ...").
     - Lines marked PICTURE describe an image shown on a banner, poster or screen, NOT a real \
@@ -306,8 +307,11 @@ enum MemoryPrompts {
     - "GORDUM" when the records answer the question, even partly: give that answer and mention \
     any limit in a few words ("the panel showed buttons up to 7"). Do not hide an answer the \
     records contain behind doubt.
-    - "BILMIYORUM" when they do not: say briefly that you did not see it, and optionally the \
-    closest thing you did see. A reply that says "no, I did not see it" is always BILMIYORUM.
+    - "BILMIYORUM" when they do not: the whole answer is one short sentence saying that you did \
+    not see it. Naming something else you saw in its place (a different kind of thing, or the \
+    same kind of thing in another place or at another time than asked) is a mistake: it is not \
+    an answer, and it reads like one. A reply \
+    that says "no, I did not see it" is always BILMIYORUM, with used_ids [] and quotes [].
     - Exception: questions answered from the Muisti Turva status or log are GORDUM even when \
     the answer is "I did not see you turn it off" or "you have not told me": that IS the \
     answer, read from the log.
@@ -330,7 +334,7 @@ enum MemoryPrompts {
     "inferred"), answer (the spoken reply), used_ids (ids of the records the reply relies on), \
     quotes (one short exact span copied from EACH record you used, one quote per record, never \
     merged), observations (string), unclear_reply (one short sentence in the question's \
-    language meaning "I didn't see that clearly; here is the closest frame."), event_ids (ids of \
+    language meaning "I'm not sure I saw that, so I'd rather not guess."), event_ids (ids of \
     the safety log events the reply relies on, else []), expects_reply (boolean).
 
     PICTURES: the message may come with one picture: a grid of the frames of the first records \
@@ -353,7 +357,8 @@ enum MemoryPrompts {
     something written there: that counts as found, label GORDUM, support "stated". After the \
     answer, in figures, list the numbers the answer says, each as read (it is in the live view) \
     or worked_out (you calculated it). A phone number, a time, a posted price, an address or a \
-    code is never worked out.
+    code is never worked out. If the user asks for a hint, a first step or a check of their own \
+    answer instead of the solution, give exactly that and keep the result to yourself.
     """
 
     /// The answer schema for such a turn: the same, plus `figures`.

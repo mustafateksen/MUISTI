@@ -78,6 +78,25 @@ struct MemorySearch: Sendable {
     /// Only records seen in this span ("yesterday", "this morning"), when the model named one.
     var from: Date?
     var to: Date?
+    /// Only records made inside this area ("in Istanbul", "at work", "here"), when the user named a place.
+    var within: MemoryArea?
+    /// Where the user is now: records made at this same spot weigh more (never a filter).
+    var here: MemoryArea?
+}
+
+/// A circle on the map: a city, a venue, a named place, or the spot the user stands on.
+struct MemoryArea: Sendable, Hashable {
+    var name: String
+    var latitude: Double
+    var longitude: Double
+    var radius: Double
+
+    /// The reach of "the same venue" around a GPS fix (indoor fixes drift by tens of metres).
+    static let venueRadius = 80.0
+
+    func contains(_ latitude: Double, _ longitude: Double) -> Bool {
+        MemoryStore.haversine(self.latitude, self.longitude, latitude, longitude) <= radius
+    }
 }
 
 /// Why a record was retrieved (for ranking, the debug trace and tests).
@@ -444,6 +463,12 @@ actor MemoryStore {
         if query.from != nil || query.to != nil {
             allowed = Set(ids(seenFrom: query.from ?? .distantPast, to: query.to ?? .distantFuture))
         }
+        // A place: likewise, only the records made there.
+        if let area = query.within {
+            let there = Set(ids(within: area))
+            allowed = allowed.map { $0.intersection(there) } ?? there
+            if allowed?.isEmpty == true { return [] }
+        }
         func inSpan(_ ids: [Int64]) -> [Int64] { allowed.map { span in ids.filter(span.contains) } ?? ids }
 
         let fts = inSpan(keywordRanking(query.keywords, limit: allowed == nil ? 80 : 400))
@@ -466,14 +491,41 @@ actor MemoryStore {
         }
 
         // In a span the newest records of the span stand in for "recent".
-        add(allowed == nil ? recentIDs(limit: 20) : Array(ids(seenFrom: query.from ?? .distantPast, to: query.to ?? .distantFuture).prefix(20)),
+        add(allowed == nil ? recentIDs(limit: 20)
+            : Array(ids(seenFrom: query.from ?? .distantPast, to: query.to ?? .distantFuture).filter { allowed?.contains($0) ?? true }.prefix(20)),
             weight: 0.5) { _, _ in }
+
+        // Standing in the same venue: what was seen right here weighs more among what matched.
+        if let here = query.here {
+            for id in ids(within: here, textMatch: false) where fused[id] != nil { fused[id]! *= 1.3 }
+        }
 
         let top = fused.sorted { $0.value > $1.value }.prefix(query.limit)
         let byID = Dictionary(records(top.map(\.key)).map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         return top.compactMap { id, score in
             byID[id].map { MemoryHit(record: $0, score: score, distanceMeters: nil, signals: signals[id] ?? RetrievalSignals()) }
         }
+    }
+
+    /// Records made inside an area, newest first. A record outside the circle (or without a GPS
+    /// fix) also counts when the place it was stored with (named place, district, city, street)
+    /// carries the area's name: a street is longer than the circle around the point the map
+    /// gives for it.
+    func ids(within area: MemoryArea, textMatch: Bool = true) -> [Int64] {
+        guard let stmt = prepare("SELECT id, lat, lon, area, street FROM memories ORDER BY seen_at DESC") else { return [] }
+        defer { sqlite3_finalize(stmt) }
+        let name = area.name.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
+        var out: [Int64] = []
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            if let lat = double(stmt, 1), let lon = double(stmt, 2), area.contains(lat, lon) {
+                out.append(sqlite3_column_int64(stmt, 0))
+            } else if textMatch, name.count >= 3 {
+                let stored = [text(stmt, 3), text(stmt, 4)].compactMap { $0 }.joined(separator: " ")
+                    .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
+                if stored.contains(name) { out.append(sqlite3_column_int64(stmt, 0)) }
+            }
+        }
+        return out
     }
 
     private func fuzzyRanking(_ keywords: [String]) -> [Int64] {

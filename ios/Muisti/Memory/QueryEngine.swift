@@ -101,6 +101,21 @@ actor QueryEngine {
 
     func setSafety(_ bridge: SafetyBridge) { safety = bridge }
 
+    /// Turns a place the user named ("Istanbul", "work", "here") into an area on the map.
+    private var placeResolver: (@Sendable (String, LocationFix?) async -> MemoryArea?)?
+    func setPlaceResolver(_ resolver: @escaping @Sendable (String, LocationFix?) async -> MemoryArea?) { placeResolver = resolver }
+    private var areas: [String: MemoryArea] = [:]
+
+    private func area(named name: String, here: LocationFix?) async -> MemoryArea? {
+        let key = name.lowercased()
+        if key != "here", let known = areas[key] { return known }
+        let found: MemoryArea?
+        if let placeResolver { found = await placeResolver(name, here) }
+        else { found = await Places.area(name, known: [], here: here, maps: true) }
+        if let found, key != "here" { areas[key] = found }
+        return found
+    }
+
     /// Groups shown to the answer model.
     static let answerContext = 8
     /// Episodes (with their frames) shown to the answer model.
@@ -111,6 +126,8 @@ actor QueryEngine {
     /// 80-question simulator set: questions about things never seen topped out at -2.94;
     /// wrongly refused answers had -2.04…-2.71.
     static let secondLookLogit = -2.8
+    /// Added to the reranker's logit for records made where the user is now (same venue).
+    static let sameVenueBonus = 0.75
     /// Groups sent to the reranker.
     static let rerankDepth = 30
     /// Longest "forget" the model may trigger in one request (one day).
@@ -128,6 +145,10 @@ actor QueryEngine {
         /// What the model decided this turn needs (nil: no decision, answer from memory).
         var decision: TurnTools.Decision?
         var trace: [String] = []
+        /// The place the search was limited to, and how many records were made there.
+        var place: (area: MemoryArea, records: Int)?
+        /// The words the memory was searched with.
+        var query: String?
     }
     private var prepared: (question: String, at: Date, task: Task<Retrieval, Never>)?
 
@@ -174,7 +195,7 @@ actor QueryEngine {
         // (one rerank per question: two at once took twice as long each on the 68-question set).
         let searchTask: Task<(groups: [MemoryHit], trace: [String]), Never>? = recent.isEmpty ? Task {
             let found = await findTask.value
-            return await self.reranked(found, query: trimmed)
+            return await self.reranked(found, query: trimmed, location: location)
         } : nil
         let (decision, decideMs) = await withTaskCancellationHandler { await decideTask.value } onCancel: {
             decideTask.cancel()
@@ -185,9 +206,10 @@ actor QueryEngine {
         switch decision {
         case .reply: out.trace.append("turn: reply \(decideMs) ms")
         case .look: out.trace.append("turn: tool look_now \(decideMs) ms")
-        case .search(let query, let from, let to):
+        case .search(let query, let from, let to, let place):
             out.trace.append("turn: tool search_memory \(decideMs) ms" + (query.map { " “\($0.prefix(60))”" } ?? "")
-                             + (from != nil || to != nil ? " span \(from.map(Cue.stamp) ?? "…")–\(to.map(Cue.stamp) ?? "now")" : ""))
+                             + (from != nil || to != nil ? " span \(from.map(Cue.stamp) ?? "…")–\(to.map(Cue.stamp) ?? "now")" : "")
+                             + (place.map { " place “\($0)”" } ?? ""))
         case .forget: out.trace.append("turn: tool forget_recent \(decideMs) ms")
         case .command(_, _, let tool), .agent(_, _, let tool): out.trace.append("turn: tool \(tool) \(decideMs) ms")
         case nil: out.trace.append("turn: no decision \(decideMs) ms")
@@ -210,14 +232,13 @@ actor QueryEngine {
         }
         // The user named a span of time: the search is done again inside it (what was started
         // before the model said so looked at everything).
-        if case .search(let own, let from, let to) = decision, from != nil || to != nil, !Task.isCancelled {
+        if case .search(let own, let from, let to, let place) = decision, from != nil || to != nil || place != nil, !Task.isCancelled {
             searchTask?.cancel()
-            let query = own ?? trimmed
-            let ranked = await reranked(await find(query, location: location, from: from, to: to), query: query)
-            out.groups = ranked.groups
-            out.trace += ranked.trace
+            findTask.cancel()
+            await narrowed(&out, query: own ?? trimmed, from: from, to: to, place: place, location: location)
             return out
         }
+        out.query = trimmed
         if let searchTask {
             let found = await withTaskCancellationHandler { await searchTask.value } onCancel: { searchTask.cancel() }
             out.groups = found.groups
@@ -229,19 +250,78 @@ actor QueryEngine {
         // judges all of it against that query.
         var found = await findTask.value
         var query = trimmed
-        if case .search(let own?, _, _) = decision, own.caseInsensitiveCompare(trimmed) != .orderedSame, !Task.isCancelled {
+        if case .search(let own?, _, _, _) = decision, own.caseInsensitiveCompare(trimmed) != .orderedSame, !Task.isCancelled {
             let second = await find(own, location: location)
             found = (Self.interleave(second.groups, found.groups), found.trace + second.trace.map { "query: " + $0 })
             query = own
+            out.query = own
         }
-        let ranked = await reranked(found, query: query)
+        let ranked = await reranked(found, query: query, location: location)
         out.groups = ranked.groups
         out.trace += ranked.trace
         return out
     }
 
+    /// A search inside what the user named: a span of time, a place, or both. A place that is
+    /// known and holds no record leaves the result empty (the answer is "nothing seen there",
+    /// not the nearest thing seen elsewhere); a place nobody can locate is searched by its name.
+    private func narrowed(_ out: inout Retrieval, query: String, from: Date?, to: Date?, place: String?, location: LocationFix?) async {
+        var within: MemoryArea?
+        if let place {
+            let began = ContinuousClock.now
+            within = await area(named: place, here: location)
+            if let within {
+                let count = await store.ids(within: within).count
+                out.place = (within, count)
+                out.trace.append("place “\(place)” r \(Int(within.radius)) m: \(count) records · \((ContinuousClock.now - began).milliseconds) ms")
+            } else {
+                out.trace.append("place “\(place)” not located")
+            }
+        }
+        out.query = query
+        let ranked = await reranked(await find(query, location: location, from: from, to: to, within: within), query: query, location: location)
+        out.groups = ranked.groups
+        out.trace += ranked.trace
+    }
+
+    /// The second round of a question the first search could not answer: the model picks
+    /// other words (or gives up), and the memory is searched once more.
+    private func again(_ question: String, first: Retrieval, conversation: [String], location: LocationFix?, now: Date) async -> Retrieval? {
+        let ai = self.ai
+        var span: (from: Date?, to: Date?) = (nil, nil)
+        if case .search(_, let from, let to, _) = first.decision { span = (from, to) }
+        let firstText = (first.query ?? question)
+            + (first.place.map { " (only in \($0.area.name))" } ?? "")
+            + (span.from != nil || span.to != nil ? " (only \(span.from.map(Cue.stamp) ?? "…")–\(span.to.map(Cue.stamp) ?? "now"))" : "")
+        let user = TurnTools.againUser(question: question, now: now, position: position, conversation: conversation, first: firstText,
+                                       found: first.groups.prefix(6).map { hit in
+                                           "- " + ([hit.record.kind, hit.record.name].compactMap { $0 }.joined(separator: " ")
+                                                   .nonEmpty ?? String(hit.record.ocrText.prefix(40)))
+                                       })
+        let began = ContinuousClock.now
+        let outcome = await hedged(ai, seconds: 4) { host in
+            try await ai.chatTools(system: TurnTools.againSystem, user: user, tools: TurnTools.againTools, route: host)
+        }
+        guard let turn = try? outcome.result.get(), turn.calls.contains(where: { $0.name == "search_memory" }),
+              case .search(let query?, let from, let to, let place) = TurnTools.decision(from: turn),
+              query.caseInsensitiveCompare(first.query ?? question) != .orderedSame else { return nil }
+        var out = Retrieval()
+        // What the user named stays, whatever the model sent this time.
+        let keptFrom = span.from ?? from, keptTo = span.to ?? to
+        var keptPlace = place
+        if case .search(_, _, _, let named?) = first.decision { keptPlace = named }
+        out.decision = .search(query, from: keptFrom, to: keptTo, place: keptPlace)
+        out.trace = ["second search \((ContinuousClock.now - began).milliseconds) ms “\(query.prefix(60))”"]
+        await narrowed(&out, query: query, from: keptFrom, to: keptTo, place: keptPlace, location: location)
+        // Nothing new came up: the first answer stands.
+        let seen = Set(first.groups.prefix(Self.answerContext).flatMap(\.allRecords).map(\.id))
+        guard out.groups.prefix(Self.answerContext).contains(where: { !$0.allRecords.contains { seen.contains($0.id) } }) else { return nil }
+        return out
+    }
+
     /// Query vector → search on the phone → one entry per sign/object.
-    private func find(_ text: String, location: LocationFix?, from: Date? = nil, to: Date? = nil) async -> (groups: [MemoryHit], trace: [String]) {
+    private func find(_ text: String, location: LocationFix?, from: Date? = nil, to: Date? = nil,
+                      within: MemoryArea? = nil) async -> (groups: [MemoryHit], trace: [String]) {
         var trace: [String] = []
         let ai = self.ai
         // 1. Query vector (~0.3–0.9 s; skipped when embeddings are off or slow).
@@ -255,6 +335,11 @@ actor QueryEngine {
         search.embedding = embedding
         search.from = from
         search.to = to
+        search.within = within
+        // Same venue as the user is in now: what was seen here weighs more.
+        if let location {
+            search.here = MemoryArea(name: "here", latitude: location.latitude, longitude: location.longitude, radius: MemoryArea.venueRadius)
+        }
         let hits = await store.search(search)
         // 3. One entry per sign/object: repeated and partial reads collapse into one group.
         let groups = Self.group(hits).map { Self.withDistance($0, from: location) }
@@ -263,7 +348,8 @@ actor QueryEngine {
     }
 
     /// 4. Cross-encoder rerank of the top groups. Slow (> 3 s) or failed: the fused order stays.
-    private func reranked(_ found: (groups: [MemoryHit], trace: [String]), query text: String) async -> (groups: [MemoryHit], trace: [String]) {
+    private func reranked(_ found: (groups: [MemoryHit], trace: [String]), query text: String,
+                          location: LocationFix? = nil) async -> (groups: [MemoryHit], trace: [String]) {
         var (groups, trace) = found
         let ai = self.ai
         guard !groups.isEmpty, await ai.rerankEnabled, !Task.isCancelled else { return (groups, trace) }
@@ -277,7 +363,11 @@ actor QueryEngine {
                 hit.signals.rerankLogit = logit
                 return hit
             }
-            reranked.sort { ($0.signals.rerankLogit ?? -.infinity) > ($1.signals.rerankLogit ?? -.infinity) }
+            // Seen in the venue the user is in now: counts for a little more than the same match elsewhere.
+            func weight(_ hit: MemoryHit) -> Double {
+                (hit.signals.rerankLogit ?? -.infinity) + ((hit.distanceMeters ?? .infinity) <= MemoryArea.venueRadius ? Self.sameVenueBonus : 0)
+            }
+            reranked.sort { weight($0) > weight($1) }
             groups = reranked + groups.dropFirst(head.count)
             trace.append("rerank \((ContinuousClock.now - rerankStarted).milliseconds) ms (\(await ai.rerankModelName.split(separator: "/").last ?? ""))")
         } else {
@@ -315,14 +405,21 @@ actor QueryEngine {
 
     func ask(_ question: String, location: LocationFix?, position: String? = nil, now: Date = Date()) async -> AskResult {
         self.position = position
-        let started = ContinuousClock.now
-        let trimmed = question.trimmingCharacters(in: .whitespacesAndNewlines)
-        var trace = Trace()
-        rankedForResult = []
-        lookedLive = false
         let ai = self.ai
         await ai.beginQuestion()
         defer { Task { await ai.endQuestion() } }
+        return await run(question, location: location, now: now, started: ContinuousClock.now, second: nil, trace: Trace())
+    }
+
+    /// One pass over a question. `second`: the retrieval of the second search round, when the
+    /// first pass found nothing that answers (at most one such round).
+    private func run(_ question: String, location: LocationFix?, now: Date, started: ContinuousClock.Instant,
+                     second: Retrieval?, trace earlier: Trace) async -> AskResult {
+        let trimmed = question.trimmingCharacters(in: .whitespacesAndNewlines)
+        var trace = earlier
+        rankedForResult = []
+        lookedLive = false
+        let ai = self.ai
         // Safety status/log (local, fast) is fetched while the question is embedded.
         let safetyBridge = safety
         async let safetyTextAsync = safetyBridge?.context() ?? ""
@@ -333,7 +430,9 @@ actor QueryEngine {
         // 1–4. Turn decision + query vector + search + rerank. Already running if the same
         // words were heard a moment ago while the user was still finishing (`prepare`).
         let retrieval: Retrieval
-        if let ready = prepared, ready.question == trimmed, now.timeIntervalSince(ready.at) < 20 {
+        if let second {
+            retrieval = second
+        } else if let ready = prepared, ready.question == trimmed, now.timeIntervalSince(ready.at) < 20 {
             retrieval = await ready.task.value
             trace.add("prepared while listening")
         } else {
@@ -506,6 +605,12 @@ actor QueryEngine {
                                             records: context.map { Self.describe($0, now: now, position: position[$0.record.id]) },
                                             episodes: episodeText, latest: latest, safety: safetyText, picture: pictureCaption,
                                             conversation: turns.map { "user: \($0.question)\nMuisti: \($0.answer)" + ($0.ids.isEmpty ? "" : " [relied on record ids \($0.ids.map(String.init).joined(separator: ", "))]") })
+        if let place = retrieval.place {
+            user += "\n\nPlace asked about: \(place.area.name). The search was limited to records made there: "
+                + (place.records == 0
+                   ? "there are none, the glasses recorded nothing in that place. The whole answer is one sentence saying that you did not see it there (BILMIYORUM, found false, used_ids []). Naming something seen in another place is a mistake here, however similar it is."
+                   : "\(place.records) record(s) were made there, so never say you have nothing from there. Every record listed under Records was made in \(place.area.name) (the phone's position says so, whatever the record's own text or street says), and only those; frames listed elsewhere in this message may be from other places and do not answer a question about \(place.area.name). If none of them shows what is asked, the whole answer is one sentence saying you did not see it there.")
+        }
         var image = picture.map { NemotronClient.ImagePart(jpeg: $0) }
         // Follow-up right after a look ("what does it say exactly?", "is it on?"): the same live
         // frame stays in view, as it would for a person still looking at it.
@@ -600,11 +705,30 @@ actor QueryEngine {
                 trace.add("second look")
             }
         }
-        if let doubted = await lookAgain(final, question: trimmed, hits: pool, trace: &trace) { final = doubted }
-        var answer = checked(final, question: trimmed, hits: pool, started: started, trace: trace, extra: safetyText)
-        if let ids = final.event_ids, !ids.isEmpty {
-            answer.safetyFrames = await safetyBridge?.frames(ids) ?? []
+        // Still not found: one more search with other words, if the model sees a way to ask.
+        // (Not for a place that holds no records at all: other words find nothing there either.)
+        let notFound = final.action == .answer
+            && (AnswerLabel(rawValue: final.label.uppercased()) != .seen || final.found == false)
+        if notFound, second == nil, !isLook, !lookedLive, retrieval.place?.records != 0, !EvalSwitch.noSecondSearch, !Task.isCancelled,
+           let next = await again(trimmed, first: retrieval, conversation: turns.map { "user: \($0.question)\nMuisti: \($0.answer)" },
+                                  location: location, now: now) {
+            next.trace.forEach { trace.add($0) }
+            var nextRound = next
+            nextRound.trace = []
+            return await run(question, location: location, now: now, started: started, second: nextRound, trace: trace)
+        } else if notFound, second == nil, !isLook, !lookedLive, retrieval.place?.records != 0, !EvalSwitch.noSecondSearch {
+            trace.add("second search: nothing new")
         }
+        if let doubted = await lookAgain(final, question: trimmed, hits: pool, trace: &trace) { final = doubted }
+        // "Did I lock it?": the frames of the log entry the answer rests on are looked at once
+        // more, in order, before a "yes" is said; they are shown with the answer as its proof.
+        var eventFrames: [URL] = []
+        if let ids = final.event_ids, !ids.isEmpty {
+            eventFrames = await safetyBridge?.frames(ids) ?? []
+            if let honest = await doneCheck(final, question: trimmed, frames: eventFrames, trace: &trace) { final = honest }
+        }
+        var answer = checked(final, question: trimmed, hits: pool, started: started, trace: trace, extra: safetyText)
+        answer.safetyFrames = eventFrames
         answer.expectsReply = final.expects_reply == true
         if lookedLive { answer.liveFrame = lastLive?.jpeg }
         return answer
@@ -654,6 +778,48 @@ actor QueryEngine {
         doubted.label = AnswerLabel.unknown.rawValue
         doubted.answer = draft.unclear_reply ?? Self.unclearText
         return doubted
+    }
+
+    /// An answer that says something was done or is so ("yes, you locked it at 08:14"), resting
+    /// on a log entry made from frames: those frames, in time order, are shown to the model with
+    /// the answer. When they show the object but not the thing claimed, the answer becomes what
+    /// they do show ("I saw you at the door, but not locking it"), labelled not sure. Entries
+    /// the user said themselves have no frames and are not checked. Slow or failed: the answer stays.
+    private func doneCheck(_ draft: AnswerDraft, question: String, frames: [URL], trace: inout Trace) async -> AnswerDraft? {
+        if EvalSwitch.noLookAgain { return nil }
+        guard draft.action == .answer, AnswerLabel(rawValue: draft.label.uppercased()) == .seen, draft.found != false else { return nil }
+        let jpegs = frames.suffix(8).compactMap { try? Data(contentsOf: $0) }
+        guard let last = jpegs.last else { return nil }
+        let ai = ai
+        let several = await ai.multiImageChat && jpegs.count > 1
+        let sheet = jpegs.count > 1 ? Self.montage(jpegs: Array(jpegs.suffix(4)), cell: 768) : last
+        let answerText = draft.answer
+        @Sendable func ask(separate: Bool) async throws -> DoneCheck.Verdict {
+            let shown = separate ? jpegs.count : min(jpegs.count, 4)
+            let user = "Question: \(question)\nAnswer: \(answerText)\n"
+                + (shown > 1 ? "The \(shown) photos are in time order, 1 (oldest) to \(shown) (the moment of the log entry)\(separate ? "" : ", numbered on one sheet")." : "One photo: the moment of the log entry.")
+            return try await ai.chatJSON(DoneCheck.Verdict.self, system: DoneCheck.system, user: user,
+                                         image: .init(jpeg: separate ? last : (sheet ?? last)),
+                                         earlierImages: separate ? jpegs.dropLast().map { NemotronClient.ImagePart(jpeg: $0) } : [],
+                                         jsonSchema: DoneCheck.schema, schemaName: "done_check", maxTokens: 160, temperature: 0)
+        }
+        let began = ContinuousClock.now
+        let verdict = await withTimeout(seconds: 5) { () -> DoneCheck.Verdict in
+            do { return try await ask(separate: several) } catch NemotronClient.NemotronError.http(400, _) where several {
+                return try await ask(separate: false)
+            }
+        }
+        guard let verdict else {
+            trace.add("done check: no verdict")
+            return nil
+        }
+        trace.add("done check (\(jpegs.count) frames): \(verdict.verdict) \((ContinuousClock.now - began).milliseconds) ms")
+        guard verdict.verdict == "not_shown", let reply = verdict.reply?.trimmingCharacters(in: .whitespacesAndNewlines), !reply.isEmpty else { return nil }
+        var honest = draft
+        honest.answer = reply
+        honest.label = AnswerLabel.unsure.rawValue
+        honest.support = .stated
+        return honest
     }
 
     /// The answer call, raced over both hosts of the same model (`hedged`): the host that is
@@ -932,7 +1098,7 @@ actor QueryEngine {
                          started: ContinuousClock.Instant, trace: Trace, extra: String = "") -> AskResult {
         // Answered from the live view and no record cited: the live frame is the evidence,
         // not whichever memory record ranked first.
-        let evidence = lookedLive && (draft.used_ids ?? []).isEmpty ? [] : Self.evidence(for: draft, in: hits)
+        var evidence = lookedLive && (draft.used_ids ?? []).isEmpty ? [] : Self.evidence(for: draft, in: hits)
         var label = AnswerLabel(rawValue: draft.label.uppercased()) ?? .unknown
         var answer = draft.answer
         var trace = trace
@@ -967,6 +1133,9 @@ actor QueryEngine {
             }
             trace.add("inferred → not sure")
         }
+        // Not seen: there is no frame to show for it. (Before, the best-ranked frame was shown
+        // as "the closest match", which read as an answer.)
+        if label == .unknown { evidence = [] }
         return result(question, answer, label, evidence, true, started, nil, draft.language, trace)
     }
 
@@ -987,10 +1156,10 @@ actor QueryEngine {
         let r = best.record
         let text = Self.mergedOCR(best).split(separator: "\n").prefix(3).joined(separator: ", ")
         let time = r.seenAt.formatted(date: .omitted, time: .shortened)
-        // Without the model there is no real answer: say so plainly, then the closest frame.
+        // Without the model there is no real answer: say so plainly, then what the search on the phone found.
         let answer = text.isEmpty
-            ? String(localized: "I couldn't reach Nemotron, so I can't answer this properly right now. The closest frame is from \(time).")
-            : String(localized: "I couldn't reach Nemotron, so I can't answer this properly right now. The closest thing I saw, at \(time), read: \(text).")
+            ? String(localized: "I couldn't reach Nemotron, so I can't answer this properly right now. A search on the phone found a frame from \(time).")
+            : String(localized: "I couldn't reach Nemotron, so I can't answer this properly right now. A search on the phone found this, seen at \(time): \(text).")
         return result(question, answer, .unknown, [best], false, started, note, nil, trace)
     }
 
@@ -1085,10 +1254,36 @@ actor QueryEngine {
 
     // App UI strings for the paths where the model did not answer.
     static let emptyText = String(localized: "I couldn't find anything about that in memory.")
-    static let unclearText = String(localized: "I didn't see that clearly; here's the closest frame.")
+    static let unclearText = String(localized: "I'm not sure I saw that, so I'd rather not guess.")
 }
 
 /// The visual re-check's prompt (see `QueryEngine.lookAgain`).
+enum DoneCheck {
+    static let system = """
+    You check an answer Muisti gave from its log against the photos that log entry was made \
+    from (the user's camera glasses, faces blurred, in time order; the last photo is the moment \
+    of the entry). The answer may say that the user did something or that a thing is in some \
+    state (a door locked, a stove turned off, a pill taken, keys left on a table). verdict: \
+    "shown" when the photos show it, either the action happening or the state it left behind; \
+    "not_shown" when the photos show the thing or the user at it, but not what the answer says \
+    was done or is so; "not_claimed" when the answer claims no such thing (it says it was not \
+    seen, or it is about a rule, a reminder or something the user said). Clock times, dates and \
+    places in the answer come from the phone, not from the photos: leave them out of the check. \
+    For not_shown, reply is one honest spoken sentence in the language of the answer: what the \
+    photos do show, and that the thing itself was not seen. Otherwise reply is "". Output one \
+    JSON object: {"verdict": "shown" | "not_shown" | "not_claimed", "reply": string}.
+    """
+
+    static let schema = #"""
+    {"type":"object","properties":{"verdict":{"type":"string","enum":["shown","not_shown","not_claimed"]},"reply":{"type":"string"}},"required":["verdict","reply"]}
+    """#
+
+    struct Verdict: Decodable, Sendable {
+        let verdict: String
+        let reply: String?
+    }
+}
+
 enum LookAgain {
     static let system = """
     You check one claim against a photo from the user's camera glasses, or a sheet of a few \
@@ -1111,4 +1306,9 @@ enum LookAgain {
         let confirmed: Bool
         let seen: String
     }
+}
+
+private extension String {
+    /// Nil when empty.
+    var nonEmpty: String? { isEmpty ? nil : self }
 }

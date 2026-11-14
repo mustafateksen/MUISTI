@@ -70,7 +70,10 @@ final class SafetyMonitor {
     /// while the user's hands are in view, the ones just before it go along as a time strip, so
     /// the model can see something being done (a knob turned, a pill taken), not just a state.
     @ObservationIgnored private var recentFrames: [(jpeg: Data, at: Date)] = []
-    static let stripFrames = 4
+    /// Frames of one moment sent together: 8 as pictures of their own where the host takes
+    /// several, the last 4 on one sheet elsewhere.
+    static let stripFrames = 8
+    static let sheetFrames = 4
     static let stripSeconds: TimeInterval = 12
     @ObservationIgnored private var lastSent: Date?
     @ObservationIgnored private var sentTimes: [Date] = []
@@ -214,7 +217,7 @@ final class SafetyMonitor {
                 let before = await Task.detached(priority: .utility) {
                     earlier.compactMap { SafetyFrame.prepare($0.jpeg, maxPixel: 768)?.jpeg }
                 }.value
-                if !before.isEmpty, let picture = QueryEngine.montage(jpegs: before + [copy.jpeg], cell: 768) {
+                if !before.isEmpty, let picture = QueryEngine.montage(jpegs: before.suffix(Self.sheetFrames - 1) + [copy.jpeg], cell: 768) {
                     strip = (picture, before, before.count + 1, max(1, Int(frame.capturedAt.timeIntervalSince(earlier.first?.at ?? frame.capturedAt).rounded())))
                 }
             }
@@ -228,14 +231,17 @@ final class SafetyMonitor {
         do {
             let ai = ai
             let started = ContinuousClock.now
-            let user = SafetyPrompts.observeUser(watched: watched, allergens: allergens, ocr: copy.ocr)
-                + (strip.map { SafetyPrompts.stripNote(frames: $0.count, seconds: $0.seconds) } ?? "")
+            let base = SafetyPrompts.observeUser(watched: watched, allergens: allergens, ocr: copy.ocr)
+            let stripSize = strip.map { (count: $0.count, seconds: $0.seconds) }
+            @Sendable func user(sheet: Bool) -> String {
+                base + (stripSize.map { SafetyPrompts.stripNote(frames: sheet ? min($0.count, 4) : $0.count, seconds: $0.seconds) } ?? "")
+            }
             // The frames as pictures of their own where the host takes several (sharper than one
             // sheet of small ones); otherwise, or if it refuses, the numbered sheet.
             let separate = await ai.multiImageChat ? (strip?.frames ?? []).map { NemotronClient.ImagePart(jpeg: $0) } : []
             func look(_ earlier: [NemotronClient.ImagePart]) async throws -> SafetyObservation {
                 try await Self.afterQuestions(ai) {
-                    try await ai.chatJSON(SafetyObservation.self, system: SafetyPrompts.observeSystem, user: user,
+                    try await ai.chatJSON(SafetyObservation.self, system: SafetyPrompts.observeSystem, user: user(sheet: earlier.isEmpty),
                                           image: .init(jpeg: earlier.isEmpty ? (strip?.jpeg ?? copy.jpeg) : copy.jpeg), earlierImages: earlier,
                                           jsonSchema: SafetyPrompts.observeSchema, schemaName: "observation", maxTokens: 600,
                                           temperature: 0, background: true)
@@ -252,6 +258,8 @@ final class SafetyMonitor {
             return
         }
         let file = await store.saveFrame(copy.jpeg)
+        // Something was done in these frames: the moments before stay with the evidence frame.
+        if let file, let strip, !observation.actions.isEmpty { await store.saveStrip(strip.frames, before: file) }
         await apply(observation, at: frame.capturedAt, frameFile: file, latitude: frame.latitude, longitude: frame.longitude)
     }
 
@@ -962,7 +970,9 @@ final class SafetyMonitor {
     func frames(forEvents ids: [Int64]) async -> [URL] {
         guard !ids.isEmpty else { return [] }
         let events = await store.events(since: Date().addingTimeInterval(-30 * 86_400), limit: 500)
-        return events.filter { ids.contains($0.id) }.compactMap(\.frameFile).map(store.frameURL)
+        var seen = Set<String>()
+        return events.filter { ids.contains($0.id) }.sorted { $0.at < $1.at }.compactMap(\.frameFile)
+            .filter { seen.insert($0).inserted }.flatMap(store.sequenceURLs)
     }
 
     // MARK: Notifications

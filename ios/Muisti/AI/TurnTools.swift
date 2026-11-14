@@ -38,6 +38,43 @@ enum TurnTools {
         """
     }
 
+    private static let searchPlace = #""place":{"type":["string","null"],"description":"Always decide this. When the user's message names a place on the map that the thing should have been seen in — a city, district, street, building or venue (\"in Istanbul\", \"at the airport\", \"Stockholm'da\"), or a place Muisti keeps (\"home\", \"work\") — give that name here and leave it out of query. When they say here, this place, this building, around here (\"burada\", \"täällä\"), give the single word here: it means their position now, so never put a place name from the conversation in its stead. Only records made there are searched. Null when the message names no place, and null when it asks where something is (\"where was the pharmacy\")."}"#
+
+    /// The second round of a question whose first search found nothing that answers it.
+    static let againSystem = """
+    You are Muisti's memory search. The user asked something about what their glasses saw; the \
+    first search of the memory found nothing that answers it. Decide in one tool call: \
+    search_memory once more when other words could find it (the word a sign or shop front would \
+    carry, a synonym, a broader or narrower kind of thing, the local language of the signs, a \
+    wider span of time), or give_up when the first search already looked for the right thing \
+    and it simply was not seen. Never repeat the first query, and never drop or change a place \
+    or a span of time the user named.
+    """
+
+    static func againUser(question: String, now: Date, position: String?, conversation: [String], first: String, found: [String]) -> String {
+        """
+        Current local time: \(QueryEngine.promptTime(now))
+        User position now: \(position ?? "unknown")
+        Conversation so far (oldest first):
+        \(conversation.isEmpty ? "(new conversation)" : conversation.joined(separator: "\n"))
+
+        Question: \(question)
+        First search: \(first)
+        What it found instead (best first):
+        \(found.isEmpty ? "(nothing)" : found.joined(separator: "\n"))
+        """
+    }
+
+    static let againTools: String = "[" + [
+        tool("search_memory", "Search the memory once more with other words.",
+             properties: [#""query":{"type":"string","description":"What to look for this time, complete by itself, in different words from the first search."}"#,
+                          #""from":{"type":["string","null"],"description":"Start of the span of time the user named, yyyy-MM-dd HH:mm local time; else null."}"#,
+                          #""to":{"type":["string","null"],"description":"End of that span; else null."}"#,
+                          searchPlace],
+             required: ["query", "place"]),
+        tool("give_up", "The first search looked for the right thing: it was not seen."),
+    ].joined(separator: ",") + "]"
+
     private static let reply = #"{"type":"string","description":"What Muisti says to the user: one short spoken sentence in the language of the user's message (a Turkish message gets a Turkish reply, whatever the conversation was in before)."}"#
 
     private static func tool(_ name: String, _ description: String, properties: [String] = [], required: [String] = []) -> String {
@@ -54,14 +91,16 @@ enum TurnTools {
              reaction ("ok", "great"), small talk, a question about yourself, or general knowledge \
              ("what is an Arduino?") — never for anything about what the user saw or sees, where or \
              when something was, what a sign says, or their rules and medicines (also not to say you \
-             do not have it: search_memory finds that out).
+             do not have it: search_memory finds that out). Never to ask the user what "this", "that" or \
+             "it" is, or to ask them to read out something they are plainly looking at ("can you solve \
+             this", "what does this mean", "help me with this"): you have eyes, so look_now first.
              """,
              properties: [#""text":{"type":"string","description":"One or two short, natural spoken sentences in the user's language, no markdown. General knowledge is fine but is never presented as something the user saw. Ending with a question opens the user's microphone again: only when you need their answer now. Thanks, \"ok\" or \"bye\" get a short closing with no question and no offer."}"#],
              required: ["text"]),
         tool("look_now", """
              See what is in front of the user right now through the glasses camera. Call it whenever the \
              message is about the present view, in any words or language: what is this, what do you see, \
-             look, read this, what does it say, what colour is it, is it on, is this the right one, "solve this", \
+             look, read this, what does it say, what colour is it, is it on, is this the right one, \
              "this" or "here" pointing at something, a garbled request about seeing or looking, or a \
              "yes" to your own offer to look. You can always look: never say you cannot see.
              """),
@@ -76,8 +115,9 @@ enum TurnTools {
              """,
              properties: [#""query":{"type":"string","description":"What to look for, complete by itself: replace \"it\", \"there\", \"that place\" with what the conversation was about."}"#,
                           #""from":{"type":["string","null"],"description":"Only when the user named a span of time (\"yesterday\", \"this morning\", \"between 2 and 3\"): its start in local time, yyyy-MM-dd HH:mm, worked out from the current local time. Otherwise null."}"#,
-                          #""to":{"type":["string","null"],"description":"The end of that span, yyyy-MM-dd HH:mm; null when there is none or it runs until now."}"#],
-             required: ["query"]),
+                          #""to":{"type":["string","null"],"description":"The end of that span, yyyy-MM-dd HH:mm; null when there is none or it runs until now."}"#,
+                          searchPlace],
+             required: ["query", "place"]),
         tool("forget_recent", """
              Delete recent memories. Only when the user explicitly asks to forget or delete what the \
              glasses saw ("forget the last 10 minutes", "delete what you saw today"); never for a \
@@ -205,8 +245,8 @@ enum TurnTools {
     enum Decision: Sendable {
         case reply(String)
         case look
-        /// `from`/`to`: the span of time the user named, if any.
-        case search(String?, from: Date? = nil, to: Date? = nil)
+        /// `from`/`to`: the span of time the user named, if any; `place`: the place they named.
+        case search(String?, from: Date? = nil, to: Date? = nil, place: String? = nil)
         case forget(minutes: Int?, reply: String)
         case command(SafetyCommand, reply: String, tool: String)
         /// Something for the agent side: an intent, a destination, a place, a mute.
@@ -270,7 +310,7 @@ enum TurnTools {
     /// which answers from evidence instead of acting on a guess.
     static func decision(from turn: NemotronClient.ToolReply) -> Decision {
         var looked = false
-        var search: (query: String?, from: Date?, to: Date?)?
+        var search: (query: String?, from: Date?, to: Date?, place: String?)?
         for call in turn.calls {
             let args = call.decode(Arguments.self)
             let reply = args?.reply ?? turn.text
@@ -280,7 +320,8 @@ enum TurnTools {
             case "look_now": looked = true
             case "search_memory":
                 let now = Date()
-                search = (args?.query, args?.from.flatMap { Cue(at: $0).nextDue(after: now) }, args?.to.flatMap { Cue(at: $0).nextDue(after: now) })
+                search = (args?.query, args?.from.flatMap { Cue(at: $0).nextDue(after: now) }, args?.to.flatMap { Cue(at: $0).nextDue(after: now) },
+                          args?.place.flatMap { $0.trimmingCharacters(in: .whitespaces).isEmpty || $0.lowercased() == "null" ? nil : $0 })
             case "forget_recent": return .forget(minutes: args?.minutes, reply: reply)
             case "create_rule":
                 if let rule = args?.rule { return .command(.createRule(rule), reply: reply, tool: call.name) }
@@ -324,7 +365,7 @@ enum TurnTools {
             }
         }
         if looked { return .look }
-        if let search { return .search(search.query, from: search.from, to: search.to) }
+        if let search { return .search(search.query, from: search.from, to: search.to, place: search.place) }
         // A tool call that could not be used and no words: answer from memory.
         return turn.text.isEmpty ? .search(nil) : .reply(turn.text)
     }

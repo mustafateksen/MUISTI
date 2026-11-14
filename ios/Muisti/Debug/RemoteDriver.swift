@@ -36,6 +36,8 @@ final class RemoteDriver {
         func get() -> (jpeg: Data, ocr: String, at: Date)? { lock.lock(); defer { lock.unlock() }; return value }
     }
 
+    /// Posted with the screen's name; `RootView` switches to it.
+    static let showScreen = Notification.Name("muisti.remoteDriver.showScreen")
     static let defaultPort: UInt16 = 8765
     private(set) static var port: UInt16 = defaultPort
     private(set) static var failure: String?
@@ -241,7 +243,10 @@ final class RemoteDriver {
                 path = file.path
             }
             guard let path, FileManager.default.fileExists(atPath: path) else { return Response(status: 400, json: ["error": "no video at that path (send {\"path\": …} or the file as a video/mp4 body)"]) }
-            let track = (body["track"] as? [[String: Any]] ?? []).compactMap { point -> (t: Double, lat: Double, lon: Double)? in
+            // The track comes in the JSON body, or (with an uploaded file) as JSON in the query.
+            let trackJSON = body["track"] as? [[String: Any]]
+                ?? (request.query["track"].flatMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) } as? [[String: Any]]) ?? []
+            let track = trackJSON.compactMap { point -> (t: Double, lat: Double, lon: Double)? in
                 guard let t = (point["t"] as? NSNumber)?.doubleValue, let lat = (point["lat"] as? NSNumber)?.doubleValue,
                       let lon = (point["lon"] as? NSNumber)?.doubleValue else { return nil }
                 return (t, lat, lon)
@@ -264,6 +269,8 @@ final class RemoteDriver {
             return Response(status: 200, json: ["motion": kind.rawValue])
         case ("POST", "/tick"):
             await controller.agent.tick()
+            // `review`: Muisti's own look at the day right now, whatever its usual pace.
+            if value("review") as? Bool == true { await controller.agent.review(now: Date(), forced: true) }
             return Response(status: 200, json: ["ok": true])
         case ("POST", "/reply"):
             let command: SafetyCommand
@@ -275,6 +282,86 @@ final class RemoteDriver {
             }
             let reply = await controller.voice.safetyHandler(command)
             return Response(status: 200, json: ["reply": orNull(reply)])
+        case ("GET", "/chat"):
+            // The conversation as the Ask tab shows it, oldest first (Muisti's own remarks included).
+            return Response(status: 200, json: ["turns": controller.voice.history.reversed().map { turn -> [String: Any] in
+                ["question": turn.question, "answer": turn.answer, "label": turn.label.rawValue, "by_muisti": turn.spontaneous,
+                 "evidence": turn.evidence.map(\.record.id)]
+            }])
+        case ("GET", "/memories"):
+            let records = await controller.store.recent(limit: min(200, Int(request.query["limit"] ?? "") ?? 30))
+            let stamp = ISO8601DateFormatter()
+            return Response(status: 200, json: ["memories": records.map { r -> [String: Any] in
+                ["id": r.id, "title": r.title, "seen_at": stamp.string(from: r.seenAt), "street": orNull(r.street), "area": orNull(r.area),
+                 "text": String(r.ocrText.prefix(400)), "caption": orNull(r.caption), "status": "\(r.status)"]
+            }])
+        case ("POST", "/memory/delete"):
+            guard let id = number("id") else { return Response(status: 400, json: ["error": "id is needed"]) }
+            await controller.deleteMemory(Int64(id))
+            return Response(status: 200, json: ["deleted": Int64(id)])
+        case ("POST", "/forget"):
+            guard let minutes = number("minutes"), minutes >= 1 else { return Response(status: 400, json: ["error": "minutes is needed"]) }
+            await controller.forget(minutes: Int(minutes))
+            return Response(status: 200, json: ["forgot_minutes": Int(minutes)])
+        case ("POST", "/chat/clear"):
+            controller.voice.clearConversation()
+            return Response(status: 200, json: ["cleared": true])
+        case ("POST", "/intent"):
+            // What the notes screen offers: mark done, or remove.
+            await controller.agent.reload()
+            guard let id = text("id"), let intent = controller.agent.intents.first(where: { $0.id == id }) else { return Response(status: 404, json: ["error": "no such open intent"]) }
+            if text("action") == "done" { await controller.agent.markDone(intent) } else { await controller.agent.remove(intent) }
+            return Response(status: 200, json: ["id": id, "action": text("action") == "done" ? "done" : "removed"])
+        case ("POST", "/rule"):
+            // What the Safety tab offers: switch a rule on or off, or delete it.
+            guard let id = text("id"), let rule = controller.safety.rules.first(where: { $0.id == id }) else { return Response(status: 404, json: ["error": "no such rule"]) }
+            if text("action") == "delete" { await controller.safety.delete(rule) }
+            else { await controller.safety.setEnabled(rule, text("action") != "off") }
+            return Response(status: 200, json: ["id": id, "action": text("action") ?? "on"])
+        case ("POST", "/settings"):
+            // The switches of Settings › Assistant, plus whether answers are read aloud.
+            let settings = controller.agent.settings
+            func flag(_ key: String) -> Bool? { value(key) as? Bool ?? (value(key) as? String).map { $0 == "true" || $0 == "1" || $0 == "on" } }
+            if let v = flag("assistant") { settings.enabled = v }
+            if let v = flag("noticing") { settings.noticing = v }
+            if let v = flag("navigation") { settings.navigation = v }
+            if let v = flag("people") { settings.people = v }
+            if let v = flag("map_search") { settings.mapSearch = v }
+            if let v = flag("evening_summary") { settings.eveningDigest = v }
+            if let v = number("spoken_per_day") { settings.dailySpokenBudget = Int(v) }
+            if let v = number("minutes_apart") { settings.minGapMinutes = Int(v) }
+            if let v = number("quiet_from") { settings.quietFromHour = Int(v) }
+            if let v = number("quiet_to") { settings.quietToHour = Int(v) }
+            if let v = flag("safety_auto") { controller.config.safetyAuto = v }
+            if let v = number("private_pause") {
+                PerceptionEngine.privatePause = max(0, v)
+                PerceptionEngine.endPrivatePause()
+            }
+            return Response(status: 200, json: ["assistant": settings.enabled, "noticing": settings.noticing, "navigation": settings.navigation,
+                                                "people": settings.people, "map_search": settings.mapSearch, "evening_summary": settings.eveningDigest,
+                                                "spoken_per_day": settings.dailySpokenBudget, "minutes_apart": settings.minGapMinutes,
+                                                "quiet_from": settings.quietFromHour, "quiet_to": settings.quietToHour, "safety_auto": controller.config.safetyAuto,
+                                                "private_pause": PerceptionEngine.privatePause])
+        case ("POST", "/log"):
+            // An entry in Muisti Turva's log at a given time: earlier days for the habits demo.
+            guard let object = text("object"), let value = text("value") else {
+                return Response(status: 400, json: ["error": "object and value are needed; at: yyyy-MM-dd HH:mm (default now); kind: action or state"])
+            }
+            let at = text("at").flatMap { Cue(at: $0).nextDue(after: Date()) } ?? Date()
+            let kind: SafetyEventKind = text("kind") == "state" ? .state : .action
+            let id = await controller.safety.store.insert(SafetyEvent(at: at, kind: kind, object: object.lowercased(), value: value.lowercased(),
+                                                                      confidence: nil, source: .user_confirmed, frameFile: nil))
+            return Response(status: 200, json: ["id": Int(id), "at": Cue.stamp(at)])
+        case ("GET", "/habits"):
+            let now = Date()
+            return Response(status: 200, json: ["habits": Habits.lines(await controller.agent.habits(now: now), now: now)])
+        case ("POST", "/screen"):
+            // What the phone shows (for a screen recording): ask, memory, safety, notes.
+            guard let name = text("show"), ["ask", "memory", "safety", "notes", "back"].contains(name) else {
+                return Response(status: 400, json: ["error": "show: ask, memory, safety, notes or back"])
+            }
+            NotificationCenter.default.post(name: Self.showScreen, object: name)
+            return Response(status: 200, json: ["showing": name])
         case ("POST", "/reset"):
             guard text("confirm") == "yes" else { return Response(status: 400, json: ["error": "this deletes all memories, rules and notes: send {\"confirm\": \"yes\"}"]) }
             videoTask?.cancel()
@@ -285,7 +372,9 @@ final class RemoteDriver {
         default:
             return Response(status: 404, json: ["error": "unknown route \(request.method) \(request.path)",
                                                 "routes": ["GET /state", "GET /events?since=", "GET /evidence?id=", "GET /wait-idle?timeout=", "POST /ask", "POST /frame", "POST /video",
-                                                           "POST /location", "POST /motion", "POST /tick", "POST /reply", "POST /reset"]])
+                                                           "POST /location", "POST /motion", "POST /tick", "POST /reply", "POST /reset", "GET /chat", "POST /chat/clear",
+                                                           "GET /memories?limit=", "POST /memory/delete", "POST /forget", "POST /intent", "POST /rule",
+                                                           "POST /settings", "POST /screen"]])
         }
     }
 
@@ -443,7 +532,10 @@ final class RemoteDriver {
         while (ContinuousClock.now - began).seconds < seconds {
             let counts = await controller.store.count()
             let embedded = await controller.store.missingEmbeddings(limit: 1).isEmpty
-            if !video.running, counts.pending == 0, embedded {
+            if !video.running, counts.pending == 0, embedded, !controller.agent.isWeighing {
+                // A frame's enrichment hands it to the agent a moment later: look once more.
+                try? await Task.sleep(for: .milliseconds(700))
+                guard !controller.agent.isWeighing, await controller.store.count().pending == 0 else { continue }
                 return ["idle": true, "memories": counts.total, "waited_seconds": (ContinuousClock.now - began).seconds]
             }
             try? await Task.sleep(for: .milliseconds(500))

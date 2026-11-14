@@ -33,6 +33,8 @@ final class AgentCenter {
     /// The last judgement, for the developer view.
     private(set) var lastJudgement = "—"
     private(set) var judgements = 0
+    /// A frame is being weighed, or one is waiting for its turn (the remote driver waits for this).
+    var isWeighing: Bool { judging || waitingNotice != nil }
 
     @ObservationIgnored private let ai: NemotronClient
     @ObservationIgnored private let memory: MemoryStore
@@ -70,7 +72,21 @@ final class AgentCenter {
         ("medicine", "Medicine seen up close: a medicine box, a blister pack of pills or capsules, a pill bottle, tablets in a hand."),
         ("belongings", "Personal belongings put down or left behind: keys, a wallet, a phone, glasses, a bag or an umbrella lying on a table, seat or counter."),
         ("left_on", "Something at home left on or open: a lit stove or hob with a flame or glowing ring, an iron, a running tap, an open front door or window."),
+        ("hazard", "A danger on the ground right where a person is walking: a wet floor warning sign, a red pedestrian light at a crossing, a marked bicycle lane underfoot, roadworks, an open hole or a barrier across the path."),
     ]
+    /// A danger underfoot is only worth words while the user is still in front of it.
+    static let hazardFresh: TimeInterval = 20
+
+    /// Muisti Turva's rules and log as text, for the summary of the day.
+    @ObservationIgnored var safetyContext: (@Sendable () async -> String)?
+
+    /// Muisti Turva's log since a date, for working out what the user usually does (`Habits`).
+    @ObservationIgnored var safetyEvents: (@Sendable (Date) async -> [SafetyEvent])?
+
+    func habits(now: Date = Date()) async -> [Habits.Habit] {
+        guard settings.noticing, let safetyEvents else { return [] }
+        return Habits.find(in: await safetyEvents(now.addingTimeInterval(-15 * 86_400)), now: now)
+    }
 
     static let snooze: TimeInterval = 30 * 60
     static let nearPlace: Double = 90
@@ -180,6 +196,12 @@ final class AgentCenter {
         if let sight = cue.sight { parts.append("on seeing: \(sight)") }
         if let on = cue.on { parts.append(on) }
         return parts.isEmpty ? "" : " [when: " + parts.joined(separator: "; ") + "]"
+    }
+
+    /// The area a place name stands for (the user's own places first, then the map), for
+    /// searching the memory by place.
+    func area(named name: String, here: LocationFix?) async -> MemoryArea? {
+        await Places.area(name, known: await store.places(), here: here, maps: settings.mapSearch)
     }
 
     /// The agent's notes as the models read them: in the turn decision, in the answer (so "where
@@ -457,8 +479,9 @@ final class AgentCenter {
         if flag == nil, settings.noticing, let own = await standingMatch(n) { flag = "personal (\(own))" }
         if flag == "person_badge", !settings.people { flag = nil }
         if !settings.noticing { flag = nil }
-        guard !candidates.isEmpty || flag != nil else { return }
         let now = Date()
+        if flag == "personal (hazard)", now.timeIntervalSince(n.seenAt) > Self.hazardFresh { flag = nil }
+        guard !candidates.isEmpty || flag != nil else { return }
         var record = "id \(n.recordID), seen \(QueryEngine.promptTime(n.seenAt))\n\(n.passage.prefix(1800))"
         if let flag { record += "\nFlag from the frame's analysis: \(flag)\(n.reason.map { " — \($0)" } ?? "")" }
         let related = await related(to: n)
@@ -466,6 +489,8 @@ final class AgentCenter {
         let happened: String
         if !candidates.isEmpty {
             happened = "The glasses saw the frame below \(ago) seconds ago, and it resembles what an open intent is waiting for."
+        } else if flag == "personal (hazard)" {
+            happened = "The glasses saw the frame below \(ago) seconds ago. It may show a danger on the ground where the user is walking right now. If it is real, close and ahead of them (not a picture, not across the street, not something they are plainly already dealing with), warn them in one short urgent sentence; otherwise stay silent."
         } else if flag?.hasPrefix("personal") == true {
             happened = "The glasses saw the frame below \(ago) seconds ago. It looks like something of the user's own, or something left on or open: the kind of thing you look out for without being asked. Check the notes and the safety log for whether it is already taken care of today, then say or ask what a friend would."
         } else {
@@ -583,7 +608,9 @@ final class AgentCenter {
         }
         guard let telling = outcome.telling else {
             lastJudgement = "\(ms) ms · silent: \(outcome.silentReason ?? "-")"
-            await logSilent(topic: candidates.first.map { _ in "reminder" } ?? "notice", text: happened, reason: "model: \(outcome.silentReason ?? "-")", recordID: recordID)
+            // The log says what it was about (the record's first line), not the prompt.
+            let about = record?.split(separator: "\n").dropFirst().first.map(String.init) ?? String(happened.prefix(120))
+            await logSilent(topic: candidates.first.map { _ in "reminder" } ?? "notice", text: about, reason: "model: \(outcome.silentReason ?? "-")", recordID: recordID)
             return
         }
         // The one intent this judgement was about, when the model left its id out or misspelt it.
@@ -891,19 +918,22 @@ final class AgentCenter {
 
     /// The periodic look at everything together, while capturing, and only when something
     /// changed since the last one.
-    private func review(now: Date) async {
-        guard isCapturing(), !judging else { return }
+    func review(now: Date, forced: Bool = false) async {
+        guard forced || isCapturing(), !judging else { return }
         let open = intents.filter { $0.status == .open && !$0.isSnoozed(now) }
-        guard !open.isEmpty || (settings.calendar && !calendar.upcoming.isEmpty) else { return }
+        let habits = await habits(now: now)
+        let missed = habits.filter { $0.overdue(at: now) }.map(\.what)
+        guard forced || !open.isEmpty || (settings.calendar && !calendar.upcoming.isEmpty) || !missed.isEmpty else { return }
         var hasher = Hasher()
+        hasher.combine(missed)
         hasher.combine(open.map(\.id))
         hasher.combine(calendar.upcoming.map(\.id))
         hasher.combine(location.area)
         hasher.combine(location.street)
         hasher.combine(wasHome)
         let state = hasher.finalize()
-        if let last = lastReview, now.timeIntervalSince(last.at) < Self.reviewEvery || last.state == state { return }
-        guard lastReview != nil else {
+        if !forced, let last = lastReview, now.timeIntervalSince(last.at) < Self.reviewEvery || last.state == state { return }
+        guard forced || lastReview != nil else {
             lastReview = (now, state)   // the first one only sets the baseline
             return
         }
@@ -911,7 +941,8 @@ final class AgentCenter {
         let recent = await memory.recent(limit: 6).map { r in
             "- id \(r.id), \(QueryEngine.promptTime(r.seenAt)): \(r.title)\(r.street.map { ", \($0)" } ?? "")"
         }
-        await judge(happened: "Nothing in particular: this is Muisti's own periodic look at how the user's day is going (they have moved or the notes changed since the last look). If something in the situation deserves a word by now — an intent whose moment is slipping, something they seem to have forgotten, a medicine or errand the notes show no trace of today — say it or ask; otherwise stay silent.\nLatest things the glasses saw:\n\(recent.joined(separator: "\n"))",
+        let usual = habits.isEmpty ? "" : "\nWhat the user usually does, counted from the log of earlier days (a habit marked NOT today is the kind of thing a person living with them would mention, once, as a question; never as a fact that they did not do it — the glasses may simply not have seen it):\n" + Habits.lines(habits, now: now).joined(separator: "\n")
+        await judge(happened: "Nothing in particular: this is Muisti's own periodic look at how the user's day is going (they have moved, the notes changed, or something they usually do by now has not been seen today). If something in the situation deserves a word by now — an intent whose moment is slipping, something they seem to have forgotten, a medicine or errand the notes show no trace of today, a habit missed — say it or ask; otherwise stay silent.\nLatest things the glasses saw:\n\(recent.joined(separator: "\n"))" + usual,
                     now: now)
     }
 
@@ -921,7 +952,8 @@ final class AgentCenter {
     You write the summary of the user's day for Muisti, an assistant in their camera glasses. \
     Two to four short spoken sentences in the user's language, addressed to them: where they \
     were and what stood out, what is still open among their intents, and what is in their \
-    calendar next. Only what the lines below say, with times and figures exactly as written; \
+    calendar next; from the safety lines, only something that still matters tonight (a thing \
+    left on, a medicine not yet taken). Only what the lines below say, with times and figures exactly as written; \
     nothing invented, no advice. Leave out whatever is empty (no open reminders, nothing in the \
     calendar) instead of saying so, and never use the words "intent", "record" or "frame". If \
     the lines hold nothing from today, say in one sentence that \
@@ -939,6 +971,9 @@ final class AgentCenter {
         let finished = await store.intents(status: .done).filter { ($0.firedAt ?? $0.createdAt) >= today }
         if !finished.isEmpty { lines.append("Done today: " + finished.map(\.text).joined(separator: "; ")) }
         lines.append(promptContext(now: now))
+        if let safety = await safetyContext?(), !safety.isEmpty { lines.append("Muisti Turva (safety rules, watched objects, safety log):\n" + safety) }
+        let habits = await habits(now: now)
+        if !habits.isEmpty { lines.append("What the user usually does (counted from earlier days):\n" + Habits.lines(habits, now: now).joined(separator: "\n")) }
         let user = lines.joined(separator: "\n")
         let ai = ai
         guard let text = await withTimeout(seconds: 20, { try await ai.chat(system: Self.digestSystem, user: user, maxTokens: 300, temperature: 0.2) })?

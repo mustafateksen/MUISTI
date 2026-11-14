@@ -42,6 +42,18 @@ struct RootView: View {
         .sheet(isPresented: $showAgentNotes) {
             NavigationStack { AgentNotesView(controller: controller) }
         }
+        #if DEBUG
+        // The remote driver choosing what the phone shows (for a screen recording).
+        .onReceive(NotificationCenter.default.publisher(for: RemoteDriver.showScreen)) { note in
+            switch note.object as? String {
+            case "ask": showAgentNotes = false; tab = .assistant
+            case "memory": showAgentNotes = false; tab = .memory
+            case "safety": showAgentNotes = false; tab = .safety
+            case "notes": showAgentNotes = true
+            default: showAgentNotes = false
+            }
+        }
+        #endif
         .task {
             #if DEBUG
             // `--show-agent-notes`: the assistant notes screen (screenshots).

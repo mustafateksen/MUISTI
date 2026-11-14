@@ -33,8 +33,8 @@ enum SafetyFrame {
         // there or on its way, and only analyse here when it is not (a frame it dropped as blurry).
         let analysis = (fromPipeline ? PerceptionEngine.FrameAnalysis.shared.reading(for: jpeg) : nil) ?? PerceptionEngine.textAndHeads(image)
         guard let heads = analysis.heads else { return nil }
-        let plates = analysis.lines.filter { PerceptionEngine.looksLikePlate($0.text) }
-        let text = analysis.lines.filter { !PerceptionEngine.looksLikePlate($0.text) }
+        let plates = analysis.lines.filter { PerceptionEngine.looksLikePlate($0.text) || PerceptionEngine.isCardOrAccountNumber($0.text) }
+        let text = analysis.lines.filter { !PerceptionEngine.looksLikePlate($0.text) && !PerceptionEngine.isCardOrAccountNumber($0.text) }
         let base = CIImage(cgImage: image)
         let masked = HeadBlur.mask(base, heads: heads, plates: plates.map(\.box))
         guard let space = CGColorSpace(name: CGColorSpace.sRGB) else { return nil }

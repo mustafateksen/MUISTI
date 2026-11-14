@@ -18,6 +18,44 @@
         }
       }
     },
+    "·" : {
+      "localizations" : {
+        "fi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "·"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "·"
+          }
+        }
+      }
+    },
+    "%@ · %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ · %2$@"
+          }
+        },
+        "fi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ · %@"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ · %@"
+          }
+        }
+      }
+    },
     "%@ Adaptive mode saves battery and reduces heat." : {
       "localizations" : {
         "fi" : {
@@ -78,28 +116,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "%@ Gözlüğün soğumasını bekle."
-          }
-        }
-      }
-    },
-    "%@ · %@" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "%1$@ · %2$@"
-          }
-        },
-        "fi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@ · %@"
-          }
-        },
-        "tr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@ · %@"
           }
         }
       }
@@ -266,13 +282,13 @@
         }
       }
     },
+    "90° clockwise" : {
+      "shouldTranslate" : false
+    },
     "180°" : {
       "shouldTranslate" : false
     },
     "270° clockwise" : {
-      "shouldTranslate" : false
-    },
-    "90° clockwise" : {
       "shouldTranslate" : false
     },
     "A · Low-rate stream" : {
@@ -287,54 +303,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "A · Düşük hızlı akış"
-          }
-        }
-      }
-    },
-    "AI" : {
-      "localizations" : {
-        "fi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Tekoäly"
-          }
-        },
-        "tr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Yapay zekâ"
-          }
-        }
-      }
-    },
-    "AI hasn't processed this memory yet. It will be ready shortly once there's internet and an API key." : {
-      "localizations" : {
-        "fi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Tekoäly ei ole vielä käsitellyt tätä muistoa. Se valmistuu pian, kun käytössä on internet ja API-avain."
-          }
-        },
-        "tr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Yapay zekâ bu anıyı henüz işlemedi. İnternet ve API anahtarı olunca kısa sürede hazır olur."
-          }
-        }
-      }
-    },
-    "API key" : {
-      "localizations" : {
-        "fi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "API-avain"
-          }
-        },
-        "tr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "API anahtarı"
           }
         }
       }
@@ -508,6 +476,38 @@
         }
       }
     },
+    "AI" : {
+      "localizations" : {
+        "fi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tekoäly"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Yapay zekâ"
+          }
+        }
+      }
+    },
+    "AI hasn't processed this memory yet. It will be ready shortly once there's internet and an API key." : {
+      "localizations" : {
+        "fi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tekoäly ei ole vielä käsitellyt tätä muistoa. Se valmistuu pian, kun käytössä on internet ja API-avain."
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Yapay zekâ bu anıyı henüz işlemedi. İnternet ve API anahtarı olunca kısa sürede hazır olur."
+          }
+        }
+      }
+    },
     "All clear" : {
       "localizations" : {
         "fi" : {
@@ -656,6 +656,22 @@
         }
       }
     },
+    "API key" : {
+      "localizations" : {
+        "fi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "API-avain"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "API anahtarı"
+          }
+        }
+      }
+    },
     "App on glasses out of date" : {
       "localizations" : {
         "fi" : {
@@ -704,22 +720,6 @@
         }
       }
     },
-    "Ask Muisti" : {
-      "localizations" : {
-        "fi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Kysy Muistilta"
-          }
-        },
-        "tr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Muisti'ye sor"
-          }
-        }
-      }
-    },
     "Ask about signs, numbers, and times you've seen." : {
       "localizations" : {
         "fi" : {
@@ -748,6 +748,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Sesle sor"
+          }
+        }
+      }
+    },
+    "Ask Muisti" : {
+      "localizations" : {
+        "fi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Kysy Muistilta"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Muisti'ye sor"
           }
         }
       }
@@ -896,7 +912,6 @@
         }
       }
     },
-    "Background: go to the Home Screen while recording; 'Resume' should appear when you return. Hinge/worn/battery controls are above." : {},
     "Base URL" : {
       "shouldTranslate" : false
     },
@@ -936,7 +951,6 @@
     "Battery/thermal saver" : {
       "shouldTranslate" : false
     },
-    "Battery: %lld%%" : {},
     "Blood pressure pill at 8" : {
       "localizations" : {
         "fi" : {
@@ -949,6 +963,23 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Saat 8'de tansiyon hapı"
+          }
+        }
+      }
+    },
+    "blurry" : {
+      "comment" : "Reason a frame was dropped",
+      "localizations" : {
+        "fi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "epätarkka"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "bulanık"
           }
         }
       }
@@ -985,7 +1016,6 @@
         }
       }
     },
-    "Bundled sign video" : {},
     "C · Interval photo" : {
       "localizations" : {
         "fi" : {
@@ -1114,7 +1144,6 @@
         }
       }
     },
-    "Camera feed" : {},
     "Cancel" : {
       "localizations" : {
         "fi" : {
@@ -1248,6 +1277,9 @@
     "Chat model" : {
       "shouldTranslate" : false
     },
+    "Choose a provider preset" : {
+      "shouldTranslate" : false
+    },
     "Choose English › Ava, then download Ava (Premium)." : {
       "localizations" : {
         "fi" : {
@@ -1264,11 +1296,6 @@
         }
       }
     },
-    "Choose a provider preset" : {
-      "shouldTranslate" : false
-    },
-    "Choose video from Files" : {},
-    "Choose video from Photos" : {},
     "Close" : {
       "localizations" : {
         "fi" : {
@@ -1381,6 +1408,23 @@
         }
       }
     },
+    "connected" : {
+      "comment" : "Glasses registration state",
+      "localizations" : {
+        "fi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "yhdistetty"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "bağlı"
+          }
+        }
+      }
+    },
     "Connected" : {
       "localizations" : {
         "fi" : {
@@ -1393,6 +1437,23 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Bağlı"
+          }
+        }
+      }
+    },
+    "connecting" : {
+      "comment" : "Glasses registration state",
+      "localizations" : {
+        "fi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "yhdistetään"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "bağlanıyor"
           }
         }
       }
@@ -1493,7 +1554,6 @@
         }
       }
     },
-    "Converting to HEVC…" : {},
     "Copy" : {
       "localizations" : {
         "fi" : {
@@ -1654,25 +1714,23 @@
         }
       }
     },
-    "Current" : {},
-    "DON'T KNOW" : {
-      "comment" : "Answer label, uppercase badge",
+    "cycling" : {
+      "comment" : "Motion activity",
       "localizations" : {
         "fi" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "EN TIEDÄ"
+            "value" : "pyöräily"
           }
         },
         "tr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "BİLMİYORUM"
+            "value" : "bisiklette"
           }
         }
       }
     },
-    "Data" : {},
     "Dataset" : {
       "shouldTranslate" : false
     },
@@ -1728,7 +1786,6 @@
         }
       }
     },
-    "Delete all memories" : {},
     "Delete all memories?" : {
       "localizations" : {
         "fi" : {
@@ -1745,7 +1802,6 @@
         }
       }
     },
-    "Delete memories and load sample photos" : {},
     "Delete memories from the last 10 minutes?" : {
       "localizations" : {
         "fi" : {
@@ -1848,7 +1904,6 @@
         }
       }
     },
-    "Deny camera permission" : {},
     "Description" : {
       "localizations" : {
         "fi" : {
@@ -1929,7 +1984,6 @@
         }
       }
     },
-    "Device state" : {},
     "Did this happen?" : {
       "localizations" : {
         "fi" : {
@@ -1978,6 +2032,23 @@
         }
       }
     },
+    "distance" : {
+      "comment" : "Capture trigger",
+      "localizations" : {
+        "fi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "matka"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "mesafe"
+          }
+        }
+      }
+    },
     "Don't know" : {
       "comment" : "Answer label",
       "localizations" : {
@@ -1991,6 +2062,23 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Bilmiyorum"
+          }
+        }
+      }
+    },
+    "DON'T KNOW" : {
+      "comment" : "Answer label, uppercase badge",
+      "localizations" : {
+        "fi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "EN TIEDÄ"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "BİLMİYORUM"
           }
         }
       }
@@ -2076,6 +2164,40 @@
         }
       }
     },
+    "duplicate" : {
+      "comment" : "Reason a frame was dropped",
+      "localizations" : {
+        "fi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "kaksoiskappale"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "yinelenen"
+          }
+        }
+      }
+    },
+    "dwell" : {
+      "comment" : "Capture trigger: the wearer stopped moving",
+      "localizations" : {
+        "fi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "pysähdys"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "duraklama"
+          }
+        }
+      }
+    },
     "Dwell %@ s" : {
       "shouldTranslate" : false
     },
@@ -2131,13 +2253,25 @@
     "Embedding (semantic search) source" : {
       "shouldTranslate" : false
     },
-    "Embedding URL" : {
-      "shouldTranslate" : false
-    },
     "Embedding key" : {
       "shouldTranslate" : false
     },
     "Embedding model" : {
+      "shouldTranslate" : false
+    },
+    "Embedding URL" : {
+      "shouldTranslate" : false
+    },
+    "empty = embedding key" : {
+      "shouldTranslate" : false
+    },
+    "empty = keywords only" : {
+      "shouldTranslate" : false
+    },
+    "empty = off" : {
+      "shouldTranslate" : false
+    },
+    "empty = same as chat" : {
       "shouldTranslate" : false
     },
     "English voice" : {
@@ -2189,7 +2323,6 @@
         }
       }
     },
-    "Error scenarios" : {},
     "Error: %@" : {
       "localizations" : {
         "fi" : {
@@ -2334,7 +2467,6 @@
         }
       }
     },
-    "Fail the next photo" : {},
     "Failed" : {
       "localizations" : {
         "fi" : {
@@ -2373,6 +2505,22 @@
         }
       }
     },
+    "fast (bike/vehicle)" : {
+      "localizations" : {
+        "fi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "nopea (pyörä/ajoneuvo)"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "hızlı (bisiklet/araç)"
+          }
+        }
+      }
+    },
     "Fast: every %@ m" : {
       "shouldTranslate" : false
     },
@@ -2395,6 +2543,43 @@
         }
       }
     },
+    "first frame" : {
+      "comment" : "Capture trigger",
+      "localizations" : {
+        "fi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ensimmäinen kuva"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ilk kare"
+          }
+        }
+      }
+    },
+    "fixed interval" : {
+      "comment" : "Capture trigger",
+      "localizations" : {
+        "fi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "kiinteä väli"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "sabit aralık"
+          }
+        }
+      }
+    },
+    "Fixed interval (C): %lld s" : {
+      "shouldTranslate" : false
+    },
     "Fixed interval %lld s" : {
       "localizations" : {
         "fi" : {
@@ -2411,8 +2596,22 @@
         }
       }
     },
-    "Fixed interval (C): %lld s" : {
-      "shouldTranslate" : false
+    "follow-up" : {
+      "comment" : "Capture trigger",
+      "localizations" : {
+        "fi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "jatkokuva"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "takip"
+          }
+        }
+      }
     },
     "Forget" : {
       "localizations" : {
@@ -2592,6 +2791,23 @@
         }
       }
     },
+    "glasses aren't on; put them on and tap the temple" : {
+      "comment" : "Reason shown after 'Paused:'",
+      "localizations" : {
+        "fi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "lasit eivät ole päässä; laita ne päähän ja napauta sankaa"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "gözlük takılı değil; tak ve sapına dokun"
+          }
+        }
+      }
+    },
     "Glasses aren't on. Put them on to reconnect." : {
       "localizations" : {
         "fi" : {
@@ -2720,6 +2936,23 @@
         }
       }
     },
+    "glasses switched to another experience" : {
+      "comment" : "Reason shown after 'Paused:'",
+      "localizations" : {
+        "fi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "lasit vaihtoivat toiseen toimintoon"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "gözlük başka bir deneyime geçti"
+          }
+        }
+      }
+    },
     "Glasses were folded or taken off. Unfold them to start a new session." : {
       "localizations" : {
         "fi" : {
@@ -2784,7 +3017,6 @@
         }
       }
     },
-    "Grant camera permission" : {},
     "Heard %lld/3 · “%@”" : {
       "localizations" : {
         "en" : {
@@ -2839,10 +3071,26 @@
         }
       }
     },
+    "high-res" : {
+      "comment" : "Capture trigger",
+      "localizations" : {
+        "fi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "tarkka kuva"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "yüksek çözünürlük"
+          }
+        }
+      }
+    },
     "High-resolution photo" : {
       "shouldTranslate" : false
     },
-    "Hinge open" : {},
     "History" : {
       "localizations" : {
         "fi" : {
@@ -2890,6 +3138,9 @@
           }
         }
       }
+    },
+    "https://…/v1" : {
+      "shouldTranslate" : false
     },
     "I can't see anything right now: the glasses aren't sending images." : {
       "localizations" : {
@@ -2955,56 +3206,56 @@
         }
       }
     },
-    "I couldn't reach Nemotron, so I can't answer this properly right now. The closest frame is from %@." : {
+    "I couldn't reach Nemotron, so I can't answer this properly right now. A search on the phone found a frame from %@." : {
       "localizations" : {
         "fi" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "En saanut yhteyttä Nemotroniin, joten en voi vastata tähän kunnolla juuri nyt. Lähin kuva on ajalta %@."
+            "value" : "En saanut yhteyttä Nemotroniin, joten en voi vastata tähän kunnolla juuri nyt. Puhelimen haku löysi kuvan ajalta %@."
           }
         },
         "tr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Nemotron'a ulaşamadım, bu yüzden şu an düzgün yanıt veremiyorum. En yakın kare şu zamandan: %@."
+            "value" : "Nemotron'a ulaşamadım, bu yüzden şu an düzgün cevap veremiyorum. Telefondaki arama %@ saatine ait bir kare buldu."
           }
         }
       }
     },
-    "I couldn't reach Nemotron, so I can't answer this properly right now. The closest thing I saw, at %@, read: %@." : {
+    "I couldn't reach Nemotron, so I can't answer this properly right now. A search on the phone found this, seen at %@: %@." : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "I couldn't reach Nemotron, so I can't answer this properly right now. The closest thing I saw, at %1$@, read: %2$@."
+            "state" : "translated",
+            "value" : "I couldn't reach Nemotron, so I can't answer this properly right now. A search on the phone found this, seen at %1$@: %2$@."
           }
         },
         "fi" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "En saanut yhteyttä Nemotroniin, joten en voi vastata tähän kunnolla juuri nyt. Lähimmässä näkemässäni kohteessa (%@) luki: %@."
+            "value" : "En saanut yhteyttä Nemotroniin, joten en voi vastata tähän kunnolla juuri nyt. Puhelimen haku löysi tämän, nähty %1$@: %2$@."
           }
         },
         "tr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Nemotron'a ulaşamadım, bu yüzden şu an düzgün yanıt veremiyorum. Gördüğüm en yakın şeyde (%1$@) şu yazıyordu: %2$@."
+            "value" : "Nemotron'a ulaşamadım, bu yüzden şu an düzgün cevap veremiyorum. Telefondaki arama şunu buldu, %1$@ saatinde görülmüş: %2$@."
           }
         }
       }
     },
-    "I didn't see that clearly; here's the closest frame." : {
+    "I'm not sure I saw that, so I'd rather not guess." : {
       "localizations" : {
         "fi" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "En nähnyt sitä selvästi; tässä lähin kuva."
+            "value" : "En ole varma, näinkö sen, joten en lähde arvaamaan."
           }
         },
         "tr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Bunu net göremedim; işte en yakın kare."
+            "value" : "Bunu gördüğümden emin değilim, o yüzden tahmin yürütmeyeyim."
           }
         }
       }
@@ -3133,6 +3384,23 @@
         }
       }
     },
+    "in vehicle" : {
+      "comment" : "Motion activity",
+      "localizations" : {
+        "fi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ajoneuvossa"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "araçta"
+          }
+        }
+      }
+    },
     "Inspect 1 in %lld stream frames" : {
       "shouldTranslate" : false
     },
@@ -3148,6 +3416,55 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Yüklü. Muisti Ava'nın sesiyle konuşuyor."
+          }
+        }
+      }
+    },
+    "iPhone camera" : {
+      "localizations" : {
+        "fi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "iPhonen kamera"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "iPhone kamerası"
+          }
+        }
+      }
+    },
+    "iPhone camera access wasn't granted." : {
+      "localizations" : {
+        "fi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "iPhonen kameran käyttöä ei sallittu."
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "iPhone kamerasına erişim verilmedi."
+          }
+        }
+      }
+    },
+    "it" : {
+      "comment" : "Fallback object name in a rule trigger",
+      "localizations" : {
+        "fi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "kohde"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "nesne"
           }
         }
       }
@@ -3267,7 +3584,6 @@
         }
       }
     },
-    "Last error" : {},
     "Last observation" : {
       "localizations" : {
         "fi" : {
@@ -3517,6 +3833,23 @@
         }
       }
     },
+    "manual" : {
+      "comment" : "Capture trigger",
+      "localizations" : {
+        "fi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "manuaalinen"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "elle"
+          }
+        }
+      }
+    },
     "Maps" : {
       "localizations" : {
         "fi" : {
@@ -3620,10 +3953,10 @@
     "Min interval: %@ s" : {
       "shouldTranslate" : false
     },
-    "Mock glasses" : {},
-    "Mock glasses (MockDeviceKit)" : {},
-    "MockDeviceKit" : {},
     "Mode" : {
+      "shouldTranslate" : false
+    },
+    "model" : {
       "shouldTranslate" : false
     },
     "Move here" : {
@@ -3885,26 +4218,6 @@
     "My own Verda container" : {
       "shouldTranslate" : false
     },
-    "NOT SURE" : {
-      "comment" : "Answer label, uppercase badge",
-      "localizations" : {
-        "fi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "EPÄVARMA"
-          }
-        },
-        "tr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "EMİN DEĞİLİM"
-          }
-        }
-      }
-    },
-    "NVIDIA build (free key)" : {
-      "shouldTranslate" : false
-    },
     "Name, number, street, text…" : {
       "localizations" : {
         "fi" : {
@@ -4066,38 +4379,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Hayır"
-          }
-        }
-      }
-    },
-    "No Nemotron API key (Settings > Nemotron)." : {
-      "localizations" : {
-        "fi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Ei Nemotronin API-avainta (Asetukset > Nemotron)."
-          }
-        },
-        "tr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Nemotron API anahtarı yok (Ayarlar > Nemotron)."
-          }
-        }
-      }
-    },
-    "No Nemotron key; local search." : {
-      "localizations" : {
-        "fi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Ei Nemotron-avainta; paikallinen haku."
-          }
-        },
-        "tr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Nemotron anahtarı yok; yerel arama."
           }
         }
       }
@@ -4284,9 +4565,6 @@
         }
       }
     },
-    "No motion data: %@ s" : {
-      "shouldTranslate" : false
-    },
     "No motion data; using timer" : {
       "localizations" : {
         "fi" : {
@@ -4299,6 +4577,41 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Hareket verisi yok; zamanlayıcı kullanılıyor"
+          }
+        }
+      }
+    },
+    "No motion data: %@ s" : {
+      "shouldTranslate" : false
+    },
+    "No Nemotron API key (Settings > Nemotron)." : {
+      "localizations" : {
+        "fi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ei Nemotronin API-avainta (Asetukset > Nemotron)."
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nemotron API anahtarı yok (Ayarlar > Nemotron)."
+          }
+        }
+      }
+    },
+    "No Nemotron key; local search." : {
+      "localizations" : {
+        "fi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ei Nemotron-avainta; paikallinen haku."
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nemotron anahtarı yok; yerel arama."
           }
         }
       }
@@ -4319,6 +4632,23 @@
         }
       }
     },
+    "no text" : {
+      "comment" : "Reason a frame was dropped",
+      "localizations" : {
+        "fi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ei tekstiä"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "yazı yok"
+          }
+        }
+      }
+    },
     "No warnings yet." : {
       "localizations" : {
         "fi" : {
@@ -4335,6 +4665,23 @@
         }
       }
     },
+    "no-record zone" : {
+      "comment" : "Reason a frame was dropped",
+      "localizations" : {
+        "fi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "tallennuskieltoalue"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "kayıt yapılmayan yer"
+          }
+        }
+      }
+    },
     "No-record zones" : {
       "localizations" : {
         "fi" : {
@@ -4347,6 +4694,23 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Kayıt yapılmayan yerler"
+          }
+        }
+      }
+    },
+    "not connected" : {
+      "comment" : "Glasses registration state",
+      "localizations" : {
+        "fi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ei yhdistetty"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "bağlı değil"
           }
         }
       }
@@ -4400,6 +4764,39 @@
         }
       }
     },
+    "NOT SURE" : {
+      "comment" : "Answer label, uppercase badge",
+      "localizations" : {
+        "fi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "EPÄVARMA"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "EMİN DEĞİLİM"
+          }
+        }
+      }
+    },
+    "noted by Muisti" : {
+      "localizations" : {
+        "fi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Muistin huomaama"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Muisti not aldı"
+          }
+        }
+      }
+    },
     "Notes about people" : {
       "localizations" : {
         "fi" : {
@@ -4444,6 +4841,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "İzlenen hiçbir şey henüz görülmedi."
+          }
+        }
+      }
+    },
+    "nothing watched in view" : {
+      "localizations" : {
+        "fi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ei seurattavaa näkyvissä"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "izlenen bir şey görünmüyor"
           }
         }
       }
@@ -4495,6 +4908,9 @@
           }
         }
       }
+    },
+    "NVIDIA build (free key)" : {
+      "shouldTranslate" : false
     },
     "Off" : {
       "shouldTranslate" : false
@@ -4566,7 +4982,6 @@
         }
       }
     },
-    "Once on, the app connects to the mock glasses through the same SDK calls. Start recording from the main screen." : {},
     "Once recording starts, the last frame you saw appears here." : {
       "localizations" : {
         "fi" : {
@@ -4711,7 +5126,6 @@
         }
       }
     },
-    "Pair Ray-Ban Meta" : {},
     "Paused" : {
       "localizations" : {
         "fi" : {
@@ -4862,7 +5276,6 @@
         }
       }
     },
-    "Powered on" : {},
     "Premium" : {
       "comment" : "Voice quality",
       "localizations" : {
@@ -4992,7 +5405,6 @@
         }
       }
     },
-    "Raw dataset (if on): Files > On My iPhone > Muisti > sessions" : {},
     "Ray-Ban Meta glasses or the iPhone's rear camera." : {
       "localizations" : {
         "fi" : {
@@ -5141,6 +5553,23 @@
         }
       }
     },
+    "refresh" : {
+      "comment" : "Capture trigger",
+      "localizations" : {
+        "fi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "päivitys"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "yenileme"
+          }
+        }
+      }
+    },
     "Remembering" : {
       "localizations" : {
         "fi" : {
@@ -5249,6 +5678,23 @@
         }
       }
     },
+    "returned from background" : {
+      "comment" : "Reason shown after 'Paused:'",
+      "localizations" : {
+        "fi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "palattiin taustalta"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "arka plandan dönüldü"
+          }
+        }
+      }
+    },
     "Rotate glasses photo" : {
       "shouldTranslate" : false
     },
@@ -5268,19 +5714,19 @@
         }
       }
     },
-    "SEEN" : {
-      "comment" : "Answer label, uppercase badge",
+    "running" : {
+      "comment" : "Motion activity",
       "localizations" : {
         "fi" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "NÄHTY"
+            "value" : "juoksu"
           }
         },
         "tr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "GÖRÜLDÜ"
+            "value" : "koşuyor"
           }
         }
       }
@@ -5333,7 +5779,6 @@
         }
       }
     },
-    "Samples: Documents/ingest (manifest.json + photos). They go through the real pipeline: OCR, blurring, episodes, Nemotron." : {},
     "Save to Photos" : {
       "localizations" : {
         "fi" : {
@@ -5447,6 +5892,23 @@
         }
       }
     },
+    "SEEN" : {
+      "comment" : "Answer label, uppercase badge",
+      "localizations" : {
+        "fi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "NÄHTY"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "GÖRÜLDÜ"
+          }
+        }
+      }
+    },
     "Send" : {
       "localizations" : {
         "fi" : {
@@ -5527,23 +5989,22 @@
         }
       }
     },
-    "Showing the closest match" : {
+    "Not seen" : {
       "localizations" : {
         "fi" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Näytetään lähin osuma"
+            "value" : "Ei nähty"
           }
         },
         "tr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "En yakın eşleşme gösteriliyor"
+            "value" : "Görülmedi"
           }
         }
       }
     },
-    "Simulation" : {},
     "Something went wrong" : {
       "localizations" : {
         "fi" : {
@@ -5698,6 +6159,23 @@
         }
       }
     },
+    "still" : {
+      "comment" : "Motion activity",
+      "localizations" : {
+        "fi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "paikallaan"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "duruyor"
+          }
+        }
+      }
+    },
     "Still · next in %.0f s" : {
       "localizations" : {
         "fi" : {
@@ -5797,6 +6275,23 @@
         }
       }
     },
+    "stream" : {
+      "comment" : "Capture trigger",
+      "localizations" : {
+        "fi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "videovirta"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "akış"
+          }
+        }
+      }
+    },
     "Stream and photo" : {
       "shouldTranslate" : false
     },
@@ -5841,7 +6336,23 @@
         }
       }
     },
-    "Tap temple (pause/resume stream)" : {},
+    "tap the glasses' temple to resume" : {
+      "comment" : "Reason shown after 'Paused:'",
+      "localizations" : {
+        "fi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "jatka napauttamalla lasien sankaa"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "devam etmek için gözlüğün sapına dokun"
+          }
+        }
+      }
+    },
     "Tap to ask" : {
       "localizations" : {
         "fi" : {
@@ -5922,7 +6433,6 @@
         }
       }
     },
-    "Test without glasses in the Simulator: sign video, hinge, battery, heat and error scenarios." : {},
     "Text in the frame" : {
       "localizations" : {
         "fi" : {
@@ -5963,22 +6473,6 @@
     },
     "The API key is in the regular Settings. Changes apply when the panel closes." : {
       "shouldTranslate" : false
-    },
-    "The Meta AI app isn't installed. Install it first to connect your glasses." : {
-      "localizations" : {
-        "fi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Meta AI -sovellusta ei ole asennettu. Asenna se ensin, jotta voit yhdistää lasisi."
-          }
-        },
-        "tr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Meta AI uygulaması yüklü değil. Gözlüğünü bağlamak için önce onu yükle."
-          }
-        }
-      }
     },
     "The app on your glasses needs an update." : {
       "localizations" : {
@@ -6060,6 +6554,22 @@
         }
       }
     },
+    "The Meta AI app isn't installed. Install it first to connect your glasses." : {
+      "localizations" : {
+        "fi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Meta AI -sovellusta ei ole asennettu. Asenna se ensin, jotta voit yhdistää lasisi."
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Meta AI uygulaması yüklü değil. Gözlüğünü bağlamak için önce onu yükle."
+          }
+        }
+      }
+    },
     "The microphone isn't ready. Try again." : {
       "localizations" : {
         "fi" : {
@@ -6092,7 +6602,6 @@
         }
       }
     },
-    "Thermal" : {},
     "Things you told Muisti not to bring up again. Swipe left to allow one again." : {
       "localizations" : {
         "fi" : {
@@ -6137,6 +6646,23 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Bu ürün"
+          }
+        }
+      }
+    },
+    "time" : {
+      "comment" : "Capture trigger: time interval elapsed",
+      "localizations" : {
+        "fi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "aika"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "süre"
           }
         }
       }
@@ -6189,7 +6715,23 @@
         }
       }
     },
-    "Turn off MockDeviceKit" : {},
+    "turn" : {
+      "comment" : "Capture trigger: the wearer turned",
+      "localizations" : {
+        "fi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "käännös"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "dönüş"
+          }
+        }
+      }
+    },
     "Turn on AI" : {
       "localizations" : {
         "fi" : {
@@ -6206,8 +6748,6 @@
         }
       }
     },
-    "Turn on mock glasses (registered + permitted)" : {},
-    "Turn on mock glasses (unregistered, no permission)" : {},
     "Turn on your glasses, unfold them and keep them near your iPhone." : {
       "localizations" : {
         "fi" : {
@@ -6226,6 +6766,73 @@
     },
     "Turn threshold %@°" : {
       "shouldTranslate" : false
+    },
+    "unavailable" : {
+      "comment" : "Glasses registration state",
+      "localizations" : {
+        "fi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ei saatavilla"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "kullanılamıyor"
+          }
+        }
+      }
+    },
+    "unchanged" : {
+      "localizations" : {
+        "fi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ennallaan"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "değişmeden"
+          }
+        }
+      }
+    },
+    "unknown" : {
+      "comment" : "Glasses registration state\nMotion activity",
+      "localizations" : {
+        "fi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "tuntematon"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "bilinmiyor"
+          }
+        }
+      }
+    },
+    "unreadable" : {
+      "comment" : "Reason a frame was dropped",
+      "localizations" : {
+        "fi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "lukukelvoton"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "okunamıyor"
+          }
+        }
+      }
     },
     "Update" : {
       "localizations" : {
@@ -6307,7 +6914,6 @@
         }
       }
     },
-    "Video must be H.265; otherwise it is converted automatically. If the stream is already running, restart it to use the new feed." : {},
     "View full screen" : {
       "localizations" : {
         "fi" : {
@@ -6359,22 +6965,6 @@
     "Wait up to %@ s for sharpness" : {
       "shouldTranslate" : false
     },
-    "Waiting for Nemotron" : {
-      "localizations" : {
-        "fi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Odotetaan Nemotronia"
-          }
-        },
-        "tr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Nemotron bekleniyor"
-          }
-        }
-      }
-    },
     "Waiting for glasses" : {
       "localizations" : {
         "fi" : {
@@ -6407,6 +6997,22 @@
         }
       }
     },
+    "Waiting for Nemotron" : {
+      "localizations" : {
+        "fi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Odotetaan Nemotronia"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nemotron bekleniyor"
+          }
+        }
+      }
+    },
     "Waiting for video…" : {
       "localizations" : {
         "fi" : {
@@ -6435,6 +7041,23 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Uyandırma sözcüğü"
+          }
+        }
+      }
+    },
+    "walking" : {
+      "comment" : "Motion activity",
+      "localizations" : {
+        "fi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "kävely"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "yürüyor"
           }
         }
       }
@@ -6515,22 +7138,6 @@
         }
       }
     },
-    "What Muisti saw, not what is true now." : {
-      "localizations" : {
-        "fi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Mitä Muisti näki, ei tämänhetkinen tilanne."
-          }
-        },
-        "tr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Muisti'nin gördüğü, şu anki durum değil."
-          }
-        }
-      }
-    },
     "What did the last sign say?" : {
       "localizations" : {
         "fi" : {
@@ -6543,6 +7150,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Son tabelada ne yazıyordu?"
+          }
+        }
+      }
+    },
+    "What Muisti saw, not what is true now." : {
+      "localizations" : {
+        "fi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mitä Muisti näki, ei tämänhetkinen tilanne."
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Muisti'nin gördüğü, şu anki durum değil."
           }
         }
       }
@@ -6627,18 +7250,18 @@
         }
       }
     },
-    "When Muisti sees %@" : {
+    "when arriving home" : {
       "localizations" : {
         "fi" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Kun Muisti näkee: %@"
+            "value" : "kotiin saapuessa"
           }
         },
         "tr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Muisti şunu görünce: %@"
+            "value" : "eve varınca"
           }
         }
       }
@@ -6655,6 +7278,54 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Eczane ne zaman kapanıyor?"
+          }
+        }
+      }
+    },
+    "when leaving home" : {
+      "localizations" : {
+        "fi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "kotoa lähtiessä"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "evden çıkınca"
+          }
+        }
+      }
+    },
+    "When Muisti sees %@" : {
+      "localizations" : {
+        "fi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Kun Muisti näkee: %@"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Muisti şunu görünce: %@"
+          }
+        }
+      }
+    },
+    "when seen: %@" : {
+      "localizations" : {
+        "fi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "kun näkyy: %@"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "görülünce: %@"
           }
         }
       }
@@ -6755,7 +7426,6 @@
         }
       }
     },
-    "Worn" : {},
     "Write rule" : {
       "localizations" : {
         "fi" : {
@@ -6820,18 +7490,18 @@
         }
       }
     },
-    "You'll switch to the Meta AI app to approve Muisti, then come back here. Requires an internet connection." : {
+    "you said" : {
       "localizations" : {
         "fi" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Siirryt Meta AI -sovellukseen hyväksymään Muistin ja palaat sitten tänne. Vaatii internetyhteyden."
+            "value" : "sanoit"
           }
         },
         "tr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Muisti'yi onaylamak için Meta AI uygulamasına geçecek, sonra buraya döneceksin. İnternet bağlantısı gerekir."
+            "value" : "sen söyledin"
           }
         }
       }
@@ -6852,6 +7522,22 @@
         }
       }
     },
+    "You'll switch to the Meta AI app to approve Muisti, then come back here. Requires an internet connection." : {
+      "localizations" : {
+        "fi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Siirryt Meta AI -sovellukseen hyväksymään Muistin ja palaat sitten tänne. Vaatii internetyhteyden."
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Muisti'yi onaylamak için Meta AI uygulamasına geçecek, sonra buraya döneceksin. İnternet bağlantısı gerekir."
+          }
+        }
+      }
+    },
     "Your reminders, what you tell Muisti about yourself and, if turned on, the titles, times and places of your next day's calendar events are sent to the AI model together with your question. Place names are sent to Apple Maps to find them. Notes about people only ever use text read from a badge or card; faces are never recognised." : {
       "localizations" : {
         "fi" : {
@@ -6864,732 +7550,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Hatırlatmaların, Muisti'ye kendin hakkında söylediklerin ve açıksa ertesi günkü takvim etkinliklerinin başlık, saat ve yerleri sorunla birlikte yapay zekâ modeline gönderilir. Yer adları bulunmaları için Apple Haritalar'a gönderilir. Kişilerle ilgili notlar sadece yaka kartı ya da kartvizitten okunan yazıyı kullanır; yüzler asla tanınmaz."
-          }
-        }
-      }
-    },
-    "blurry" : {
-      "comment" : "Reason a frame was dropped",
-      "localizations" : {
-        "fi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "epätarkka"
-          }
-        },
-        "tr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "bulanık"
-          }
-        }
-      }
-    },
-    "connected" : {
-      "comment" : "Glasses registration state",
-      "localizations" : {
-        "fi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "yhdistetty"
-          }
-        },
-        "tr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "bağlı"
-          }
-        }
-      }
-    },
-    "connecting" : {
-      "comment" : "Glasses registration state",
-      "localizations" : {
-        "fi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "yhdistetään"
-          }
-        },
-        "tr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "bağlanıyor"
-          }
-        }
-      }
-    },
-    "critical" : {},
-    "cycling" : {
-      "comment" : "Motion activity",
-      "localizations" : {
-        "fi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "pyöräily"
-          }
-        },
-        "tr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "bisiklette"
-          }
-        }
-      }
-    },
-    "distance" : {
-      "comment" : "Capture trigger",
-      "localizations" : {
-        "fi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "matka"
-          }
-        },
-        "tr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "mesafe"
-          }
-        }
-      }
-    },
-    "duplicate" : {
-      "comment" : "Reason a frame was dropped",
-      "localizations" : {
-        "fi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "kaksoiskappale"
-          }
-        },
-        "tr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "yinelenen"
-          }
-        }
-      }
-    },
-    "dwell" : {
-      "comment" : "Capture trigger: the wearer stopped moving",
-      "localizations" : {
-        "fi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "pysähdys"
-          }
-        },
-        "tr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "duraklama"
-          }
-        }
-      }
-    },
-    "empty = embedding key" : {
-      "shouldTranslate" : false
-    },
-    "empty = keywords only" : {
-      "shouldTranslate" : false
-    },
-    "empty = off" : {
-      "shouldTranslate" : false
-    },
-    "empty = same as chat" : {
-      "shouldTranslate" : false
-    },
-    "fast (bike/vehicle)" : {
-      "localizations" : {
-        "fi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "nopea (pyörä/ajoneuvo)"
-          }
-        },
-        "tr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "hızlı (bisiklet/araç)"
-          }
-        }
-      }
-    },
-    "first frame" : {
-      "comment" : "Capture trigger",
-      "localizations" : {
-        "fi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "ensimmäinen kuva"
-          }
-        },
-        "tr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "ilk kare"
-          }
-        }
-      }
-    },
-    "fixed interval" : {
-      "comment" : "Capture trigger",
-      "localizations" : {
-        "fi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "kiinteä väli"
-          }
-        },
-        "tr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "sabit aralık"
-          }
-        }
-      }
-    },
-    "follow-up" : {
-      "comment" : "Capture trigger",
-      "localizations" : {
-        "fi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "jatkokuva"
-          }
-        },
-        "tr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "takip"
-          }
-        }
-      }
-    },
-    "glasses aren't on; put them on and tap the temple" : {
-      "comment" : "Reason shown after 'Paused:'",
-      "localizations" : {
-        "fi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "lasit eivät ole päässä; laita ne päähän ja napauta sankaa"
-          }
-        },
-        "tr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "gözlük takılı değil; tak ve sapına dokun"
-          }
-        }
-      }
-    },
-    "glasses switched to another experience" : {
-      "comment" : "Reason shown after 'Paused:'",
-      "localizations" : {
-        "fi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "lasit vaihtoivat toiseen toimintoon"
-          }
-        },
-        "tr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "gözlük başka bir deneyime geçti"
-          }
-        }
-      }
-    },
-    "high-res" : {
-      "comment" : "Capture trigger",
-      "localizations" : {
-        "fi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "tarkka kuva"
-          }
-        },
-        "tr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "yüksek çözünürlük"
-          }
-        }
-      }
-    },
-    "hot" : {},
-    "https://…/v1" : {
-      "shouldTranslate" : false
-    },
-    "iPhone camera" : {
-      "localizations" : {
-        "fi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "iPhonen kamera"
-          }
-        },
-        "tr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "iPhone kamerası"
-          }
-        }
-      }
-    },
-    "iPhone camera access wasn't granted." : {
-      "localizations" : {
-        "fi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "iPhonen kameran käyttöä ei sallittu."
-          }
-        },
-        "tr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "iPhone kamerasına erişim verilmedi."
-          }
-        }
-      }
-    },
-    "iPhone rear camera (live)" : {},
-    "in vehicle" : {
-      "comment" : "Motion activity",
-      "localizations" : {
-        "fi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "ajoneuvossa"
-          }
-        },
-        "tr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "araçta"
-          }
-        }
-      }
-    },
-    "it" : {
-      "comment" : "Fallback object name in a rule trigger",
-      "localizations" : {
-        "fi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "kohde"
-          }
-        },
-        "tr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "nesne"
-          }
-        }
-      }
-    },
-    "manual" : {
-      "comment" : "Capture trigger",
-      "localizations" : {
-        "fi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "manuaalinen"
-          }
-        },
-        "tr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "elle"
-          }
-        }
-      }
-    },
-    "model" : {
-      "shouldTranslate" : false
-    },
-    "no text" : {
-      "comment" : "Reason a frame was dropped",
-      "localizations" : {
-        "fi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "ei tekstiä"
-          }
-        },
-        "tr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "yazı yok"
-          }
-        }
-      }
-    },
-    "no-record zone" : {
-      "comment" : "Reason a frame was dropped",
-      "localizations" : {
-        "fi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "tallennuskieltoalue"
-          }
-        },
-        "tr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "kayıt yapılmayan yer"
-          }
-        }
-      }
-    },
-    "normal" : {},
-    "not connected" : {
-      "comment" : "Glasses registration state",
-      "localizations" : {
-        "fi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "ei yhdistetty"
-          }
-        },
-        "tr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "bağlı değil"
-          }
-        }
-      }
-    },
-    "noted by Muisti" : {
-      "localizations" : {
-        "fi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Muistin huomaama"
-          }
-        },
-        "tr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Muisti not aldı"
-          }
-        }
-      }
-    },
-    "nothing watched in view" : {
-      "localizations" : {
-        "fi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "ei seurattavaa näkyvissä"
-          }
-        },
-        "tr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "izlenen bir şey görünmüyor"
-          }
-        }
-      }
-    },
-    "refresh" : {
-      "comment" : "Capture trigger",
-      "localizations" : {
-        "fi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "päivitys"
-          }
-        },
-        "tr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "yenileme"
-          }
-        }
-      }
-    },
-    "returned from background" : {
-      "comment" : "Reason shown after 'Paused:'",
-      "localizations" : {
-        "fi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "palattiin taustalta"
-          }
-        },
-        "tr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "arka plandan dönüldü"
-          }
-        }
-      }
-    },
-    "running" : {
-      "comment" : "Motion activity",
-      "localizations" : {
-        "fi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "juoksu"
-          }
-        },
-        "tr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "koşuyor"
-          }
-        }
-      }
-    },
-    "still" : {
-      "comment" : "Motion activity",
-      "localizations" : {
-        "fi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "paikallaan"
-          }
-        },
-        "tr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "duruyor"
-          }
-        }
-      }
-    },
-    "stream" : {
-      "comment" : "Capture trigger",
-      "localizations" : {
-        "fi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "videovirta"
-          }
-        },
-        "tr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "akış"
-          }
-        }
-      }
-    },
-    "tap the glasses' temple to resume" : {
-      "comment" : "Reason shown after 'Paused:'",
-      "localizations" : {
-        "fi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "jatka napauttamalla lasien sankaa"
-          }
-        },
-        "tr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "devam etmek için gözlüğün sapına dokun"
-          }
-        }
-      }
-    },
-    "time" : {
-      "comment" : "Capture trigger: time interval elapsed",
-      "localizations" : {
-        "fi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "aika"
-          }
-        },
-        "tr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "süre"
-          }
-        }
-      }
-    },
-    "turn" : {
-      "comment" : "Capture trigger: the wearer turned",
-      "localizations" : {
-        "fi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "käännös"
-          }
-        },
-        "tr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "dönüş"
-          }
-        }
-      }
-    },
-    "unavailable" : {
-      "comment" : "Glasses registration state",
-      "localizations" : {
-        "fi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "ei saatavilla"
-          }
-        },
-        "tr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "kullanılamıyor"
-          }
-        }
-      }
-    },
-    "unchanged" : {
-      "localizations" : {
-        "fi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "ennallaan"
-          }
-        },
-        "tr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "değişmeden"
-          }
-        }
-      }
-    },
-    "unknown" : {
-      "comment" : "Glasses registration state\nMotion activity",
-      "localizations" : {
-        "fi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "tuntematon"
-          }
-        },
-        "tr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "bilinmiyor"
-          }
-        }
-      }
-    },
-    "unreadable" : {
-      "comment" : "Reason a frame was dropped",
-      "localizations" : {
-        "fi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "lukukelvoton"
-          }
-        },
-        "tr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "okunamıyor"
-          }
-        }
-      }
-    },
-    "walking" : {
-      "comment" : "Motion activity",
-      "localizations" : {
-        "fi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "kävely"
-          }
-        },
-        "tr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "yürüyor"
-          }
-        }
-      }
-    },
-    "warm" : {},
-    "when arriving home" : {
-      "localizations" : {
-        "fi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "kotiin saapuessa"
-          }
-        },
-        "tr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "eve varınca"
-          }
-        }
-      }
-    },
-    "when leaving home" : {
-      "localizations" : {
-        "fi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "kotoa lähtiessä"
-          }
-        },
-        "tr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "evden çıkınca"
-          }
-        }
-      }
-    },
-    "when seen: %@" : {
-      "localizations" : {
-        "fi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "kun näkyy: %@"
-          }
-        },
-        "tr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "görülünce: %@"
-          }
-        }
-      }
-    },
-    "you said" : {
-      "localizations" : {
-        "fi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "sanoit"
-          }
-        },
-        "tr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "sen söyledin"
-          }
-        }
-      }
-    },
-    "·" : {
-      "localizations" : {
-        "fi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "·"
-          }
-        },
-        "tr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "·"
           }
         }
       }

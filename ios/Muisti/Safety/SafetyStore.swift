@@ -62,6 +62,24 @@ actor SafetyStore {
 
     nonisolated func frameURL(_ name: String) -> URL { framesDirectory.appendingPathComponent(name) }
 
+    /// The frames just before an evidence frame (already masked), kept next to it so that "did
+    /// I lock it?" can be answered with the few seconds in which it happened.
+    func saveStrip(_ frames: [Data], before name: String) {
+        for (i, jpeg) in frames.suffix(Self.stripLength).enumerated() {
+            try? jpeg.write(to: framesDirectory.appendingPathComponent(Self.stripName(name, i)),
+                            options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+        }
+    }
+
+    static let stripLength = 7
+    private static func stripName(_ name: String, _ index: Int) -> String { "\(name.dropLast(4))_before\(index).jpg" }
+
+    /// An evidence frame with the frames before it, oldest first (just the frame when it has none).
+    nonisolated func sequenceURLs(_ name: String) -> [URL] {
+        (0..<Self.stripLength).map { framesDirectory.appendingPathComponent(Self.stripName(name, $0)) }
+            .filter { FileManager.default.fileExists(atPath: $0.path) } + [frameURL(name)]
+    }
+
     // MARK: Rules
 
     func rules() -> [SafetyRule] {
