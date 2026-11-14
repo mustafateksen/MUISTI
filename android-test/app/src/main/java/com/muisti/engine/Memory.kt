@@ -94,15 +94,48 @@ class MemoryStore(private val dir: File) {
 /** Port of embed.py: nemotron-3.5-embed-1b, passage/query, batches of 32, unit vectors, cached by (kind, text). */
 class Embedder(private val key: String, private val cacheFile: File?) {
     private val http = OkHttpClient.Builder().readTimeout(60, TimeUnit.SECONDS).build()
-    private val cache = HashMap<String, FloatArray>()
+    // most recently used last; trimmed to MAX_CACHE (the old text cache grew to 180 MB and froze app start for ~27 s)
+    private val cache = LinkedHashMap<String, FloatArray>(1024, 0.75f, true)
     private val lock = Any()
+    private val binFile = cacheFile?.let { File(it.parentFile, it.nameWithoutExtension + ".bin") }
+    private var loaded = false
 
-    init {
-        cacheFile?.takeIf { it.exists() }?.forEachLine { l ->
-            val tab = l.indexOf('\t')
-            if (tab > 0) cache[l.substring(0, tab)] = l.substring(tab + 1).split(',').map { it.toFloat() }.toFloatArray()
+    /** Binary cache: [key UTF][dim int][dim floats]... Read on first use (a background thread), never at construction. */
+    private fun ensureLoaded() {
+        if (loaded) return
+        loaded = true
+        cacheFile?.takeIf { it.exists() && it.extension == "tsv" }?.delete()     // old, slow text format: rebuilt on demand
+        val f = binFile?.takeIf { it.exists() } ?: return
+        var count = 0
+        runCatching {
+            java.io.DataInputStream(java.io.BufferedInputStream(f.inputStream(), 1 shl 16)).use { inp ->
+                while (true) {
+                    val key = try { inp.readUTF() } catch (e: java.io.EOFException) { break }
+                    val n = inp.readInt()
+                    val bytes = ByteArray(n * 4); inp.readFully(bytes)
+                    val v = FloatArray(n); java.nio.ByteBuffer.wrap(bytes).asFloatBuffer().get(v)
+                    cache[key] = v; count++
+                }
+            }
         }
+        if (count > MAX_CACHE) { trim(); rewrite() }
     }
+
+    private fun trim() { val it = cache.keys.iterator(); while (cache.size > MAX_CACHE && it.hasNext()) { it.next(); it.remove() } }
+
+    private fun rewrite() {
+        val f = binFile ?: return
+        val tmp = File(f.path + ".tmp")
+        java.io.DataOutputStream(java.io.BufferedOutputStream(tmp.outputStream(), 1 shl 16)).use { out -> for ((k, v) in cache) write(out, k, v) }
+        tmp.renameTo(f)
+    }
+
+    private fun write(out: java.io.DataOutputStream, k: String, v: FloatArray) {
+        out.writeUTF(k); out.writeInt(v.size)
+        val b = java.nio.ByteBuffer.allocate(v.size * 4); b.asFloatBuffer().put(v); out.write(b.array())
+    }
+
+    companion object { const val MAX_CACHE = 4000 }
 
     fun available() = key.isNotEmpty()
 
@@ -114,6 +147,7 @@ class Embedder(private val key: String, private val cacheFile: File?) {
     fun embed(texts: List<String>, kind: String): List<FloatArray>? {
         if (!available() || texts.isEmpty()) return null
         synchronized(lock) {
+            ensureLoaded()
             val missing = texts.distinct().filter { k(kind, it) !in cache }
             try {
                 for (batch in missing.chunked(32)) {
@@ -132,7 +166,7 @@ class Embedder(private val key: String, private val cacheFile: File?) {
                             val norm = maxOf(Math.sqrt(n), 1e-8).toFloat()
                             for (i in v.indices) v[i] /= norm
                             cache[k(kind, t)] = v
-                            cacheFile?.appendText(k(kind, t) + "\t" + v.joinToString(",") + "\n")
+                            binFile?.let { f -> java.io.DataOutputStream(java.io.FileOutputStream(f, true).buffered()).use { write(it, k(kind, t), v) } }
                         }
                     }
                 }
