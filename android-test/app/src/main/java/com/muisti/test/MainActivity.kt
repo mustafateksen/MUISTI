@@ -77,7 +77,7 @@ class MainActivity : ComponentActivity() {
     /** Ray-Ban Meta camera (created here: it registers activity-result launchers). */
     private val glasses = GlassesSource(this, state) { onGlassesFrame(it) }
     /** Ahmet's head masking: nothing leaves the phone or is stored unblurred. */
-    private val blurrer by lazy { FaceBlurrer() }
+    private val blurrer by lazy { VisualRedactor() }
     private val location by lazy { LocationTracker(applicationContext) }
     private val locationPermission = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { res ->
         if (res.values.any { it } && state.recording) { location.start(); state.hasLocation = true }
@@ -146,15 +146,16 @@ class MainActivity : ComponentActivity() {
                     var bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: return@withContext "That isn't an image."
                     val l = maxOf(bmp.width, bmp.height)
                     if (l > 1536) bmp = Bitmap.createScaledBitmap(bmp, bmp.width * 1536 / l, bmp.height * 1536 / l, true)
-                    val obs = withContext(Dispatchers.Main) { readText(bmp) }
+                    val ocr = withContext(Dispatchers.Main) { readText(bmp) }
+                    val (obs, plates) = plateFilter(bmp, ocr)
                     // the same privacy gate as the live stream (one photo: judged on its own)
                     if (!privacy.available) return@withContext "Not saved: the privacy check isn't available (nothing was sent)."
                     val sc = runCatching { privacy.score(bmp) }.getOrNull()
                         ?: return@withContext "Not saved: the privacy check failed (nothing was sent)."
                     android.util.Log.i("MuistiPrivacy", "import: stop %.2f (%s) drop %.2f (%s) text %.2f, %d ms".format(sc.stop, sc.stopClass, sc.pin, sc.dropClass, sc.textual, sc.ms))
                     SceneRules.blockReason(sc.byClass, privacySettings.current)?.let { return@withContext "Not saved: $it (privacy)." }
-                    PrivacyText.check(obs.map { it.text }, sc.hint)?.let { return@withContext "Not saved: it shows $it (privacy)." }
-                    val safe = blurrer.process(bmp) ?: return@withContext "Skipped: privacy check failed."
+                    PrivacyText.check(ocr.obs.map { it.text }, sc.hint)?.let { return@withContext "Not saved: it shows $it (privacy)." }
+                    val safe = blurrer.process(bmp, plates) ?: return@withContext "Skipped: privacy check failed."
                     val jpeg = ByteArrayOutputStream().also { safe.image.compress(Bitmap.CompressFormat.JPEG, 85, it) }.toByteArray()
                     // where and when: the photo's own EXIF (a camera photo knows both), else right now
                     val exif = runCatching { android.media.ExifInterface(java.io.ByteArrayInputStream(bytes)) }.getOrNull()
@@ -267,6 +268,7 @@ class MainActivity : ComponentActivity() {
             privacySettings.update { s -> s.withClass(cls, on).let { n -> if (on && !s.isActive(cls)) OldMemoryScan.restart(n) else n } }
             if (on) OldMemoryScanWorker.schedule(applicationContext)
         }
+        override fun setPlateBlur(on: Boolean) { privacySettings.update { it.copy(plateBlur = on) } }
         override fun scanNow() { OldMemoryScanWorker.now(applicationContext); state.toast("Checking older memories…") }
         override fun setSensitiveOcr(on: Boolean) { privacySettings.update { it.copy(sensitiveOcr = on) } }
         override fun close() { state.showPrivacy = false }
@@ -475,9 +477,11 @@ class MainActivity : ComponentActivity() {
             .onFailure { state.toast("No maps app found.") }
     }
 
-    private fun blurJpeg(jpeg: ByteArray): ByteArray? {
+    /** The live frame for "what am I looking at?": heads and plates masked like a stored frame; null = not sent. */
+    private suspend fun blurJpeg(jpeg: ByteArray): ByteArray? {
         val bmp = BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size) ?: return null
-        val safe = blurrer.process(bmp) ?: return null
+        val plates = plateFilter(bmp, withContext(Dispatchers.Main) { readText(bmp) }).second
+        val safe = blurrer.process(bmp, plates) ?: return null
         return ByteArrayOutputStream().also { safe.image.compress(Bitmap.CompressFormat.JPEG, 85, it) }.toByteArray()
     }
 
@@ -707,16 +711,17 @@ class MainActivity : ComponentActivity() {
     private suspend fun upload(bmp: Bitmap, dhash: Long) {
         val seenAt = System.currentTimeMillis()
         val fix = location.fresh()
-        val obs = readText(bmp)                  // text is read from the raw frame, on the phone
+        val ocr = readText(bmp)                  // text is read from the raw frame, on the phone
+        val (obs, plates) = plateFilter(bmp, ocr)
         if (privacy.paused) { state.privacyDropped++; return }
         // privacy: card numbers, IBAN, ID numbers, PIN/password screens never leave the phone
-        PrivacyText.check(obs.map { it.text }, privacy.lastHint)?.let { why ->
+        PrivacyText.check(ocr.obs.map { it.text }, privacy.lastHint)?.let { why ->
             state.privacyDropped++
             if (privacy.textHit(why, System.currentTimeMillis()) != null) onPrivacyEnter()
             return
         }
         // privacy: heads are masked BEFORE the frame goes to Nemotron or into memory; on failure drop it
-        val safe = withContext(Dispatchers.Default) { blurrer.process(bmp) }
+        val safe = withContext(Dispatchers.Default) { blurrer.process(bmp, plates) }
         if (safe == null) { state.lastFrame = "Skipped · privacy check failed"; return }
         state.facesBlurred += safe.faceCount
         val stored = withContext(Dispatchers.IO) {
@@ -747,19 +752,40 @@ class MainActivity : ComponentActivity() {
     }
 
     /** ML Kit lines -> the same observation shape Apple Vision produces on iOS. */
-    private suspend fun readText(bmp: Bitmap): List<Obs> = suspendCancellableCoroutine { cont ->
+    /** The phone's OCR of one frame: lines for Nemotron (obs) and the same lines as boxes with their block size (plates). */
+    class Ocr(val obs: List<Obs>, val boxes: List<com.muisti.privacy.TextBox>)
+
+    private suspend fun readText(bmp: Bitmap): Ocr = suspendCancellableCoroutine { cont ->
         recognizer.process(InputImage.fromBitmap(bmp, 0))
             .addOnSuccessListener { text ->
                 val w = bmp.width.toDouble(); val h = bmp.height.toDouble()
-                val obs = ArrayList<Obs>()
+                val obs = ArrayList<Obs>(); val boxes = ArrayList<com.muisti.privacy.TextBox>()
                 for (block in text.textBlocks) for (line in block.lines) {
                     val r = line.boundingBox ?: continue
                     obs.add(Obs(line.text, (line.confidence.takeIf { it > 0f } ?: 1f).toDouble(),
                         r.left / w, r.top / h, r.width() / w, r.height() / h))
+                    boxes.add(com.muisti.privacy.TextBox(line.text, r.left / w, r.top / h, r.width() / w, r.height() / h, block.lines.size))
                 }
-                if (cont.isActive) cont.resume(obs)
+                if (cont.isActive) cont.resume(Ocr(obs, boxes))
             }
-            .addOnFailureListener { if (cont.isActive) cont.resume(emptyList()) }
+            .addOnFailureListener { if (cont.isActive) cont.resume(Ocr(emptyList(), emptyList())) }
+    }
+
+    /**
+     * Licence plates (setting "Blur licence plates"): their boxes are masked by the redactor (padded 25 %, as on iOS)
+     * and their text is removed from the OCR lines, so neither the picture nor the text of a plate leaves the phone.
+     */
+    private fun plateFilter(bmp: Bitmap, ocr: Ocr): Pair<List<Obs>, List<android.graphics.RectF>> {
+        if (!privacySettings.current.plateBlur) return ocr.obs to emptyList()
+        val plates = com.muisti.privacy.PlateDetector.find(ocr.boxes, bmp.width, bmp.height).toSet()
+        if (plates.isEmpty()) return ocr.obs to emptyList()
+        val w = bmp.width.toFloat(); val h = bmp.height.toFloat()
+        val rects = plates.map { b ->
+            android.graphics.RectF((b.x * w).toFloat(), (b.y * h).toFloat(), ((b.x + b.w) * w).toFloat(), ((b.y + b.h) * h).toFloat())
+                .apply { inset(-width() * 0.25f, -height() * 0.25f) }
+        }
+        android.util.Log.i("MuistiPrivacy", "plates masked: ${plates.size}")
+        return ocr.obs.filterIndexed { i, _ -> ocr.boxes[i] !in plates } to rects
     }
 
     private fun pollStats() {

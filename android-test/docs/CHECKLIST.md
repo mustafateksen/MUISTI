@@ -41,12 +41,12 @@ is absent. Tasks whose "Done when" needs the device or those memories cannot be 
 | P1.1 | Privacy settings model and screen | PARTIAL | PrivacySettingsTest (defaults, locked classes, restart via store, toggle changes decision) | 6b74a08 | Settings screen (Settings → Privacy settings) wired; on-device P_atm_0.jpg import check BLOCKED: no device |
 | P1.2 | Sensitive OCR, tested | PARTIAL | PrivacyTextTest: 19 positive + 19 negative cases, setting gate | 6b74a08 | live + import paths use PrivacyText.check(SceneHint); on-device card-photo import BLOCKED: no device. Default off (team decision) |
 | P1.3 | Fail-safe audit of every image exit | DONE | PrivacyGateTest (6): extract/liveLook/lookAgain send 0 requests when gate blocks, throws, or is default; source scan finds no other image builder | 6b74a08 | Llm.gate defaults to CLOSED; PrivacyGuard.gate installed after model load |
-| P1.4 | Old-memory scan that survives restarts | PARTIAL | OldMemoryScanTest: killed after 900 of 1100 frames, a new process resumes after id 900; frames 845-852, 915, 1006, 1029 deleted; crash = private | next | WorkManager (battery-not-low + idle; Check now = battery only); progress in Privacy settings. On-device kill/resume and the real toilet frames: BLOCKED (no device) |
-| P1.5 | License-plate privacy | TODO | | | |
+| P1.4 | Old-memory scan that survives restarts | PARTIAL | OldMemoryScanTest: killed after 900 of 1100 frames, a new process resumes after id 900; frames 845-852, 915, 1006, 1029 deleted; crash = private | 6b397c2 | WorkManager (battery-not-low + idle; Check now = battery only); progress in Privacy settings. On-device kill/resume and the real toilet frames: BLOCKED (no device) |
+| P1.5 | License-plate privacy | PARTIAL | PlateDetectorTest: 13/13 plate strings, 0/24 signs/prices/hours, box aspect + block-size filter | next | Wikimedia 10-photo plate set + 10-photo sign set need ML Kit OCR on the phone: BLOCKED (no device). Plate text is also removed from the OCR lines sent to Nemotron |
 | P1.6 | API keys out of the APK | TODO | | | |
 | P1.7 | Network resilience | TODO | | | |
 | P1.8 | Retrieval reliability baseline (JSON report) | TODO | | | |
-| D1 | Old-memory scan never finishes | PARTIAL | see P1.4 | next | fixed in code + JVM test; device check BLOCKED |
+| D1 | Old-memory scan never finishes | PARTIAL | see P1.4 | 6b397c2 | fixed in code + JVM test; device check BLOCKED |
 | D2 | Sentence vectors can go stale | TODO | | | |
 | D3 | Agent regression lost points (30 → 27/31) | TODO | | | |
 | D4 | Speech-correction gap ("not eat") | TODO | | | |
@@ -84,6 +84,6 @@ is absent. Tasks whose "Done when" needs the device or those memories cannot be 
 | Changing room / medical room (pause) | same, if switched on in Privacy settings | off | PrivacySettingsTest |
 | PIN pad / ATM, banking screens, cards, documents (drop) | same, if switched on | off (team decision: may go to Nemotron) | PrivacySettingsTest.togglingAClassChangesTheDecision |
 | Sensitive OCR: card (Luhn + issuer, split lines), IBAN (mod 97, split lines), HETU, MRZ, ID words + date/number, PIN words on keypad scenes, password words on document/screen scenes | `privacy/PrivacyRules.kt` `PrivacyText.check`, live + import paths | off (team decision), setting "Block frames with card numbers / IBAN / ID numbers / PINs" | PrivacyTextTest (19+/19−) |
-| Head blur before send/store | `FaceBlurrer` in live, import, live look | on | none (ML Kit: device only) |
-| Plate blur | not implemented yet | — | — |
+| Head blur before send/store | `VisualRedactor` in live, import, live look | on | none (ML Kit: device only) |
+| Plate blur + plate text removed from OCR lines | `PlateDetector` on the phone OCR boxes → `VisualRedactor`, live + import + live look | on (setting "Blur licence plates") | PlateDetectorTest (13 plates, 24 signs); photo set: device only |
 | No-record zones | not implemented yet | — | — |

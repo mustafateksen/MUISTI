@@ -34,6 +34,7 @@ import com.muisti.privacy.Zone
 interface PrivacyActions {
     fun setClass(cls: String, on: Boolean)
     fun setSensitiveOcr(on: Boolean)
+    fun setPlateBlur(on: Boolean)
     fun scanNow()
     fun close()
 }
@@ -63,6 +64,8 @@ fun PrivacyScreen(s: PrivacySettings, insideZone: String?, a: PrivacyActions) {
             Section("Text on frames")
             ToggleRow("Block frames with card numbers / IBAN / ID numbers / PINs",
                 "Checked on the phone's OCR (Luhn, IBAN, Finnish ID). Off by team decision.", s.sensitiveOcr) { a.setSensitiveOcr(it) }
+            ToggleRow("Blur licence plates", "Plates are blurred before a frame is stored or sent.", s.plateBlur) { a.setPlateBlur(it) }
+
             Section("Older memories")
             val sc = s.scan
             when {

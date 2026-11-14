@@ -19,7 +19,7 @@ import java.util.concurrent.TimeUnit
 import kotlin.math.hypot
 
 /**
- * Android port of Ahmet's FaceBlurrer.swift: heads are masked BEFORE a frame leaves the phone
+ * Android port of Ahmet's FaceBlurrer.swift (renamed: it now also masks licence plates): heads and plates are masked BEFORE a frame leaves the phone
  * or is stored. Same rules:
  *  - detect heads with a face detector + body pose (nose/eyes/ears, else neck+shoulders),
  *  - small frames are scanned at 2x, as the whole frame plus 4 overlapping 60% tiles,
@@ -29,9 +29,9 @@ import kotlin.math.hypot
  * Apple Vision -> Google ML Kit (on device). ML Kit has no upper-body detector; pose covers that.
  * Call from a background thread.
  */
-class FaceBlurrer(private val padding: Float = 0.3f) {
+class VisualRedactor(private val padding: Float = 0.3f) {
 
-    class Result(val image: Bitmap, val faceCount: Int)
+    class Result(val image: Bitmap, val faceCount: Int, val plateCount: Int = 0)
 
     private val faces = FaceDetection.getClient(FaceDetectorOptions.Builder()
         .setPerformanceMode(FaceDetectorOptions.PERFORMANCE_MODE_ACCURATE)
@@ -42,10 +42,11 @@ class FaceBlurrer(private val padding: Float = 0.3f) {
 
     fun close() { faces.close(); pose.close() }
 
-    fun process(src: Bitmap): Result? {
+    /** Heads (detected here) and [plates] (from the phone's OCR, see PlateDetector) are masked; null = drop the frame. */
+    fun process(src: Bitmap, plates: List<RectF> = emptyList()): Result? {
         val heads = findHeads(src) ?: return null
-        val out = apply(heads, src) ?: return null
-        return Result(out, heads.size)
+        val out = apply(heads + plates, src) ?: return null
+        return Result(out, heads.size, plates.size)
     }
 
     /** Head boxes in [src] pixels; null if any detection failed (fail-safe). */
