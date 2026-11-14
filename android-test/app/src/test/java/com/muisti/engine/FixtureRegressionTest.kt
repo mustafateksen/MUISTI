@@ -23,7 +23,8 @@ class FixtureRegressionTest {
         val cfg = LlmConfig(System.getProperty("muisti.llmBaseUrl")!!, System.getProperty("muisti.llmModel")!!, key!!,
             System.getProperty("muisti.embedKey") ?: "")
         val prompts = Prompts(File(repo, "nemotron/docs/prompts.json").readText())
-        val llm = Llm(cfg)
+        // PC evaluation of stored test frames: no phone privacy model here (the app never uses OPEN)
+        val llm = Llm(cfg).apply { gate = com.muisti.privacy.PrivacyGate.OPEN }
         val asker = Asker(llm, prompts, ParityTest.JvmImages, Embedder(cfg.embedKey, File("build/fixture_embed.tsv")))
         val agent = Agent(llm, prompts, asker)
         val docs = Fixture.docs()

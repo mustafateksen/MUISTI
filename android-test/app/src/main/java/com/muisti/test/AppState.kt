@@ -70,5 +70,8 @@ class AppState {
     var showGallery by mutableStateOf(false)
     var gallery by mutableStateOf<List<Shot>?>(null)   // null = loading
 
+    var privacySettings by mutableStateOf(com.muisti.privacy.PrivacySettings())
+    var showPrivacy by mutableStateOf(false)
+
     fun toast(text: String) { toastText = text }
 }

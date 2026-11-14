@@ -4,6 +4,8 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import com.muisti.privacy.Decision
+import com.muisti.privacy.PrivacyGate
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.Base64
@@ -44,7 +46,7 @@ interface Images {
 }
 
 /** An image was judged private on the phone, so the request was not made. */
-class PrivacyBlocked : RuntimeException("blocked on the phone: private view")
+class PrivacyBlocked(val reason: String = "private view") : RuntimeException("blocked on the phone: $reason")
 
 class LlmConfig(val baseUrl: String, val model: String, val key: String, val embedKey: String)
 
@@ -83,16 +85,19 @@ class Llm(private val cfg: LlmConfig) {
     private val jsonType = "application/json".toMediaType()
 
     /**
-     * Last line of defence: EVERY image that leaves the phone is built here, so the app sets a check that runs on
-     * the phone right before it is put in a request (true = private -> PrivacyBlocked, nothing is sent).
-     * Null only in JVM tests.
+     * Last line of defence: EVERY image that leaves the phone is built here and passes [gate] right before it is put
+     * in a request (Block -> PrivacyBlocked, nothing is sent). Fail-closed: the default gate blocks everything, and a
+     * gate that throws counts as Block. The app installs the on-phone check; JVM evaluations set PrivacyGate.OPEN.
      */
-    @Volatile var imageGuard: ((ByteArray) -> Boolean)? = null
+    @Volatile var gate: PrivacyGate = PrivacyGate.CLOSED
 
-    fun imagePart(jpeg: ByteArray): JSONObject = JSONObject()
-        .also { if (imageGuard?.invoke(jpeg) == true) throw PrivacyBlocked() }
-        .put("type", "image_url")
-        .put("image_url", JSONObject().put("url", "data:image/jpeg;base64," + Base64.getEncoder().encodeToString(jpeg)))
+    fun imagePart(jpeg: ByteArray): JSONObject {
+        val d = try { gate.check(jpeg) } catch (e: Throwable) { Decision.Block("privacy check failed (${e.javaClass.simpleName})") }
+        if (d is Decision.Block) throw PrivacyBlocked(d.reason)
+        return JSONObject()
+            .put("type", "image_url")
+            .put("image_url", JSONObject().put("url", "data:image/jpeg;base64," + Base64.getEncoder().encodeToString(jpeg)))
+    }
 
     fun textPart(text: String): JSONObject = JSONObject().put("type", "text").put("text", text)
 

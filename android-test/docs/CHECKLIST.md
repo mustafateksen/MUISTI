@@ -38,9 +38,9 @@ is absent. Tasks whose "Done when" needs the device or those memories cannot be 
 | ID | Task | Status | Evidence (test / log / screenshot) | Commit | Notes / limits |
 |----|------|--------|------------------------------------|--------|----------------|
 | S0 | Audit, checklist, baseline | DONE | docs/BASELINE.md, FixtureRegressionTest 20/20 | | on-device baseline BLOCKED (no device) |
-| P1.1 | Privacy settings model and screen | TODO | | | |
-| P1.2 | Sensitive OCR, tested | TODO | | | |
-| P1.3 | Fail-safe audit of every image exit | TODO | | | |
+| P1.1 | Privacy settings model and screen | PARTIAL | PrivacySettingsTest (defaults, locked classes, restart via store, toggle changes decision) | next | Settings screen (Settings → Privacy settings) wired; on-device P_atm_0.jpg import check BLOCKED: no device |
+| P1.2 | Sensitive OCR, tested | PARTIAL | PrivacyTextTest: 19 positive + 19 negative cases, setting gate | next | live + import paths use PrivacyText.check(SceneHint); on-device card-photo import BLOCKED: no device. Default off (team decision) |
+| P1.3 | Fail-safe audit of every image exit | DONE | PrivacyGateTest (6): extract/liveLook/lookAgain send 0 requests when gate blocks, throws, or is default; source scan finds no other image builder | next | Llm.gate defaults to CLOSED; PrivacyGuard.gate installed after model load |
 | P1.4 | Old-memory scan that survives restarts | TODO | | | |
 | P1.5 | License-plate privacy | TODO | | | |
 | P1.6 | API keys out of the APK | TODO | | | |
@@ -79,10 +79,11 @@ is absent. Tasks whose "Done when" needs the device or those memories cannot be 
 ## Privacy truth table (what is actually enforced today)
 | Protection | Enforced where | Default | Tested by |
 |---|---|---|---|
-| Bathroom / nudity scenes never leave the phone | `PrivacyGuard.ACTIVE` (MobileCLIP on the phone) + `Llm.imageGuard` | on (hardcoded) | none (device only) |
-| Exit guard fail-closed (model missing → private) | `PhoneEngine` sets `imageGuard = { true }` until the model loads | on | none |
-| PIN pad / card terminal scenes | scored, but `pin` is not in ACTIVE | off (team decision) | none |
-| Sensitive OCR (card Luhn, IBAN, HETU, PIN words) | `PrivacyText.check` in the live and import paths | off (`enabled = false`) | PrivacyTextTest (3 tests) |
-| Head blur before send/store | `FaceBlurrer` in live, import, live look | on | none |
-| Plate blur | not implemented | — | — |
-| No-record zones | not implemented | — | — |
+| Single image exit: every image goes through `Llm.imagePart` → `PrivacyGate.check`; block or exception → nothing sent | `engine/Llm.kt`, `privacy/PrivacyGate.kt` | on; `Llm.gate` = CLOSED until the phone model is loaded | PrivacyGateTest |
+| Bathroom / nudity scenes never leave the phone (cannot be switched off) | `PrivacyGuard` (MobileCLIP on the phone) + `SceneRules` + gate | on, locked | PrivacySettingsTest (rules); scene model itself: device only |
+| Changing room / medical room (pause) | same, if switched on in Privacy settings | off | PrivacySettingsTest |
+| PIN pad / ATM, banking screens, cards, documents (drop) | same, if switched on | off (team decision: may go to Nemotron) | PrivacySettingsTest.togglingAClassChangesTheDecision |
+| Sensitive OCR: card (Luhn + issuer, split lines), IBAN (mod 97, split lines), HETU, MRZ, ID words + date/number, PIN words on keypad scenes, password words on document/screen scenes | `privacy/PrivacyRules.kt` `PrivacyText.check`, live + import paths | off (team decision), setting "Block frames with card numbers / IBAN / ID numbers / PINs" | PrivacyTextTest (19+/19−) |
+| Head blur before send/store | `FaceBlurrer` in live, import, live look | on | none (ML Kit: device only) |
+| Plate blur | not implemented yet | — | — |
+| No-record zones | not implemented yet | — | — |

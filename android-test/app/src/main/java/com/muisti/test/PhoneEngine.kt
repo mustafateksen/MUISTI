@@ -40,11 +40,11 @@ object AndroidImages : Images {
 class PhoneEngine(ctx: Context) {
     private val appCtx = ctx.applicationContext
     private val cfg = LlmConfig(BuildConfig.LLM_BASE_URL, BuildConfig.LLM_MODEL, BuildConfig.LLM_KEY, BuildConfig.EMBED_KEY)
-    // fail-closed until the app installs the real on-phone privacy check: no image can be sent before that
-    private val llm = Llm(cfg).apply { imageGuard = { true } }
+    // fail-closed (PrivacyGate.CLOSED) until the app installs the real on-phone privacy check
+    private val llm = Llm(cfg)
 
-    /** The on-phone privacy check every outgoing image must pass (see Llm.imageGuard). */
-    fun setImageGuard(isPrivate: (ByteArray) -> Boolean) { llm.imageGuard = isPrivate }
+    /** The on-phone privacy check every outgoing image must pass (see Llm.gate). */
+    fun setGate(gate: com.muisti.privacy.PrivacyGate) { llm.gate = gate }
     private val prompts = Prompts(ctx.assets.open("prompts.json").bufferedReader().use { it.readText() })
     private val extractor = Extractor(llm, prompts, AndroidImages)
     // v2: vectors from the Verda nemotron-3.5-embed deployment (the old NVIDIA-API cache is dropped, never mixed)

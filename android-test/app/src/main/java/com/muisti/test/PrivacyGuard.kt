@@ -5,6 +5,11 @@ import ai.onnxruntime.OrtEnvironment
 import ai.onnxruntime.OrtSession
 import android.content.Context
 import android.graphics.Bitmap
+import com.muisti.privacy.Decision
+import com.muisti.privacy.PrivacyGate
+import com.muisti.privacy.PrivacySettings
+import com.muisti.privacy.SceneHint
+import com.muisti.privacy.SceneRules
 import org.json.JSONObject
 import java.nio.FloatBuffer
 import kotlin.math.exp
@@ -27,14 +32,15 @@ import kotlin.math.exp
  *    available to the assistant; only the local check keeps running so it can resume by itself.
  *  - DROP  (ATM / PIN pad / card terminal, card, ID, banking screen): those frames are discarded, with a hangover.
  */
-class PrivacyGuard(ctx: Context) {
+class PrivacyGuard(ctx: Context, private val settings: () -> PrivacySettings) {
     enum class Kind { STOP, DROP }
     enum class Event { ENTER, EXIT, UPGRADE }
 
     /** Probabilities summed per class over all of its sentences (softmax over every sentence). */
     data class Scores(val byClass: Map<String, Float>, val stop: Float, val pin: Float, val textual: Float,
-                      val stopClass: String, val ms: Long) {
+                      val stopClass: String, val ms: Long, val keypad: Float = 0f, val dropClass: String = "") {
         val priv get() = stop + pin
+        val hint get() = SceneHint(textual, keypad)
     }
 
     private var session: OrtSession? = null
@@ -100,28 +106,28 @@ class PrivacyGuard(ctx: Context) {
         val sum = e.sum()
         val byClass = HashMap<String, Float>()
         for (i in prompts.indices) byClass.merge(prompts[i].first, e[i] / sum, Float::plus)
-        val kindOf = prompts.associate { it.first to it.second }
-        // only the situations switched on in ACTIVE count (first stage: bathroom / toilet only)
-        val stopClasses = byClass.filterKeys { kindOf[it] == "stop" && it in ACTIVE }
-        return Scores(byClass, stopClasses.values.sum(), if ("pin" in ACTIVE) byClass["pin"] ?: 0f else 0f,
-            listOf("card", "document", "screen").sumOf { (byClass[it] ?: 0f).toDouble() }.toFloat(),
-            stopClasses.maxByOrNull { it.value }?.key ?: "", System.currentTimeMillis() - t0)
+        // only the classes switched on in the privacy settings count (bathroom + nudity always; the rest optional)
+        val m = SceneRules.summarize(byClass, settings())
+        return Scores(byClass, m.stop, m.drop, m.textual, m.stopClass, System.currentTimeMillis() - t0, m.keypad, m.dropClass)
     }
 
     /**
      * Stateless check of one image (JPEG), used at the network exit and for old memories.
      * Fail-closed: model missing, unreadable image or an error all count as private.
      */
-    fun isPrivateImage(jpeg: ByteArray): Boolean {
-        if (session == null) return true
-        val bmp = android.graphics.BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size) ?: return true
-        val s = runCatching { score(bmp) }.getOrNull() ?: return true
-        if (s.stop >= 0.7f || s.pin >= 0.7f) {
-            android.util.Log.i("MuistiPrivacy", "blocked image: stop %.2f (%s) pin %.2f".format(s.stop, s.stopClass, s.pin))
-            return true
-        }
-        return false
+    fun decide(jpeg: ByteArray): Decision {
+        if (session == null) return Decision.Block("privacy model missing")
+        val bmp = android.graphics.BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size) ?: return Decision.Block("unreadable image")
+        val s = runCatching { score(bmp) }.getOrNull() ?: return Decision.Block("privacy check failed")
+        val why = SceneRules.blockReason(s.byClass, settings()) ?: return Decision.Allow
+        android.util.Log.i("MuistiPrivacy", "blocked image: stop %.2f (%s) drop %.2f (%s), %d ms".format(s.stop, s.stopClass, s.pin, s.dropClass, s.ms))
+        return Decision.Block(why)
     }
+
+    fun isPrivateImage(jpeg: ByteArray): Boolean = decide(jpeg) is Decision.Block
+
+    /** The network-exit gate for Llm (see PrivacyGate). */
+    val gate = PrivacyGate { decide(it) }
 
     // ---------------- state over time ----------------
 
@@ -130,6 +136,7 @@ class PrivacyGuard(ctx: Context) {
     @Volatile var reason: String? = null; private set
     @Volatile var lastScore = 0f; private set
     @Volatile var lastTextual = 0f; private set
+    @Volatile var lastHint = SceneHint(); private set
     private var since = 0L
     private var lastHit = 0L
     private var hangover = 0L
@@ -139,7 +146,7 @@ class PrivacyGuard(ctx: Context) {
     /** Feed every checked frame (~2 per second). Returns ENTER / EXIT / UPGRADE when the mode changes. */
     @Synchronized
     fun update(s: Scores, now: Long): Event? {
-        lastScore = s.priv; lastTextual = s.textual
+        lastScore = s.priv; lastTextual = s.textual; lastHint = s.hint
         recentStop.addLast(s.stop); while (recentStop.size > 3) recentStop.removeFirst()
         // a room: one very clear frame, or three fairly clear ones in a row (~1.5 s); a WC sign glimpsed in passing is not enough
         val stopNow = s.stop >= 0.8f || (recentStop.size == 3 && recentStop.all { it >= 0.6f })
@@ -151,7 +158,7 @@ class PrivacyGuard(ctx: Context) {
         }
         if (pinNow) {
             val ev = if (!paused) Event.ENTER else null
-            if (kind != Kind.STOP) enter(Kind.DROP, "a PIN pad or card terminal", now, 10_000)
+            if (kind != Kind.STOP) enter(Kind.DROP, PrivacySettings.LABELS[s.dropClass]?.lowercase() ?: "a PIN pad or card terminal", now, 10_000)
             else lastHit = now
             return ev
         }
@@ -183,64 +190,7 @@ class PrivacyGuard(ctx: Context) {
 
     companion object {
         const val MODEL = "mobileclip_s0_vision.onnx"
-        /**
-         * Which situations pause recording. First stage: only bathroom / toilet (incl. showers, urinals).
-         * Others are ready in the model and the sentence list: "changing", "medical", "pin" (ATM / card terminal).
-         * Current rule: bathroom and nudity are never stored or sent; PIN pads, cards, IBAN may be.
-         */
-        val ACTIVE = setOf("bathroom", "nudity")   // these never leave the phone; PIN pads, cards, IBAN may go to Nemotron
         private val ROOM = mapOf("bathroom" to "a bathroom", "nudity" to "someone without clothes", "changing" to "a changing room", "medical" to "a medical room")
     }
 }
 
-/** Sensitive text on a frame, from the phone's OCR. Strong patterns are checked arithmetically (Luhn, IBAN, HETU). */
-object PrivacyText {
-    private val digitsRun = Regex("""(?:\d[ -]?){13,19}""")
-    private val iban = Regex("""\b[A-Z]{2}\d{2}(?: ?[A-Z0-9]){11,30}\b""")
-    private val hetu = Regex("""\b(\d{6})[-+ABCDEFUVWXY](\d{3})([0-9A-Y])\b""")
-    private val words = Regex("""\b(pin|pin code|password|passcode|salasana|tunnusluku|cvv|cvc|passport|passi|henkilökortti|""" +
-        """identity card|id card|account number|tilinumero|social security)\b""", RegexOption.IGNORE_CASE)
-
-    /** Returns why the frame must not be kept, or null. [textual] = how much the scene looks like a card/screen/document. */
-    /** Off in the first stage (bathroom only); the unit tests switch it on. */
-    @Volatile var enabled = false
-
-    fun check(lines: List<String>, textual: Float): String? {
-        if (!enabled) return null
-        val all = lines.joinToString("\n")
-        for (m in digitsRun.findAll(all)) {
-            val d = m.value.filter { it.isDigit() }
-            if (d.length in 13..19 && luhn(d)) return "a card number"
-        }
-        for (m in iban.findAll(all.uppercase())) if (ibanOk(m.value.replace(" ", ""))) return "a bank account number"
-        for (m in hetu.findAll(all.uppercase())) if (hetuOk(m.groupValues[1], m.groupValues[2], m.groupValues[3])) return "a personal ID number"
-        if (textual >= 0.35f && words.containsMatchIn(all)) return "a PIN, password or ID document"
-        return null
-    }
-
-    private fun luhn(d: String): Boolean {
-        var sum = 0
-        for ((i, c) in d.reversed().withIndex()) {
-            var x = c - '0'
-            if (i % 2 == 1) { x *= 2; if (x > 9) x -= 9 }
-            sum += x
-        }
-        return sum % 10 == 0 && d.toSet().size > 1      // "0000 0000 ..." is not a card
-    }
-
-    private fun ibanOk(s: String): Boolean {
-        if (s.length !in 15..34) return false
-        val r = s.substring(4) + s.substring(0, 4)
-        var mod = 0
-        for (c in r) {
-            val v = if (c.isDigit()) c - '0' else if (c in 'A'..'Z') c - 'A' + 10 else return false
-            mod = if (v >= 10) (mod * 100 + v) % 97 else (mod * 10 + v) % 97
-        }
-        return mod == 1
-    }
-
-    private fun hetuOk(date: String, num: String, check: String): Boolean {
-        val n = (date + num).toLongOrNull() ?: return false
-        return "0123456789ABCDEFHJKLMNPRSTUVWXY"[(n % 31).toInt()].toString() == check
-    }
-}

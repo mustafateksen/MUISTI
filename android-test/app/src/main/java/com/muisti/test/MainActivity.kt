@@ -35,6 +35,9 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import com.google.mlkit.vision.common.InputImage
 import com.muisti.engine.Obs
+import com.muisti.privacy.PrivacySettingsRepo
+import com.muisti.privacy.PrivacyText
+import com.muisti.privacy.SceneRules
 import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import kotlinx.coroutines.Dispatchers
@@ -148,12 +151,9 @@ class MainActivity : ComponentActivity() {
                     if (!privacy.available) return@withContext "Not saved: the privacy check isn't available (nothing was sent)."
                     val sc = runCatching { privacy.score(bmp) }.getOrNull()
                         ?: return@withContext "Not saved: the privacy check failed (nothing was sent)."
-                    run {
-                        android.util.Log.i("MuistiPrivacy", "import: stop %.2f (%s) pin %.2f text %.2f, %d ms".format(sc.stop, sc.stopClass, sc.pin, sc.textual, sc.ms))
-                        if (sc.stop >= 0.7f) return@withContext "Not saved: this looks like a private place (privacy)."
-                        if (sc.pin >= 0.7f) return@withContext "Not saved: a PIN pad or card terminal (privacy)."
-                    }
-                    PrivacyText.check(obs.map { it.text }, sc?.textual ?: 0f)?.let { return@withContext "Not saved: it shows $it (privacy)." }
+                    android.util.Log.i("MuistiPrivacy", "import: stop %.2f (%s) drop %.2f (%s) text %.2f, %d ms".format(sc.stop, sc.stopClass, sc.pin, sc.dropClass, sc.textual, sc.ms))
+                    SceneRules.blockReason(sc.byClass, privacySettings.current)?.let { return@withContext "Not saved: $it (privacy)." }
+                    PrivacyText.check(obs.map { it.text }, sc.hint)?.let { return@withContext "Not saved: it shows $it (privacy)." }
                     val safe = blurrer.process(bmp) ?: return@withContext "Skipped: privacy check failed."
                     val jpeg = ByteArrayOutputStream().also { safe.image.compress(Bitmap.CompressFormat.JPEG, 85, it) }.toByteArray()
                     // where and when: the photo's own EXIF (a camera photo knows both), else right now
@@ -181,6 +181,9 @@ class MainActivity : ComponentActivity() {
         state.serverUrl = getPreferences(MODE_PRIVATE).getString("server", "http://10.0.34.200:8000")!!
         previewView = PreviewView(this).apply { scaleType = PreviewView.ScaleType.FILL_CENTER }
         setContent { MuistiApp(this) }
+        PrivacyText.enabledProvider = { privacySettings.current.sensitiveOcr }
+        state.privacySettings = privacySettings.current
+        privacySettings.listen { s -> runOnUiThread { state.privacySettings = s } }
         handleImportIntent(intent)
 
         tts = TextToSpeech(this) { status ->
@@ -209,7 +212,7 @@ class MainActivity : ComponentActivity() {
         Thread {
             // loads the model; from now on every image leaving the phone is checked at the exit too (fail-closed before this)
             privacy.loadError?.let { e -> runOnUiThread { state.toast("Privacy model missing: nothing will be sent ($e)") } }
-            engine.setImageGuard { privacy.isPrivateImage(it) }
+            engine.setGate(privacy.gate)
             // once: memories stored before the privacy gate existed are checked, private ones deleted on the phone
             val prefs = getSharedPreferences("privacy", MODE_PRIVATE)
             if (privacy.available && !prefs.getBoolean("oldMemoryScanned", false)) {
@@ -263,7 +266,14 @@ class MainActivity : ComponentActivity() {
     private var secondStart = 0L
 
     // ---------------- privacy gate (see PrivacyGuard) ----------------
-    private val privacy by lazy { PrivacyGuard(applicationContext) }
+    /** The user's privacy choices (persisted); every check below reads the live copy. */
+    val privacySettings by lazy { PrivacySettingsRepo(PrefsStore(getSharedPreferences("privacy", MODE_PRIVATE))) }
+    private val privacy by lazy { PrivacyGuard(applicationContext) { privacySettings.current } }
+    val privacyActions = object : com.muisti.ui.PrivacyActions {
+        override fun setClass(cls: String, on: Boolean) { privacySettings.update { it.withClass(cls, on) } }
+        override fun setSensitiveOcr(on: Boolean) { privacySettings.update { it.copy(sensitiveOcr = on) } }
+        override fun close() { state.showPrivacy = false }
+    }
     private val DELAY_MS = 3000L                       // frames wait this long on the phone before they may leave it
     private class Held(val bmp: Bitmap, val hash: Long, val at: Long)
     private val held = ArrayDeque<Held>()
@@ -703,7 +713,7 @@ class MainActivity : ComponentActivity() {
         val obs = readText(bmp)                  // text is read from the raw frame, on the phone
         if (privacy.paused) { state.privacyDropped++; return }
         // privacy: card numbers, IBAN, ID numbers, PIN/password screens never leave the phone
-        PrivacyText.check(obs.map { it.text }, privacy.lastTextual)?.let { why ->
+        PrivacyText.check(obs.map { it.text }, privacy.lastHint)?.let { why ->
             state.privacyDropped++
             if (privacy.textHit(why, System.currentTimeMillis()) != null) onPrivacyEnter()
             return
