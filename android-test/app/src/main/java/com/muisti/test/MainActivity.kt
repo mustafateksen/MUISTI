@@ -771,7 +771,7 @@ class MainActivity : ComponentActivity() {
 
     // ---------------- assistant ----------------
 
-    fun ask(question: String, spoken: Boolean) {
+    fun ask(question: String, spoken: Boolean, heard: List<String> = emptyList()) {
         val q = question.trim()
         if (q.isEmpty()) return
         tts?.stop()
@@ -796,7 +796,7 @@ class MainActivity : ComponentActivity() {
                 val live = withContext(Dispatchers.Default) {
                     liveJpeg?.let { j -> BitmapFactory.decodeByteArray(j, 0, j.size)?.takeIf { !isPrivate(it) }?.let { blurJpeg(j) } }
                 }
-                val r = withContext(Dispatchers.IO) { engine.ask(q, live) }
+                val r = withContext(Dispatchers.IO) { engine.ask(q, live, heard) }
                 if (r.label == "FORGOT") state.memories = withContext(Dispatchers.IO) { engine.store.sightings().size }
                 val shots = withContext(Dispatchers.IO) { loadShots(r) }
                 val used = r.evidence.filter { it.id in r.used }.ifEmpty { r.evidence.take(1) }
@@ -874,7 +874,11 @@ class MainActivity : ComponentActivity() {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
             putExtra(RecognizerIntent.EXTRA_LANGUAGE, "en-US")
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
+            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 5)      // alternatives go to Nemotron, which picks the sensible one
+            if (android.os.Build.VERSION.SDK_INT >= 33)           // nudge the recognizer toward what people say to MUISTI
+                putStringArrayListExtra(RecognizerIntent.EXTRA_BIASING_STRINGS, arrayListOf("note it", "note that", "remember this",
+                    "MUISTI", "add it to my calendar", "forget the last", "what did the sign say", "where did I see", "translate it",
+                    "what am I looking at", "read this"))
             // quick turn-taking: ~1 s of silence ends the question (1.5 s felt like the app was lagging)
             putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1000L)
             putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 800L)
@@ -903,10 +907,11 @@ class MainActivity : ComponentActivity() {
             }
         }
         override fun onResults(b: Bundle?) {
-            val text = b?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull().orEmpty()
+            val all = b?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION).orEmpty()
+            val text = all.firstOrNull().orEmpty()
             state.partial = text
             if (text.isBlank()) { if (state.live) relistenSoon(250) else state.phase = VoicePhase.Idle }
-            else ask(text, spoken = true)
+            else ask(text, spoken = true, heard = all.drop(1))
         }
         override fun onPartialResults(b: Bundle?) {
             b?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()?.let { state.partial = it }

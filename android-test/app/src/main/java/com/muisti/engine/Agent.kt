@@ -29,6 +29,7 @@ class Agent(private val llm: Llm, private val prompts: Prompts, private val aske
 
     fun run(question: String, history: List<Pair<String, String>>, docs: List<Doc>, now: Long,
             liveFrame: ByteArray? = null, onForget: (Int) -> Int = { 0 },
+            heard: List<String> = emptyList(),
             onCalendar: (CalendarEvent) -> String = { "Calendar is not available." }): Answer {
         val t0 = System.currentTimeMillis()
         timings.clear()
@@ -55,7 +56,11 @@ class Agent(private val llm: Llm, private val prompts: Prompts, private val aske
             msgs.put(JSONObject().put("role", "user").put("content", q))
             msgs.put(JSONObject().put("role", "assistant").put("content", a))
         }
-        msgs.put(JSONObject().put("role", "user").put("content", question))
+        // speech: the recognizer's other hearings, so the model can fix "not eat" -> "note it" from context
+        val others = heard.map { it.trim() }.filter { it.isNotEmpty() && !it.equals(question.trim(), ignoreCase = true) }.distinct().take(4)
+        msgs.put(JSONObject().put("role", "user").put("content",
+            if (others.isEmpty()) question
+            else question + "\n[spoken; the speech recognizer also heard: " + others.joinToString(" | ") { "\"$it\"" } + "]"))
         val qvec by lazy { asker.semanticSetup(question, docs) }
 
         // Speed: search memory with the question itself BEFORE the first model call and hand the result

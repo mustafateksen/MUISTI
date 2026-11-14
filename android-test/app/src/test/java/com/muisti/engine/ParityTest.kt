@@ -96,6 +96,16 @@ class ParityTest {
             println("KT %.3f %s %s %s".format(sc, d.type, d.frame, d.text.take(160)))
     }
 
+    /** -Dmuisti.q="wear was the hoop" -Dmuisti.heard="where was the hoop|..." : misheard speech through the agent. */
+    @Test
+    fun misheardDebug() {
+        val heard = System.getProperty("muisti.heard") ?: return
+        val q = System.getProperty("muisti.q") ?: return
+        val (_, docs, now) = setup()
+        val r = agent!!.run(q, emptyList(), docs, now, heard = heard.split("|"))
+        println("MISHEARD [${r.label}] ${r.answer}   (${r.why})")
+    }
+
     /** -Dmuisti.agent=1: the same 31 questions through the tool-calling Agent (Nemotron native tools). */
     @Test
     fun askTestsLikePython() {

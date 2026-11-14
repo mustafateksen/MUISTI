@@ -107,7 +107,7 @@ class PhoneEngine(ctx: Context) {
      * conversation so follow-ups work, and its final answer is verified by code). If the agent
      * fails (network, malformed tool call) the classic pipeline answers instead.
      */
-    fun ask(question: String, liveFrame: ByteArray?): Answer {
+    fun ask(question: String, liveFrame: ByteArray?, heard: List<String> = emptyList()): Answer {
         val now = System.currentTimeMillis()
         val t0 = System.currentTimeMillis()
         val docs = docs()
@@ -118,7 +118,7 @@ class PhoneEngine(ctx: Context) {
         val hist = synchronized(history) { history.toList() }
         val answer = try {
             agent.run(question, hist, docs, now, liveFrame, onForget = { m -> store.forget(now - m * 60_000L) },
-                onCalendar = { ev -> addToCalendar(ev) })
+                onCalendar = { ev -> addToCalendar(ev) }, heard = heard)
         } catch (e: Exception) {
             classic(question, docs, now, liveFrame)
         }

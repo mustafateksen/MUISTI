@@ -142,7 +142,11 @@ Evidence rules for answer:
   Never say "left of view" or "frame".
 - label CHAT for small talk, the time or date, or general questions that are not about what the user saw.
   Never invent things the user saw in a CHAT reply.
-- Earlier turns of this conversation are context: "it", "there", "that one" refer to what was just discussed."""
+- Earlier turns of this conversation are context: "it", "there", "that one" refer to what was just discussed.
+- Questions are usually spoken, and speech recognition mishears ("not eat" for "note it", "wear" for "where").
+  If the message lists what the recognizer "also heard", or the words make little sense, answer what the user most
+  likely SAID, judging by the conversation and what you can do. Do not comment on the mishearing unless you
+  really cannot tell; then ask a short question back (label CHAT)."""
 
 AGENT_TOOLS = [
     {"type": "function", "function": {
