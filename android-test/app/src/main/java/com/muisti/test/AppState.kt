@@ -21,6 +21,9 @@ data class ShotDetail(
     val phone: String?, val hours: String?, val caption: String?, val things: List<String>,
 ) { fun signText(): String? = (signLines + rows.map { "${it.first}: ${it.second}" }).joinToString("\n").ifEmpty { null } }
 
+/** An agent proposal shown with Confirm / Cancel ([status]: open, done, cancelled, expired). */
+data class ConfirmCard(val id: String, val count: Int, val thumbs: List<ImageBitmap>, val status: String = "open")
+
 sealed class Msg {
     data class Question(val text: String) : Msg()
     data class Answer(
@@ -30,6 +33,7 @@ sealed class Msg {
         val pending: Boolean = false,
         val place: String? = null,           // street (or coordinates) of the memory used
         val mapUri: String? = null,          // geo: link to open it in Maps
+        val confirm: ConfirmCard? = null,     // an action waiting for the user's OK
     ) : Msg()
 }
 

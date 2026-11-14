@@ -242,8 +242,19 @@ Rules:
             (System.currentTimeMillis() - t0) / 1000.0, org.json.JSONObject())
     }
 
+    /** Runs an action the user confirmed (see PendingAction). Returns what to tell the user. */
+    fun execute(action: org.json.JSONObject): String = when (action.optString("type")) {
+        "create_zone" -> {
+            val z = com.muisti.privacy.Zones.newZone(action.getString("name"), action.getDouble("lat"), action.getDouble("lon"), action.getDouble("radius_m"))
+            AppGraph.privacySettings.update { it.copy(zones = it.zones + z) }
+            "Done. Nothing will be recorded within ${z.radiusM.toInt()} metres of here (${z.name})."
+        }
+        else -> "I can't do that."
+    }
+
     /** Phone-only agent tools (the exported Python prompts are not changed). */
     private fun tools(liveFrame: ByteArray?, fix: Fix?): List<com.muisti.engine.ExtraTool> = listOf(
+        com.muisti.engine.createZoneTool { fix?.let { Triple(it.lat, it.lon, it.street) } },
         com.muisti.engine.noteTool { text, withView ->
             // the live frame given to ask() has already passed the privacy gate and been redacted
             notes.add(text, System.currentTimeMillis(), if (withView) liveFrame else null, fix?.lat, fix?.lon, fix?.street)

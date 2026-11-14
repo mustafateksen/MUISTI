@@ -55,7 +55,7 @@ is absent. Tasks whose "Done when" needs the device or those memories cannot be 
 | D7 | ParityTest crashed (NPE) without `nemotron/results` | DONE | ParityTest now skips (JUnit Assume) | | |
 | D8 | Embedder called the NVIDIA API with a key that does not exist → semantic search silently off | DONE | curl /v2/embed 200; FixtureRegressionTest 20/20 | | now Verda `/v2/embed`, new cache file |
 | P2.1 | Adaptive Capture Scheduler | PARTIAL | CaptureSchedulerTest: policy table, battery/heat factors, thermal >= SEVERE pauses, 60 s still = 15 windows vs walking 60 (-75 %) | 5f4188a | Wired: MotionMeter (linear accel RMS), GPS speed, battery/power-save/PowerManager thermal, glasses battery+thermal from DAT Device; header shows 'Paused · phone is too hot'. DAT SDK 1.0.1 exposes no glasses IMU (javap). On-device MuistiRate still-vs-walk measurement: BLOCKED (no device) |
-| P2.2 | No-Record Zones | TODO | | | |
+| P2.2 | No-Record Zones | PARTIAL | ZonesTest (distance, point-in-zone, accuracy cap, clamp); ConfirmTest (create_zone only proposed, yes/no parsing incl. kyllä, no location -> no proposal; live model: 3/3 zone requests -> CONFIRM) | next | Enforced first in considerFrame (fix + geofence), imports refused, Privacy settings list/add/remove, debug 'Simulate here'. On-device mocked-location check: BLOCKED (no device) |
 | P2.3 | Memory Episodes | TODO | | | |
 | P2.4 | AI Episode Summaries | TODO | | | |
 | P2.5 | Image embeddings and visual search | TODO | | | |

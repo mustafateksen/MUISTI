@@ -75,6 +75,8 @@ import kotlinx.coroutines.launch
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.darkColorScheme
@@ -484,7 +486,7 @@ private fun Transcript(act: MainActivity, s: AppState, t: Tones) {
             itemsIndexed(s.messages) { _, m ->
                 Appear { when (m) {
                     is Msg.Question -> QuestionBubble(m.text)
-                    is Msg.Answer -> AnswerBlock(m, t, onOpen = { s.openShot = it }) { uri -> act.openMap(uri) }
+                    is Msg.Answer -> AnswerBlock(m, t, onOpen = { s.openShot = it }, onConfirm = { id, yes -> act.resolve(id, yes, spoken = false) }) { uri -> act.openMap(uri) }
                 } }
             }
         }
@@ -505,7 +507,7 @@ private fun QuestionBubble(text: String) {
 
 /** Assistant turn: small orb, a "seen / not sure" badge, the answer, and the frames that prove it. */
 @Composable
-private fun AnswerBlock(m: Msg.Answer, t: Tones, onOpen: (Shot) -> Unit, onMap: (String) -> Unit) {
+private fun AnswerBlock(m: Msg.Answer, t: Tones, onOpen: (Shot) -> Unit, onConfirm: (String, Boolean) -> Unit = { _, _ -> }, onMap: (String) -> Unit) {
     Row(Modifier.fillMaxWidth()) {
         AvatarOrb(thinking = m.pending)
         Spacer(Modifier.width(10.dp))
@@ -514,6 +516,7 @@ private fun AnswerBlock(m: Msg.Answer, t: Tones, onOpen: (Shot) -> Unit, onMap: 
             LabelPill(m.label)
             Spacer(Modifier.height(7.dp))
             Text(m.text, color = t.text, fontSize = 17.sp, lineHeight = 24.sp)
+            m.confirm?.let { c -> ConfirmRow(c, t) { yes -> onConfirm(c.id, yes) } }
             if (m.shots.isNotEmpty()) {
                 Spacer(Modifier.height(12.dp))
                 LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -524,6 +527,31 @@ private fun AnswerBlock(m: Msg.Answer, t: Tones, onOpen: (Shot) -> Unit, onMap: 
                 PlaceChip(m.place, m.mapUri, onMap)
             }
         }
+    }
+}
+
+/** Confirm / Cancel for an agent proposal, with what it affects (count + thumbnails). */
+@Composable
+private fun ConfirmRow(c: ConfirmCard, t: Tones, onAnswer: (Boolean) -> Unit) {
+    Spacer(Modifier.height(10.dp))
+    if (c.thumbs.isNotEmpty()) {
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            items(c.thumbs.size) { i ->
+                Image(c.thumbs[i], null, Modifier.size(56.dp).clip(RoundedCornerShape(8.dp)), contentScale = ContentScale.Crop)
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+    }
+    when (c.status) {
+        "open" -> Row {
+            Button(onClick = { onAnswer(true) }, colors = ButtonDefaults.buttonColors(containerColor = Rose)) {
+                Text(if (c.count > 0) "Confirm (${c.count})" else "Confirm") }
+            Spacer(Modifier.width(10.dp))
+            TextButton(onClick = { onAnswer(false) }) { Text("Cancel", color = t.sub) }
+        }
+        "done" -> Text("Done", color = Color(0xFF34C759), fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+        "cancelled" -> Text("Cancelled", color = t.sub, fontSize = 13.sp)
+        else -> Text("Not confirmed", color = t.sub, fontSize = 13.sp)
     }
 }
 
@@ -575,6 +603,7 @@ private fun LabelPill(label: String) {
         "UNSURE" -> "Not sure" to Amber
         "DONT_KNOW" -> "Didn't see it" to Color(0xFF8E8E93)
         "FORGOT" -> "Forgotten" to Violet
+        "CONFIRM" -> "Needs your OK" to Amber
         "NOTED" -> "Noted" to BrandSky
         "CHAT" -> "Muisti" to Violet
         "WEB" -> "From the web" to Violet

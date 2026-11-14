@@ -932,9 +932,36 @@ class MainActivity : ComponentActivity() {
 
     // ---------------- assistant ----------------
 
+    /** The agent's open proposal (zone, deletion...), confirmed by tap or by a spoken yes/no. */
+    private var pendingAction: com.muisti.engine.PendingAction? = null
+
+    private fun setCardStatus(id: String, status: String) {
+        val i = state.messages.indexOfFirst { (it as? Msg.Answer)?.confirm?.id == id }
+        if (i >= 0) (state.messages[i] as Msg.Answer).let { a -> state.messages[i] = a.copy(confirm = a.confirm!!.copy(status = status)) }
+    }
+
+    fun resolve(id: String, yes: Boolean, spoken: Boolean) {
+        val p = pendingAction?.takeIf { it.id == id } ?: return
+        pendingAction = null
+        setCardStatus(id, if (yes) "done" else "cancelled")
+        lifecycleScope.launch {
+            val say = if (!yes) "Okay, I won't." else runCatching { withContext(Dispatchers.IO) { engine.execute(p.action) } }
+                .getOrElse { "That didn't work: ${it.message?.take(60)}" }
+            state.memories = withContext(Dispatchers.IO) { engine.store.sightings().size }
+            state.messages.add(Msg.Answer(label = if (yes) "CHAT" else "CHAT", text = say))
+            if (spoken && ttsReady && state.live) tts?.speak(say, TextToSpeech.QUEUE_FLUSH, null, "answer") else if (spoken) afterTurn()
+        }
+    }
+
     fun ask(question: String, spoken: Boolean, heard: List<String> = emptyList()) {
         val q = question.trim()
         if (q.isEmpty()) return
+        // a spoken (or typed) yes/no to the open proposal; anything else drops the proposal and is asked normally
+        pendingAction?.let { p ->
+            val yes = com.muisti.engine.Confirmations.answer(q)
+            if (yes != null) { state.messages.add(Msg.Question(q)); resolve(p.id, yes, spoken); return }
+            pendingAction = null; setCardStatus(p.id, "expired")
+        }
         tts?.stop()
         state.messages.add(Msg.Question(q))
         val pending = Msg.Answer(label = "", text = "", pending = true)
@@ -962,7 +989,14 @@ class MainActivity : ComponentActivity() {
                 val shots = withContext(Dispatchers.IO) { loadShots(r) }
                 val used = r.evidence.filter { it.id in r.used }.ifEmpty { r.evidence.take(1) }
                 val where = used.firstOrNull { it.lat != null }
-                Msg.Answer(label = r.label, text = r.answer, shots = shots,
+                val confirm = r.parsed.optJSONObject("pending")?.takeIf { r.label == com.muisti.engine.PendingAction.LABEL }?.let { j ->
+                    val p = com.muisti.engine.PendingAction.fromJson(j)
+                    pendingAction = p
+                    val thumbs = withContext(Dispatchers.IO) { p.frames.take(8).mapNotNull { f -> engine.frameFile(f).takeIf { it.exists() }
+                        ?.let { BitmapFactory.decodeFile(it.path, BitmapFactory.Options().apply { inSampleSize = 4 })?.asImageBitmap() } } }
+                    ConfirmCard(p.id, p.count, thumbs)
+                }
+                Msg.Answer(label = r.label, text = r.answer, shots = if (confirm != null) emptyList() else shots, confirm = confirm,
                     place = where?.let { it.street ?: "%.5f, %.5f".format(it.lat, it.lon) }.takeIf { r.label == "SEEN" || r.label == "UNSURE" },
                     mapUri = where?.let { "geo:${it.lat},${it.lon}?q=${it.lat},${it.lon}(${android.net.Uri.encode(it.street ?: "Seen here")})" }
                         .takeIf { r.label == "SEEN" || r.label == "UNSURE" })
