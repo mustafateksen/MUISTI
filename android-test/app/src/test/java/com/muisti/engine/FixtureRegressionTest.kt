@@ -36,6 +36,33 @@ class FixtureRegressionTest {
     }
 }
 
+/** Live: "note it" commands, including misheard ones, end as NOTED through the real model (-Dmuisti.fixture=1). */
+class NoteCommandsLiveTest {
+    @Test
+    fun noteCommands() {
+        assumeTrue(System.getProperty("muisti.fixture") == "1")
+        val key = System.getProperty("muisti.llmKey"); assumeTrue(!key.isNullOrEmpty())
+        val cfg = LlmConfig(System.getProperty("muisti.llmBaseUrl")!!, System.getProperty("muisti.llmModel")!!, key!!, key)
+        val llm = Llm(cfg).apply { gate = com.muisti.privacy.PrivacyGate.OPEN }
+        val asker = Asker(llm, prompts(), ParityTest.JvmImages, null)
+        val agent = Agent(llm, prompts(), asker)
+        val cases = listOf("note that my bike is locked at the back door" to emptyList(),
+            "not eat" to listOf("note it", "not it"),                    // misheard, with alternatives: the model decides
+            SpeechFix.correct("not eat", emptyList()) to listOf("not eat"), // bare mishearing fixed in code
+            "remember that the dentist appointment is on Tuesday" to emptyList())
+        var ok = 0
+        for ((q, heard) in cases) {
+            val saved = ArrayList<String>()
+            val r = agent.run(q, listOf("What did the bakery sign say?" to "Leipomo Kanelia, open 7 to 18."), Fixture.docs(), Fixture.now(),
+                heard = heard, extras = listOf(noteTool { t, _ -> saved.add(t); Note(1, 0, t, null, null, null, null) }))
+            println("NOTE [${r.label}] '$q' -> ${saved.firstOrNull()}  (${r.why})")
+            if (r.label == "NOTED" && saved.isNotEmpty()) ok++
+        }
+        println("note commands: $ok/${cases.size}")
+        org.junit.Assert.assertEquals(cases.size, ok)
+    }
+}
+
 /** The fixture memory as sightings / docs (frames do not exist on disk: look-again trusts the memory). */
 object Fixture {
     fun sightings(): List<JSONObject> =

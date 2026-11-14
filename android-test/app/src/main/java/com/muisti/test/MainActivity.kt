@@ -873,7 +873,7 @@ class MainActivity : ComponentActivity() {
                 val live = withContext(Dispatchers.Default) {
                     liveJpeg?.let { j -> BitmapFactory.decodeByteArray(j, 0, j.size)?.takeIf { !isPrivate(it) }?.let { blurJpeg(j) } }
                 }
-                val r = withContext(Dispatchers.IO) { engine.ask(q, live, heard) }
+                val r = withContext(Dispatchers.IO) { engine.ask(q, live, heard, location.fresh(60_000)) }
                 if (r.label == "FORGOT") state.memories = withContext(Dispatchers.IO) { engine.store.sightings().size }
                 val shots = withContext(Dispatchers.IO) { loadShots(r) }
                 val used = r.evidence.filter { it.id in r.used }.ifEmpty { r.evidence.take(1) }

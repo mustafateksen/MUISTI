@@ -30,7 +30,8 @@ class Agent(private val llm: Llm, private val prompts: Prompts, private val aske
     fun run(question: String, history: List<Pair<String, String>>, docs: List<Doc>, now: Long,
             liveFrame: ByteArray? = null, onForget: (Int) -> Int = { 0 },
             heard: List<String> = emptyList(),
-            onCalendar: (CalendarEvent) -> String = { "Calendar is not available." }): Answer {
+            onCalendar: (CalendarEvent) -> String = { "Calendar is not available." },
+            extras: List<ExtraTool> = emptyList()): Answer {
         val t0 = System.currentTimeMillis()
         timings.clear()
         var calls = 0
@@ -51,7 +52,9 @@ class Agent(private val llm: Llm, private val prompts: Prompts, private val aske
 
         val clock = SimpleDateFormat("EEEE d MMMM yyyy, HH:mm", Locale.US).format(Date(now))
         val msgs = JSONArray().put(JSONObject().put("role", "system").put("content",
-            prompts.agentPrompt + "\nCurrent local date and time: $clock. Memories stored: ${docs.count { it.type == "sighting" }}."))
+            prompts.agentPrompt + (if (extras.isEmpty()) "" else "\nMore tools on this phone:\n" + extras.joinToString("\n") { it.prompt }) +
+                "\nCurrent local date and time: $clock. Memories stored: ${docs.count { it.type == "sighting" }}."))
+        val tools = ExtraTool.merge(prompts.agentTools, extras)
         for ((q, a) in history) {
             msgs.put(JSONObject().put("role", "user").put("content", q))
             msgs.put(JSONObject().put("role", "assistant").put("content", a))
@@ -84,7 +87,7 @@ class Agent(private val llm: Llm, private val prompts: Prompts, private val aske
             val last = round == maxRounds - 1
             if (last) msgs.put(JSONObject().put("role", "user").put("content",
                 "Answer now with the evidence you have (or say you don't know)."))
-            val msg = llm.chatTools(msgs, prompts.agentTools,
+            val msg = llm.chatTools(msgs, tools,
                 if (last) RawJson("{\"type\": \"function\", \"function\": {\"name\": \"answer\"}}") else RawJson("\"required\"")); calls++
             timings.add("llm ${System.currentTimeMillis() - tl}ms")
             val toolCalls = msg.optJSONArray("tool_calls") ?: JSONArray()
@@ -125,7 +128,14 @@ class Agent(private val llm: Llm, private val prompts: Prompts, private val aske
                         return result("FORGOT", "Okay, I forgot everything from the last $m minutes.", why = "forgot $m min ($n frames)",
                             extra = JSONObject().put("minutes", m))
                     }
-                    else -> "Unknown tool $name."
+                    else -> when (val x = extras.firstOrNull { it.name == name }?.run(args, ToolCtx(question, now, docs, liveFrame, ::ev))) {
+                        null -> "Unknown tool $name."
+                        is ToolOut.Text -> x.text
+                        is ToolOut.Final -> {
+                            val ids = x.used.map { d -> ev(d).substringBefore(' ') }
+                            return result(x.label, x.text, ids, why = "tool $name", extra = x.extra)
+                        }
+                    }
                 }
                 timings.add("$name ${System.currentTimeMillis() - tt}ms")
                 msgs.put(tool(tc, out))

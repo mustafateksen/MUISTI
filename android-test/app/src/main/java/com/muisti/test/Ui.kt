@@ -573,6 +573,7 @@ private fun LabelPill(label: String) {
         "UNSURE" -> "Not sure" to Amber
         "DONT_KNOW" -> "Didn't see it" to Color(0xFF8E8E93)
         "FORGOT" -> "Forgotten" to Violet
+        "NOTED" -> "Noted" to BrandSky
         "CHAT" -> "Muisti" to Violet
         "WEB" -> "From the web" to Violet
         else -> "Error" to Rose

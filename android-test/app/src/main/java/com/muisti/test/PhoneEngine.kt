@@ -60,6 +60,8 @@ class PhoneEngine(ctx: Context) {
     private val asker = Asker(llm, prompts, AndroidImages, embedder)
     private val agent = com.muisti.engine.Agent(llm, prompts, asker)
     val store = MemoryStore(File(ctx.filesDir, "memory"))
+    /** "note it": things the user explicitly asked to remember (searchable like memories). */
+    val notes = com.muisti.engine.NoteStore(File(ctx.filesDir, "memory"))
     private val recentWords = HashMap<String, Int>()   // like the server's _RECENT_WORDS, for ocr_repair
 
     /** Frames that could not go out while offline (redacted JPEG + OCR), retried after reconnect. */
@@ -99,6 +101,7 @@ class PhoneEngine(ctx: Context) {
 
     private val docsLock = Any()
     private var docsFor: List<org.json.JSONObject>? = null
+    private var notesFor = -1
     private var docsCache: List<com.muisti.engine.Doc> = emptyList()
     @Volatile private var lastWarm = 0L
     @Volatile private var warming = false
@@ -106,10 +109,10 @@ class PhoneEngine(ctx: Context) {
     /** Search docs for the current memory; rebuilt only when the store changed (vectors are kept on the Doc objects). */
     private fun docs(): List<com.muisti.engine.Doc> = synchronized(docsLock) {
         val s = store.sightings()
-        if (s !== docsFor) {
+        if (s !== docsFor || notes.version != notesFor) {
             val old = docsCache.filter { it.vec != null }.associateBy { it.text }
-            docsCache = Asker.docsFromSightings(s).onEach { d -> if (d.vec == null) d.vec = old[d.text]?.vec }
-            docsFor = s
+            docsCache = (Asker.docsFromSightings(s) + notes.docs()).onEach { d -> if (d.vec == null) d.vec = old[d.text]?.vec }
+            docsFor = s; notesFor = notes.version
         }
         docsCache
     }
@@ -133,7 +136,10 @@ class PhoneEngine(ctx: Context) {
      * conversation so follow-ups work, and its final answer is verified by code). If the agent
      * fails (network, malformed tool call) the classic pipeline answers instead.
      */
-    fun ask(question: String, liveFrame: ByteArray?, heard: List<String> = emptyList()): Answer {
+    fun ask(question0: String, liveFrame: ByteArray?, heard0: List<String> = emptyList(), fix: Fix? = null): Answer {
+        // a bare "not eat" (no recognizer alternatives) is "note it" (D4); the original hearing is passed along
+        val question = com.muisti.engine.SpeechFix.correct(question0, heard0)
+        val heard = if (question != question0) heard0 + question0 else heard0
         val now = System.currentTimeMillis()
         val t0 = System.currentTimeMillis()
         val docs = docs()
@@ -143,8 +149,8 @@ class PhoneEngine(ctx: Context) {
         val tEmbed = System.currentTimeMillis() - t1
         val hist = synchronized(history) { history.toList() }
         val answer = try {
-            agent.run(question, hist, docs, now, liveFrame, onForget = { m -> pending.forgetSince(now - m * 60_000L); store.forget(now - m * 60_000L) },
-                onCalendar = { ev -> addToCalendar(ev) }, heard = heard)
+            agent.run(question, hist, docs, now, liveFrame, onForget = { m -> pending.forgetSince(now - m * 60_000L); notes.forgetSince(now - m * 60_000L); store.forget(now - m * 60_000L) },
+                onCalendar = { ev -> addToCalendar(ev) }, heard = heard, extras = tools(liveFrame, fix))
         } catch (e: Exception) {
             classic(question, docs, now, liveFrame)
         }
@@ -191,6 +197,7 @@ class PhoneEngine(ctx: Context) {
             "FORGET" -> {
                 val minutes = (r.parsed.num("minutes").takeIf { it > 0 } ?: 10.0).toInt()
                 pending.forgetSince(now - minutes * 60_000L)
+                notes.forgetSince(now - minutes * 60_000L)
                 store.forget(now - minutes * 60_000L)
                 Answer(question, "FORGOT", "Okay, I forgot everything from the last $minutes minutes.", emptyList(), emptyList(),
                     "forget $minutes min", r.calls, r.latencyS, r.parsed)
@@ -235,7 +242,15 @@ Rules:
             (System.currentTimeMillis() - t0) / 1000.0, org.json.JSONObject())
     }
 
-    fun frameFile(name: String) = File(store.frameDir, name)
+    /** Phone-only agent tools (the exported Python prompts are not changed). */
+    private fun tools(liveFrame: ByteArray?, fix: Fix?): List<com.muisti.engine.ExtraTool> = listOf(
+        com.muisti.engine.noteTool { text, withView ->
+            // the live frame given to ask() has already passed the privacy gate and been redacted
+            notes.add(text, System.currentTimeMillis(), if (withView) liveFrame else null, fix?.lat, fix?.lon, fix?.street)
+        },
+    )
+
+    fun frameFile(name: String) = if (name.startsWith("n")) File(notes.frameDir, name) else File(store.frameDir, name)
 
     /** Translate sign text to English (detail sheet). Names stay as they are. */
     fun translate(text: String): String {
