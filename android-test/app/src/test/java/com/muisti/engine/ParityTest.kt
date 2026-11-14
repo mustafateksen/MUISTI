@@ -69,7 +69,7 @@ class ParityTest {
             System.getProperty("muisti.llmKey")!!, System.getProperty("muisti.embedKey") ?: "")
         val prompts = Prompts(File(nem, "docs/prompts.json").readText())
         val llm = Llm(cfg)
-        val asker = Asker(llm, prompts, JvmImages, Embedder(cfg.embedKey, File("build/embed_cache.tsv")))
+        val asker = Asker(llm, prompts, JvmImages, Embedder(cfg.embedKey, File("build/embed_v2.tsv")))
         agent = Agent(llm, prompts, asker).apply { preSearch = System.getProperty("muisti.presearch") != "0" }
 
         val sightings = memFiles().flatMap { f ->

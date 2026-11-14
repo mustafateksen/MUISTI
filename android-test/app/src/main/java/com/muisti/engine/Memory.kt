@@ -91,8 +91,13 @@ class MemoryStore(private val dir: File) {
     fun frameCount() = synchronized(lock) { load().size }
 }
 
-/** Port of embed.py: nemotron-3.5-embed-1b, passage/query, batches of 32, unit vectors, cached by (kind, text). */
-class Embedder(private val key: String, private val cacheFile: File?) {
+/**
+ * nemotron-3.5-embed on the MUISTI retrieval deployment (2048-d unit vectors), document/query,
+ * batches of 32, cached by (kind, text). The cache file name is versioned: vectors of another
+ * model or deployment must never be mixed into the same index.
+ */
+class Embedder(private val key: String, private val cacheFile: File?,
+               private val url: String = "https://containers.datacrunch.io/muisti-retrieval/v2/embed") {
     private val http = OkHttpClient.Builder().readTimeout(60, TimeUnit.SECONDS).build()
     // most recently used last; trimmed to MAX_CACHE (the old text cache grew to 180 MB and froze app start for ~27 s)
     private val cache = LinkedHashMap<String, FloatArray>(1024, 0.75f, true)
@@ -151,16 +156,20 @@ class Embedder(private val key: String, private val cacheFile: File?) {
             val missing = texts.distinct().filter { k(kind, it) !in cache }
             try {
                 for (batch in missing.chunked(32)) {
-                    val body = JSONObject().put("model", "nvidia/nemotron-3.5-embed-1b").put("input", JSONArray(batch))
-                        .put("input_type", kind).put("encoding_format", "float").put("truncate", "END")
-                    val req = Request.Builder().url("https://integrate.api.nvidia.com/v1/embeddings")
+                    // MUISTI retrieval deployment (Verda): /v2/embed, input_type "document" for memories, "query" for questions
+                    val inputs = JSONArray()
+                    for (t in batch) inputs.put(JSONObject().put("content", JSONArray().put(JSONObject().put("type", "text").put("text", t))))
+                    val body = JSONObject().put("model", "nemotron-3.5-embed")
+                        .put("input_type", if (kind == "query") "query" else "document")
+                        .put("embedding_types", JSONArray().put("float")).put("truncate", "END").put("inputs", inputs)
+                    val req = Request.Builder().url(url)
                         .header("Authorization", "Bearer $key")
                         .post(body.toString().toRequestBody("application/json".toMediaType())).build()
                     http.newCall(req).execute().use { resp ->
                         if (!resp.isSuccessful) throw RuntimeException("embed HTTP ${resp.code}")
-                        val data = JSONObject(resp.body!!.string()).getJSONArray("data").objects().sortedBy { it.optInt("index") }
-                        for ((t, item) in batch.zip(data)) {
-                            val e = item.getJSONArray("embedding")
+                        val data = JSONObject(resp.body!!.string()).getJSONObject("embeddings").getJSONArray("float")
+                        for ((i, t) in batch.withIndex()) {
+                            val e = data.getJSONArray(i)
                             val v = FloatArray(e.length()) { e.getDouble(it).toFloat() }
                             var n = 0.0; for (x in v) n += x * x
                             val norm = maxOf(Math.sqrt(n), 1e-8).toFloat()
