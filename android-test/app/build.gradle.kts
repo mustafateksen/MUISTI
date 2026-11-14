@@ -30,17 +30,12 @@ android {
         manifestPlaceholders["mwdat_client_token"] = local.getProperty("mwdat_client_token") ?: ""
         buildConfigField("String", "LLM_BASE_URL", prop("muisti.llmBaseUrl"))
         buildConfigField("String", "LLM_MODEL", prop("muisti.llmModel"))
-        // keys: debug builds only (dev mode); a release APK carries none and pairs with the token proxy instead
-        buildConfigField("boolean", "DEV_KEYS", "false")
-        buildConfigField("String", "LLM_KEY", "\"\"")
-        buildConfigField("String", "EMBED_KEY", "\"\"")
-    }
-    buildTypes {
-        getByName("debug") {
-            buildConfigField("boolean", "DEV_KEYS", "true")
-            buildConfigField("String", "LLM_KEY", prop("muisti.llmKey"))
-            buildConfigField("String", "EMBED_KEY", prop("muisti.embedKey"))
-        }
+        // keys: embedded from local.properties in every build (team decision, Nov 15: the token proxy is not
+        // deployed). The APK therefore carries the Verda key: share it only inside the team. To switch to the
+        // proxy later, set DEV_KEYS false and the keys "" here; the pairing flow (TokenClient) is still in place.
+        buildConfigField("boolean", "DEV_KEYS", "true")
+        buildConfigField("String", "LLM_KEY", prop("muisti.llmKey"))
+        buildConfigField("String", "EMBED_KEY", prop("muisti.embedKey"))
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
