@@ -72,6 +72,9 @@ class AppState {
     var phase by mutableStateOf(VoicePhase.Idle)
     var partial by mutableStateOf("")
     var level by mutableFloatStateOf(0f)
+    var spoken by mutableStateOf("")             // what MUISTI is saying (lyrics view)
+    var spokenFrom by mutableIntStateOf(0)        // current word [from, to) in [spoken]
+    var spokenTo by mutableIntStateOf(0)
     var toastText by mutableStateOf<String?>(null)
     val messages = mutableStateListOf<Msg>()
     var openShot by mutableStateOf<Shot?>(null)   // detail sheet

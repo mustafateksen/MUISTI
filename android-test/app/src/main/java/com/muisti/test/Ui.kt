@@ -741,9 +741,10 @@ private fun VoiceOverlay(s: AppState, t: Tones, onClose: () -> Unit, onOrb: () -
                     VoicePhase.Speaking -> answer.orEmpty()
                     VoicePhase.Idle -> ""
                 }
-                Text(big, color = if (s.phase == VoicePhase.Listening && s.partial.isEmpty()) t.sub else t.text,
-                    fontSize = if (s.phase == VoicePhase.Speaking) 21.sp else 27.sp, fontWeight = FontWeight.Bold,
-                    textAlign = TextAlign.Center, lineHeight = 33.sp, maxLines = 6)
+                if (s.phase == VoicePhase.Speaking)
+                    Lyrics(s.spoken.ifEmpty { big }, s.spokenFrom, s.spokenTo, Modifier.fillMaxWidth().height(230.dp))
+                else Text(big, color = if (s.phase == VoicePhase.Listening && s.partial.isEmpty()) t.sub else t.text,
+                    fontSize = 27.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center, lineHeight = 33.sp, maxLines = 6)
                 if (s.phase == VoicePhase.Thinking) {
                     Spacer(Modifier.height(10.dp))
                     Text("Thinking…", color = t.sub, fontSize = 16.sp)
@@ -756,6 +757,43 @@ private fun VoiceOverlay(s: AppState, t: Tones, onClose: () -> Unit, onOrb: () -
                 }
             }
         }
+    }
+}
+
+/**
+ * What MUISTI is saying, like synced lyrics: words already said are white, the word being said now
+ * glows white, the rest waits in faint grey; the text scrolls by itself to keep the current line in view.
+ */
+@Composable
+private fun Lyrics(text: String, from: Int, to: Int, modifier: Modifier) {
+    val scroll = rememberScrollState()
+    var layout by remember { mutableStateOf<androidx.compose.ui.text.TextLayoutResult?>(null) }
+    val f = from.coerceIn(0, text.length); val e = to.coerceIn(f, text.length)
+    val glow by rememberInfiniteTransition(label = "glow").animateFloat(16f, 30f,
+        infiniteRepeatable(tween(650), RepeatMode.Reverse), label = "g")
+    val styled = androidx.compose.ui.text.buildAnnotatedString {
+        pushStyle(androidx.compose.ui.text.SpanStyle(color = Color.White.copy(alpha = 0.9f))); append(text.substring(0, f)); pop()
+        pushStyle(androidx.compose.ui.text.SpanStyle(color = Color.White,
+            shadow = androidx.compose.ui.graphics.Shadow(Color.White, blurRadius = glow))); append(text.substring(f, e)); pop()
+        pushStyle(androidx.compose.ui.text.SpanStyle(color = Color.White.copy(alpha = 0.26f))); append(text.substring(e)); pop()
+    }
+    BoxWithConstraints(modifier) {
+        val viewH = constraints.maxHeight
+        val tail = maxHeight * 0.6f
+        LaunchedEffect(e, layout) {
+            val l = layout ?: return@LaunchedEffect
+            if (text.isEmpty()) return@LaunchedEffect
+            val line = l.getLineForOffset(maxOf(0, e - 1))
+            scroll.animateScrollTo((l.getLineTop(line) - viewH * 0.32f).toInt().coerceAtLeast(0), tween(450))
+        }
+        Column(Modifier.fillMaxSize().verticalScroll(scroll)) {
+            Text(styled, fontSize = 26.sp, lineHeight = 36.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center,
+                onTextLayout = { layout = it }, modifier = Modifier.fillMaxWidth())
+            Spacer(Modifier.height(tail))
+        }
+        // soft fade at the top and bottom edges, like a lyrics sheet
+        Box(Modifier.fillMaxWidth().height(26.dp).align(Alignment.TopCenter).background(Brush.verticalGradient(listOf(Aura.Bg, Color.Transparent))))
+        Box(Modifier.fillMaxWidth().height(56.dp).align(Alignment.BottomCenter).background(Brush.verticalGradient(listOf(Color.Transparent, Aura.Bg))))
     }
 }
 

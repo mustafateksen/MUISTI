@@ -193,28 +193,21 @@ class MainActivity : ComponentActivity() {
         ZoneGeofences.sync(applicationContext, privacySettings.current.zones)
         handleImportIntent(intent)
 
-        tts = TextToSpeech(this) { status ->
+        tts = TextToSpeech(this, { status ->
             if (status == TextToSpeech.SUCCESS) {
                 tts?.language = Locale.US
-                // the most natural installed English voice that works offline (no network wait before speaking)
-                runCatching {
-                    tts?.voices?.filter { it.locale.language == "en" && !it.isNetworkConnectionRequired &&
-                        TextToSpeech.Engine.KEY_FEATURE_NOT_INSTALLED !in it.features }
-                        ?.sortedWith(compareByDescending<android.speech.tts.Voice> { it.locale.country == "US" }
-                            .thenByDescending { it.quality }.thenBy { it.latency })
-                        ?.firstOrNull()?.let { tts?.voice = it }
-                }
-                tts?.setSpeechRate(1.0f)
+                runCatching { pickVoice() }
+                tts?.setSpeechRate(1.0f); tts?.setPitch(1.0f)
                 ttsReady = true
             }
-        }
+        }, "com.google.android.tts")   // Google's engine: its neural voices sound far more human
         tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
             override fun onStart(id: String?) { if (id?.startsWith("answer") == true) runOnUiThread { state.phase = VoicePhase.Speaking } }
             // every spoken word gives the orb a pulse, so it moves with MUISTI's real speech
             override fun onRangeStart(id: String?, start: Int, end: Int, frame: Int) {
                 if (id?.startsWith("answer") != true) return
                 val peak = 0.55f + java.util.Random().nextFloat() * 0.45f * minOf(1f, (end - start) / 6f + 0.3f)
-                runOnUiThread { state.level = peak }
+                runOnUiThread { state.level = peak; state.spokenFrom = start; state.spokenTo = end }
                 mainHandler.postDelayed({ if (state.phase == VoicePhase.Speaking) state.level = 0.08f }, 120)
             }
             // a filler ("One sec.") is not the end of the turn: only the answer hands the mic back
@@ -1262,22 +1255,24 @@ class MainActivity : ComponentActivity() {
     private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
 
     /**
-     * Speaks like a person, not a reader: sentence by sentence with short, slightly varied pauses
-     * between them, and a little natural variation in tempo and pitch. Same voice, more human feel.
-     * Only the last sentence is "answer", so the mic opens again only after the whole reply.
+     * The most natural English voice: Google's network (neural) en-US voices first, they sound far more
+     * human than the offline ones; then the best offline voice. All candidates are logged (MuistiVoice).
      */
+    private fun pickVoice() {
+        val all = tts?.voices?.filter { it.locale.language == "en" && TextToSpeech.Engine.KEY_FEATURE_NOT_INSTALLED !in it.features }.orEmpty()
+        for (v in all.sortedBy { it.name }) android.util.Log.i("MuistiVoice", "${v.name} q=${v.quality} lat=${v.latency} net=${v.isNetworkConnectionRequired}")
+        val preferred = listOf("en-us-x-tpf-network", "en-us-x-iog-network", "en-us-x-sfg-network", "en-us-x-tpc-network", "en-us-x-iom-network")
+        val v = preferred.firstNotNullOfOrNull { n -> all.firstOrNull { it.name == n } }
+            ?: all.filter { it.locale.country == "US" }.sortedWith(compareByDescending<android.speech.tts.Voice> { it.isNetworkConnectionRequired }
+                .thenByDescending { it.quality }).firstOrNull()
+        v?.let { tts?.voice = it; android.util.Log.i("MuistiVoice", "using ${it.name}") }
+    }
+
+    /** One natural utterance (no splitting, no pitch tricks: those made it sound robotic); the lyrics view follows it. */
     private fun speakHuman(text: String, queueMode: Int) {
-        val parts = spokenText(text).split(Regex("""(?<=[.!?…])\s+""")).map { it.trim() }.filter { it.isNotEmpty() }
-        if (parts.isEmpty()) { tts?.speak(" ", queueMode, null, "answer"); return }
-        val rnd = java.util.Random()
-        parts.forEachIndexed { i, sentence ->
-            tts?.setSpeechRate(0.97f + rnd.nextFloat() * 0.08f)        // 0.97 .. 1.05
-            tts?.setPitch(0.98f + rnd.nextFloat() * 0.05f)             // 0.98 .. 1.03
-            tts?.speak(sentence, if (i == 0) queueMode else TextToSpeech.QUEUE_ADD, null,
-                if (i == parts.lastIndex) "answer" else "answer_$i")
-            if (i < parts.lastIndex) tts?.playSilentUtterance(170L + rnd.nextInt(170), TextToSpeech.QUEUE_ADD, "answer_gap_$i")
-        }
-        tts?.setSpeechRate(1.0f); tts?.setPitch(1.0f)
+        val said = spokenText(text)
+        state.spoken = said; state.spokenFrom = 0; state.spokenTo = 0
+        tts?.speak(said.ifEmpty { " " }, queueMode, null, "answer")
     }
 
     /** Text as a person would say it: "8-20" -> "8 to 20", no quote marks, separators become pauses. */
