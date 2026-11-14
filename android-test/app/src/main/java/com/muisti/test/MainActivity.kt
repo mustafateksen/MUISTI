@@ -472,6 +472,7 @@ class MainActivity : ComponentActivity() {
             state.online = BuildConfig.LLM_KEY.isNotEmpty()
             while (isActive) {
                 runCatching { state.memories = withContext(Dispatchers.IO) { engine.store.sightings().size } }
+                if (location.running) location.fresh(60_000)?.street?.let { state.street = it }
                 delay(6000)
             }
         }
@@ -493,10 +494,10 @@ class MainActivity : ComponentActivity() {
                 val live = withContext(Dispatchers.Default) { liveJpeg?.let { blurJpeg(it) } }
                 val r = withContext(Dispatchers.IO) { engine.ask(q, live) }
                 if (r.label == "FORGOT") state.memories = withContext(Dispatchers.IO) { engine.store.sightings().size }
-                val thumbs = withContext(Dispatchers.IO) { loadThumbs(r) }
+                val shots = withContext(Dispatchers.IO) { loadShots(r) }
                 val used = r.evidence.filter { it.id in r.used }.ifEmpty { r.evidence.take(1) }
                 val where = used.firstOrNull { it.lat != null }
-                Msg.Answer(label = r.label, text = r.answer, thumbs = thumbs,
+                Msg.Answer(label = r.label, text = r.answer, shots = shots,
                     place = where?.let { it.street ?: "%.5f, %.5f".format(it.lat, it.lon) }.takeIf { r.label == "SEEN" || r.label == "UNSURE" },
                     mapUri = where?.let { "geo:${it.lat},${it.lon}?q=${it.lat},${it.lon}(${android.net.Uri.encode(it.street ?: "Seen here")})" }
                         .takeIf { r.label == "SEEN" || r.label == "UNSURE" })
@@ -509,14 +510,25 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun loadThumbs(r: com.muisti.engine.Answer): List<androidx.compose.ui.graphics.ImageBitmap> {
+    /** Evidence frames for the answer card: image + when + where (with a Maps link). */
+    private fun loadShots(r: com.muisti.engine.Answer): List<Shot> {
+        if (r.label != "SEEN" && r.label != "UNSURE") return emptyList()
         val used = r.used.toSet()
-        val frames = r.evidence.sortedByDescending { it.id in used }.mapNotNull { it.frame }.distinct().take(3)
-        return frames.mapNotNull { f ->
+        val now = System.currentTimeMillis()
+        return r.evidence.sortedByDescending { it.id in used }.filter { it.frame != null }.distinctBy { it.frame }.take(4).mapNotNull { e ->
             runCatching {
-                val file = engine.frameFile(f)
+                val file = engine.frameFile(e.frame!!)
                 if (!file.exists()) return@runCatching null
-                BitmapFactory.decodeFile(file.path, BitmapFactory.Options().apply { inSampleSize = 4 })?.asImageBitmap()
+                val img = BitmapFactory.decodeFile(file.path, BitmapFactory.Options().apply { inSampleSize = 2 })?.asImageBitmap() ?: return@runCatching null
+                val mins = ((now - e.seenAt) / 60000).toInt()
+                val whenText = when {
+                    mins < 2 -> "Just now"
+                    mins < 60 -> "$mins min ago"
+                    else -> "Today " + java.text.SimpleDateFormat("HH:mm", java.util.Locale.US).format(java.util.Date(e.seenAt))
+                }
+                val place = e.street ?: e.lat?.let { "%.4f, %.4f".format(it, e.lon) }
+                val uri = e.lat?.let { "geo:${it},${e.lon}?q=${it},${e.lon}(${android.net.Uri.encode(e.street ?: "Seen here")})" }
+                Shot(img, whenText, place, uri)
             }.getOrNull()
         }
     }

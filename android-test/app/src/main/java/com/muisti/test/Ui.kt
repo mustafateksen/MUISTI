@@ -13,6 +13,9 @@ import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.animation.slideInVertically
@@ -26,6 +29,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -42,6 +46,10 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
@@ -71,6 +79,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
@@ -110,7 +119,7 @@ private val Suggestions = listOf(
     "What did the last sign say?",
     "Where did I see a QR code?",
     "Which floor is the sauna on?",
-    "What was the phone number on the poster?",
+    "What's the dentist's phone number?",
 )
 
 @Composable
@@ -120,19 +129,27 @@ fun MuistiApp(act: MainActivity) {
     val scheme = if (dark) darkColorScheme(primary = BrandBlue) else lightColorScheme(primary = Brand)
     val s = act.state
     var showSettings by remember { mutableStateOf(false) }
+    var expanded by remember { mutableStateOf(true) }
+    // the live view folds into a mini player as soon as there is a conversation
+    LaunchedEffect(s.messages.size) { if (s.messages.isNotEmpty()) expanded = false }
 
     MaterialTheme(colorScheme = scheme) {
         Box(Modifier.fillMaxSize().background(t.bg)) {
-            Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().imePadding()) {
-                TopBar(s, t) { showSettings = true }
-                val camWeight by animateFloatAsState(if (s.messages.isEmpty()) 0.95f else 0.5f, tween(450), label = "cam")
-                CameraCard(act, s, Modifier.weight(camWeight).padding(horizontal = 16.dp))
-                Spacer(Modifier.height(12.dp))
-                Box(Modifier.weight(1f)) {
-                    if (s.messages.isEmpty()) Welcome(t) { act.ask(it, spoken = false) }
-                    else Transcript(act, s, t)
+            Aura(dark)
+            BoxWithConstraints(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().imePadding()) {
+                val heroMax = maxHeight * 0.46f
+                Column(Modifier.fillMaxSize()) {
+                    Header(s, t) { showSettings = true }
+                    LiveCard(act, s, t, expanded || s.messages.isEmpty(), heroMax) { expanded = !expanded }
+                    AnimatedVisibility(expanded || s.messages.isEmpty(), enter = fadeIn() + expandVertically(), exit = fadeOut() + shrinkVertically()) {
+                        StatsRow(s, t)
+                    }
+                    Box(Modifier.weight(1f)) {
+                        if (s.messages.isEmpty()) Welcome(t) { act.ask(it, spoken = false) }
+                        else Transcript(act, s, t)
+                    }
+                    Composer(t, onSend = { act.ask(it, spoken = false) }, onMic = { act.startListening() })
                 }
-                Composer(t, onSend = { act.ask(it, spoken = false) }, onMic = { act.startListening() })
             }
 
             VoiceOverlay(s, t, onClose = { act.stopVoice() }, onOrb = { act.interrupt() })
@@ -144,90 +161,178 @@ fun MuistiApp(act: MainActivity) {
     }
 }
 
-// ---------------- top bar ----------------
+/** Slowly drifting blue/violet light behind the header - the "alive" feel of the iOS app. */
+@Composable
+private fun Aura(dark: Boolean) {
+    val drift by rememberInfiniteTransition(label = "aura").animateFloat(0f, 1f,
+        infiniteRepeatable(tween(9000, easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "d")
+    val a = if (dark) 1f else 0.55f
+    Canvas(Modifier.fillMaxWidth().height(460.dp)) {
+        val w = size.width; val h = size.height
+        drawRect(Brush.radialGradient(listOf(BrandBlue.copy(alpha = 0.42f * a), Color.Transparent),
+            center = Offset(w * (0.15f + 0.15f * drift), h * 0.05f), radius = w * 0.85f))
+        drawRect(Brush.radialGradient(listOf(Violet.copy(alpha = 0.34f * a), Color.Transparent),
+            center = Offset(w * (0.95f - 0.2f * drift), h * (0.18f + 0.1f * drift)), radius = w * 0.75f))
+        drawRect(Brush.radialGradient(listOf(BrandSky.copy(alpha = 0.18f * a), Color.Transparent),
+            center = Offset(w * 0.5f, h * (0.55f - 0.15f * drift)), radius = w * 0.6f))
+    }
+}
+
+private fun greeting(): String {
+    val h = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
+    return when (h) { in 5..11 -> "Good morning"; in 12..17 -> "Good afternoon"; in 18..22 -> "Good evening"; else -> "Hello, night owl" }
+}
+
+// ---------------- header ----------------
 
 @Composable
-private fun TopBar(s: AppState, t: Tones, onSettings: () -> Unit) {
-    Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 12.dp, top = 8.dp, bottom = 10.dp),
+private fun Header(s: AppState, t: Tones, onSettings: () -> Unit) {
+    Row(Modifier.fillMaxWidth().padding(start = 22.dp, end = 14.dp, top = 10.dp, bottom = 14.dp),
         verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
-            Text("MUISTI", color = t.text, fontSize = 32.sp, fontWeight = FontWeight.Bold, letterSpacing = (-0.6).sp)
-            Text("Your visual memory", color = t.sub, fontSize = 14.sp)
+            Text("MUISTI", color = t.sub, fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 3.sp)
+            Text(greeting(), color = t.text, fontSize = 30.sp, fontWeight = FontWeight.Bold, letterSpacing = (-0.6).sp)
         }
-        val dot by animateColorAsState(if (s.online) Color(0xFF34C759) else t.sub, label = "dot")
-        Row(Modifier.clip(CircleShape).background(t.card).padding(horizontal = 12.dp, vertical = 7.dp),
-            verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.size(8.dp).clip(CircleShape).background(dot))
-            Spacer(Modifier.width(6.dp))
-            Text(if (s.online) "On-device" else "No API key", color = t.text, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+        val (label, color) = when {
+            s.recording -> "Remembering" to Rose
+            !s.online -> "No API key" to Amber
+            else -> "Ready" to Color(0xFF34C759)
+        }
+        Row(Modifier.clip(CircleShape).background(t.card.copy(alpha = 0.85f)).border(0.5.dp, t.hair, CircleShape)
+            .padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            if (s.recording) PulsingDot(color) else Box(Modifier.size(8.dp).clip(CircleShape).background(color))
+            Spacer(Modifier.width(7.dp))
+            Text(label, color = t.text, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
         }
         Spacer(Modifier.width(8.dp))
-        Box(Modifier.size(38.dp).clip(CircleShape).background(t.card).clickable(onClick = onSettings),
-            contentAlignment = Alignment.Center) {
+        Box(Modifier.size(40.dp).clip(CircleShape).background(t.card.copy(alpha = 0.85f)).border(0.5.dp, t.hair, CircleShape)
+            .clickable(onClick = onSettings), contentAlignment = Alignment.Center) {
             Icon(Icons.Rounded.Settings, contentDescription = "Settings", tint = t.text, modifier = Modifier.size(20.dp))
         }
     }
 }
 
-// ---------------- camera card ----------------
+// ---------------- live view: hero <-> mini player ----------------
 
+/**
+ * One camera view that animates between a hero card and a mini player (the PreviewView must never
+ * have two parents, so it is the same view resized, not two views swapped).
+ */
 @Composable
-private fun CameraCard(act: MainActivity, s: AppState, modifier: Modifier) {
+private fun LiveCard(act: MainActivity, s: AppState, t: Tones, expanded: Boolean, heroMax: androidx.compose.ui.unit.Dp, onToggle: () -> Unit) {
     val haptics = LocalHapticFeedback.current
-    Box(modifier.fillMaxWidth().clip(RoundedCornerShape(28.dp)).background(Ink)) {
+    val h by animateDpAsState(if (expanded) heroMax else 84.dp, spring(dampingRatio = 0.86f, stiffness = 380f), label = "h")
+    val r by animateDpAsState(if (expanded) 32.dp else 26.dp, label = "r")
+    Box(Modifier.padding(horizontal = 14.dp).fillMaxWidth().height(h)
+        .shadow(if (expanded) 18.dp else 8.dp, RoundedCornerShape(r), clip = false)
+        .clip(RoundedCornerShape(r)).background(Ink)
+        .then(if (!expanded) Modifier.clickable(onClick = onToggle) else Modifier)) {
+
         if (s.useGlasses) {
             val frame = s.glassesPreview
             if (frame != null) Image(frame, contentDescription = "Glasses view", contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
-            else Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(24.dp)) {
-                    Text(s.glassesStatus.ifEmpty { "Connecting to the glasses…" }, color = Color.White.copy(alpha = 0.85f),
+            else Box(Modifier.fillMaxSize().background(Brush.linearGradient(listOf(Ink, Color(0xFF0B1E3A)))), contentAlignment = Alignment.Center) {
+                if (expanded) Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(28.dp)) {
+                    Text("🕶", fontSize = 40.sp)
+                    Spacer(Modifier.height(10.dp))
+                    Text(s.glassesStatus.ifEmpty { "Connecting to your glasses…" }, color = Color.White.copy(alpha = 0.9f),
                         fontSize = 15.sp, textAlign = TextAlign.Center)
                     if (s.glassesNeedsUpdate) {
                         Spacer(Modifier.height(14.dp))
                         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                            Text("Update glasses", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold,
-                                modifier = Modifier.clip(CircleShape).background(BrandBlue).clickable { act.openGlassesUpdate() }
-                                    .padding(horizontal = 16.dp, vertical = 10.dp))
-                            Text("Try again", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold,
-                                modifier = Modifier.clip(CircleShape).background(Color.White.copy(alpha = 0.18f)).clickable { act.retryGlasses() }
-                                    .padding(horizontal = 16.dp, vertical = 10.dp))
+                            PillButton("Update glasses", BrandBlue) { act.openGlassesUpdate() }
+                            PillButton("Try again", Color.White.copy(alpha = 0.18f)) { act.retryGlasses() }
                         }
                     }
                 }
             }
         } else AndroidView(factory = { act.previewView }, modifier = Modifier.fillMaxSize())
-        // soft top/bottom shading so the glass capsules read on any scene
-        Box(Modifier.fillMaxSize().background(Brush.verticalGradient(
-            0f to Color.Black.copy(alpha = 0.35f), 0.3f to Color.Transparent,
-            0.7f to Color.Transparent, 1f to Color.Black.copy(alpha = 0.45f))))
 
-        Row(Modifier.align(Alignment.TopStart).padding(14.dp)) {
-            GlassCapsule {
-                if (s.recording) PulsingDot(Rose) else Box(Modifier.size(8.dp).clip(CircleShape).background(Color.White.copy(alpha = 0.6f)))
-                Spacer(Modifier.width(7.dp))
-                Text(if (s.recording) "REMEMBERING" else "PAUSED", color = Color.White, fontSize = 11.sp,
-                    fontWeight = FontWeight.SemiBold, letterSpacing = 1.sp)
-                Text("  ·  ${s.memories} memories" + (if (s.recording) "  ·  ${s.fps} fps" else "") +
-                    (if (s.recording && s.facesBlurred > 0) "  ·  ${s.facesBlurred} faces blurred" else ""),
-                    color = Color.White.copy(alpha = 0.85f), fontSize = 12.sp)
+        // shading so the controls read on any scene
+        Box(Modifier.fillMaxSize().background(Brush.verticalGradient(
+            0f to Color.Black.copy(alpha = 0.45f), 0.28f to Color.Transparent,
+            0.62f to Color.Transparent, 1f to Color.Black.copy(alpha = 0.6f))))
+
+        if (expanded) {
+            FocusRing(s)
+            Row(Modifier.align(Alignment.TopStart).padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                GlassCapsule {
+                    if (s.recording) PulsingDot(Rose) else Box(Modifier.size(7.dp).clip(CircleShape).background(Color.White.copy(alpha = 0.7f)))
+                    Spacer(Modifier.width(7.dp))
+                    Text(if (s.recording) "LIVE" else "PAUSED", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.2.sp)
+                    if (s.recording && s.fps > 0) Text("  ${s.fps} fps", color = Color.White.copy(alpha = 0.7f), fontSize = 11.sp)
+                }
+            }
+            SourceSwitch(s.useGlasses, Modifier.align(Alignment.TopEnd).padding(14.dp)) { act.setSource(it) }
+            Column(Modifier.align(Alignment.BottomStart).padding(start = 18.dp, bottom = 18.dp, end = 96.dp)) {
+                Text(if (s.useGlasses) "Ray-Ban Meta" else "Phone camera", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                Text(when {
+                    s.recording && s.lastFrame.isNotEmpty() -> s.lastFrame
+                    s.recording -> "Watching for things worth remembering…"
+                    else -> "Tap record to start remembering"
+                }, color = Color.White.copy(alpha = 0.78f), fontSize = 13.sp, maxLines = 1)
+            }
+            if (s.messages.isNotEmpty())
+                Box(Modifier.align(Alignment.TopCenter).padding(top = 10.dp).size(34.dp, 5.dp).clip(CircleShape)
+                    .background(Color.White.copy(alpha = 0.5f)).clickable(onClick = onToggle))
+            RecordButton(s.recording, Modifier.align(Alignment.BottomEnd).padding(16.dp)) {
+                haptics.performHapticFeedback(HapticFeedbackType.LongPress); act.toggleRecording()
+            }
+        } else {
+            // mini player
+            Row(Modifier.fillMaxSize().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (s.recording) PulsingDot(Rose) else Box(Modifier.size(7.dp).clip(CircleShape).background(Color.White.copy(alpha = 0.7f)))
+                        Spacer(Modifier.width(7.dp))
+                        Text(if (s.recording) "Remembering" else "Paused", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                    }
+                    Text("${if (s.useGlasses) "Glasses" else "Phone"} · ${s.memories} memories · tap to expand",
+                        color = Color.White.copy(alpha = 0.72f), fontSize = 12.sp, maxLines = 1)
+                }
+                MiniRecord(s.recording) { haptics.performHapticFeedback(HapticFeedbackType.LongPress); act.toggleRecording() }
             }
         }
+    }
+}
 
-        SourceSwitch(s.useGlasses, Modifier.align(Alignment.TopEnd).padding(14.dp)) { act.setSource(it) }
-        if (s.useGlasses && s.glassesPreview != null && s.glassesStatus.isNotEmpty() && !s.recording)
-            Box(Modifier.align(Alignment.BottomStart).padding(14.dp)) { GlassCapsule { Text(s.glassesStatus, color = Color.White, fontSize = 12.sp) } }
+@Composable
+private fun PillButton(text: String, bg: Color, onClick: () -> Unit) {
+    Text(text, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold,
+        modifier = Modifier.clip(CircleShape).background(bg).clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 10.dp))
+}
 
-        AnimatedVisibility(s.lastFrame.isNotEmpty() && s.recording, Modifier.align(Alignment.BottomStart).padding(14.dp),
-            enter = fadeIn(), exit = fadeOut()) {
-            GlassCapsule { Text(s.lastFrame, color = Color.White, fontSize = 12.sp) }
+@Composable
+private fun MiniRecord(recording: Boolean, onClick: () -> Unit) {
+    val corner by animateFloatAsState(if (recording) 0.25f else 0.5f, tween(220), label = "c")
+    val inner by animateFloatAsState(if (recording) 0.42f else 0.72f, spring(dampingRatio = 0.6f), label = "i")
+    Box(Modifier.size(44.dp).clip(CircleShape).border(2.5.dp, Color.White, CircleShape).clickable(onClick = onClick),
+        contentAlignment = Alignment.Center) {
+        Box(Modifier.size(44.dp * inner).clip(RoundedCornerShape(percent = (corner * 100).toInt())).background(Rose))
+    }
+}
+
+/** Three glanceable facts under the live view. */
+@Composable
+private fun StatsRow(s: AppState, t: Tones) {
+    Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        StatTile(Modifier.weight(1f), t, "Memories", "${s.memories}", BrandBlue)
+        StatTile(Modifier.weight(1f), t, "Privacy", if (s.facesBlurred > 0) "${s.facesBlurred} blurred" else "Blur on", Color(0xFF34C759))
+        StatTile(Modifier.weight(1f), t, "Place", s.street ?: (if (s.hasLocation) "Locating…" else "—"), Violet)
+    }
+}
+
+@Composable
+private fun StatTile(modifier: Modifier, t: Tones, title: String, value: String, accent: Color) {
+    Column(modifier.clip(RoundedCornerShape(20.dp)).background(t.card.copy(alpha = 0.9f)).border(0.5.dp, t.hair, RoundedCornerShape(20.dp))
+        .padding(horizontal = 14.dp, vertical = 12.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(6.dp).clip(CircleShape).background(accent))
+            Spacer(Modifier.width(6.dp))
+            Text(title, color = t.sub, fontSize = 12.sp, fontWeight = FontWeight.Medium)
         }
-
-        FocusRing(s)
-
-        RecordButton(s.recording, Modifier.align(Alignment.BottomEnd).padding(14.dp)) {
-            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-            act.toggleRecording()
-        }
+        Spacer(Modifier.height(4.dp))
+        Text(value, color = t.text, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
     }
 }
 
@@ -294,19 +399,25 @@ private fun RecordButton(recording: Boolean, modifier: Modifier, onClick: () -> 
 
 // ---------------- conversation ----------------
 
+private val SuggestionIcons = listOf("🪧", "🔳", "🛗", "📞")
+
 @Composable
 private fun Welcome(t: Tones, onPick: (String) -> Unit) {
-    Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
-        Text("Ask me anything you've seen", color = t.text, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 6.dp)) {
+        Text("Ask me anything you've seen", color = t.text, fontSize = 22.sp, fontWeight = FontWeight.Bold, letterSpacing = (-0.3).sp)
         Spacer(Modifier.height(4.dp))
-        Text("Type below or tap the orb and speak English.", color = t.sub, fontSize = 14.sp)
-        Spacer(Modifier.height(12.dp))
-        Suggestions.forEach { q ->
-            Row(Modifier.fillMaxWidth().padding(bottom = 8.dp).clip(RoundedCornerShape(16.dp)).background(t.card)
-                .clickable { onPick(q) }.padding(horizontal = 16.dp, vertical = 13.dp),
-                verticalAlignment = Alignment.CenterVertically) {
-                Text(q, color = t.text, fontSize = 15.sp, modifier = Modifier.weight(1f))
-                Icon(Icons.Rounded.ArrowUpward, null, tint = BrandBlue, modifier = Modifier.size(18.dp))
+        Text("Type, or tap the orb and just talk.", color = t.sub, fontSize = 15.sp)
+        Spacer(Modifier.height(14.dp))
+        Suggestions.chunked(2).forEachIndexed { row, pair ->
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.padding(bottom = 10.dp)) {
+                pair.forEachIndexed { i, q ->
+                    Column(Modifier.weight(1f).height(104.dp).clip(RoundedCornerShape(22.dp)).background(t.card.copy(alpha = 0.92f))
+                        .border(0.5.dp, t.hair, RoundedCornerShape(22.dp)).clickable { onPick(q) }.padding(14.dp),
+                        verticalArrangement = Arrangement.SpaceBetween) {
+                        Text(SuggestionIcons[row * 2 + i], fontSize = 22.sp)
+                        Text(q, color = t.text, fontSize = 14.sp, fontWeight = FontWeight.Medium, lineHeight = 18.sp, maxLines = 3)
+                    }
+                }
             }
         }
     }
@@ -318,55 +429,92 @@ private fun Transcript(act: MainActivity, s: AppState, t: Tones) {
     LaunchedEffect(s.messages.size, (s.messages.lastOrNull() as? Msg.Answer)?.pending) {
         if (s.messages.isNotEmpty()) list.animateScrollToItem(s.messages.size - 1)
     }
-    LazyColumn(state = list, modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp, 4.dp, 16.dp, 12.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        itemsIndexed(s.messages) { _, m ->
-            when (m) {
-                is Msg.Question -> QuestionBubble(m.text)
-                is Msg.Answer -> AnswerCard(m, t) { uri -> act.openMap(uri) }
+    Box(Modifier.fillMaxSize()) {
+        LazyColumn(state = list, modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp, 14.dp, 16.dp, 16.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)) {
+            itemsIndexed(s.messages) { _, m ->
+                when (m) {
+                    is Msg.Question -> QuestionBubble(m.text)
+                    is Msg.Answer -> AnswerBlock(m, t) { uri -> act.openMap(uri) }
+                }
             }
         }
+        // content fades out under the live card, like the iOS top bar
+        Box(Modifier.fillMaxWidth().height(18.dp).background(Brush.verticalGradient(listOf(t.bg, Color.Transparent))))
     }
 }
 
 @Composable
 private fun QuestionBubble(text: String) {
-    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterEnd) {
-        Text(text, color = Color.White, fontSize = 16.sp,
-            modifier = Modifier.widthIn(max = 300.dp)
-                .clip(RoundedCornerShape(20.dp, 20.dp, 6.dp, 20.dp))
+    Box(Modifier.fillMaxWidth().padding(start = 56.dp), contentAlignment = Alignment.CenterEnd) {
+        Text(text, color = Color.White, fontSize = 16.sp, lineHeight = 21.sp,
+            modifier = Modifier.clip(RoundedCornerShape(22.dp, 22.dp, 6.dp, 22.dp))
                 .background(Brush.linearGradient(listOf(BrandBlue, Brand)))
-                .padding(horizontal = 14.dp, vertical = 10.dp))
+                .padding(horizontal = 15.dp, vertical = 11.dp))
+    }
+}
+
+/** Assistant turn: small orb, a "seen / not sure" badge, the answer, and the frames that prove it. */
+@Composable
+private fun AnswerBlock(m: Msg.Answer, t: Tones, onMap: (String) -> Unit) {
+    Row(Modifier.fillMaxWidth()) {
+        AvatarOrb(thinking = m.pending)
+        Spacer(Modifier.width(10.dp))
+        Column(Modifier.weight(1f).padding(top = 2.dp)) {
+            if (m.pending) { ThinkingDots(); return@Column }
+            LabelPill(m.label)
+            Spacer(Modifier.height(7.dp))
+            Text(m.text, color = t.text, fontSize = 17.sp, lineHeight = 24.sp)
+            if (m.shots.isNotEmpty()) {
+                Spacer(Modifier.height(12.dp))
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    items(m.shots.size) { i -> EvidenceCard(m.shots[i], t, onMap) }
+                }
+            } else if (m.place != null) {
+                Spacer(Modifier.height(10.dp))
+                PlaceChip(m.place, m.mapUri, onMap)
+            }
+        }
+    }
+}
+
+/** One remembered frame (already face-blurred): image, when, and where with a map pin. */
+@Composable
+private fun EvidenceCard(shot: Shot, t: Tones, onMap: (String) -> Unit) {
+    Column(Modifier.width(176.dp).clip(RoundedCornerShape(20.dp)).background(t.card).border(0.5.dp, t.hair, RoundedCornerShape(20.dp))
+        .then(if (shot.mapUri != null) Modifier.clickable { onMap(shot.mapUri) } else Modifier).padding(6.dp)) {
+        Image(shot.image, contentDescription = "Seen here", contentScale = ContentScale.Crop,
+            modifier = Modifier.fillMaxWidth().height(118.dp).clip(RoundedCornerShape(15.dp)))
+        Column(Modifier.padding(horizontal = 6.dp, vertical = 7.dp)) {
+            Text(shot.whenText, color = t.text, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+            Text(if (shot.place != null) "📍 ${shot.place}" else "No location", color = if (shot.mapUri != null) BrandBlue else t.sub,
+                fontSize = 12.sp, maxLines = 1)
+        }
     }
 }
 
 @Composable
-private fun AnswerCard(m: Msg.Answer, t: Tones, onMap: (String) -> Unit) {
-    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp, 20.dp, 20.dp, 6.dp)).background(t.card).padding(14.dp)) {
-        if (m.pending) {
-            ThinkingDots()
-            return@Column
-        }
-        LabelPill(m.label)
-        Spacer(Modifier.height(8.dp))
-        Text(m.text, color = t.text, fontSize = 16.sp, lineHeight = 22.sp)
-        if (m.place != null) {
-            Spacer(Modifier.height(10.dp))
-            Row(Modifier.clip(CircleShape).background(BrandBlue.copy(alpha = 0.14f))
-                .clickable(enabled = m.mapUri != null) { m.mapUri?.let(onMap) }
-                .padding(horizontal = 12.dp, vertical = 7.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text("📍  ${m.place}", color = BrandBlue, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-                if (m.mapUri != null) Text("  ·  Open in Maps", color = BrandBlue, fontSize = 13.sp)
-            }
-        }
-        if (m.thumbs.isNotEmpty()) {
-            Spacer(Modifier.height(10.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                m.thumbs.forEach {
-                    Image(it, contentDescription = "Seen here", contentScale = ContentScale.Crop,
-                        modifier = Modifier.size(72.dp).clip(RoundedCornerShape(14.dp)))
-                }
-            }
+private fun PlaceChip(place: String, mapUri: String?, onMap: (String) -> Unit) {
+    Row(Modifier.clip(CircleShape).background(BrandBlue.copy(alpha = 0.14f))
+        .clickable(enabled = mapUri != null) { mapUri?.let(onMap) }
+        .padding(horizontal = 12.dp, vertical = 7.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text("📍  $place", color = BrandBlue, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+        if (mapUri != null) Text("  ·  Open in Maps", color = BrandBlue, fontSize = 13.sp)
+    }
+}
+
+/** The voice orb's little sibling, as the assistant's avatar. */
+@Composable
+private fun AvatarOrb(thinking: Boolean) {
+    val spin by rememberInfiniteTransition(label = "av").animateFloat(0f, 360f,
+        infiniteRepeatable(tween(if (thinking) 1400 else 7000, easing = LinearEasing)), label = "s")
+    Box(Modifier.size(30.dp).clip(CircleShape)
+        .background(Brush.sweepGradient(listOf(BrandSky, BrandBlue, Violet, BrandSky)))) {
+        Canvas(Modifier.fillMaxSize()) {
+            val r = size.minDimension / 2
+            val rad = Math.toRadians(spin.toDouble())
+            drawCircle(Brush.radialGradient(listOf(Color.White.copy(alpha = 0.6f), Color.Transparent),
+                center = Offset(center.x + r * 0.4f * cos(rad).toFloat(), center.y + r * 0.4f * sin(rad).toFloat()), radius = r * 0.8f), radius = r)
         }
     }
 }
@@ -376,24 +524,19 @@ private fun LabelPill(label: String) {
     val (text, color) = when (label) {
         "SEEN" -> "Seen" to BrandSky
         "UNSURE" -> "Not sure" to Amber
-        "DONT_KNOW" -> "Don't know" to Color(0xFF8E8E93)
+        "DONT_KNOW" -> "Didn't see it" to Color(0xFF8E8E93)
         "FORGOT" -> "Forgotten" to Violet
+        "CHAT" -> "Muisti" to Violet
         "WEB" -> "From the web" to Violet
-        "CHAT" -> "Assistant" to Violet
         else -> "Error" to Rose
     }
-    Row(Modifier.clip(CircleShape).background(color.copy(alpha = 0.16f)).padding(horizontal = 10.dp, vertical = 4.dp),
-        verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.size(6.dp).clip(CircleShape).background(color))
-        Spacer(Modifier.width(6.dp))
-        Text(text, color = color, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-    }
+    Text(text.uppercase(), color = color, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
 }
 
 @Composable
 private fun ThinkingDots() {
     val tr = rememberInfiniteTransition(label = "dots")
-    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.padding(vertical = 6.dp)) {
+    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.padding(vertical = 9.dp)) {
         repeat(3) { i ->
             val a by tr.animateFloat(0.25f, 1f, infiniteRepeatable(tween(500, delayMillis = i * 150), RepeatMode.Reverse), label = "d$i")
             Box(Modifier.size(8.dp).clip(CircleShape).background(BrandBlue.copy(alpha = a)))
@@ -403,54 +546,45 @@ private fun ThinkingDots() {
 
 // ---------------- composer ----------------
 
+/** Floating glass capsule: the text field and ONE round button - the orb (talk) or send once text is typed. */
 @Composable
 private fun Composer(t: Tones, onSend: (String) -> Unit, onMic: () -> Unit) {
     var text by remember { mutableStateOf("") }
-    val send = { if (text.isNotBlank()) { onSend(text); text = "" } }
-    Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-        Row(Modifier.weight(1f).height(50.dp).clip(CircleShape).background(t.card).border(0.5.dp, t.hair, CircleShape)
-            .padding(start = 18.dp, end = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-            BasicTextField(
-                value = text, onValueChange = { text = it }, singleLine = true,
-                textStyle = TextStyle(color = t.text, fontSize = 16.sp),
-                cursorBrush = SolidColor(BrandBlue),
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                keyboardActions = KeyboardActions(onSend = { send() }),
-                modifier = Modifier.weight(1f),
-                decorationBox = { inner ->
-                    if (text.isEmpty()) Text("Ask about something you saw…", color = t.sub, fontSize = 16.sp)
-                    inner()
-                })
-            AnimatedVisibility(text.isNotBlank(), enter = scaleIn() + fadeIn(), exit = scaleOut() + fadeOut()) {
-                Box(Modifier.size(38.dp).clip(CircleShape).background(Brush.linearGradient(listOf(BrandBlue, Brand)))
-                    .clickable { send() }, contentAlignment = Alignment.Center) {
-                    Icon(Icons.Rounded.ArrowUpward, "Send", tint = Color.White, modifier = Modifier.size(20.dp))
-                }
-            }
-        }
-        Spacer(Modifier.width(10.dp))
-        MicOrbButton(onMic)
-    }
-}
-
-@Composable
-private fun MicOrbButton(onClick: () -> Unit) {
     val haptics = LocalHapticFeedback.current
-    val spin by rememberInfiniteTransition(label = "spin").animateFloat(0f, 360f,
-        infiniteRepeatable(tween(6000, easing = LinearEasing)), label = "deg")
-    Box(Modifier.size(54.dp).clip(CircleShape)
-        .background(Brush.sweepGradient(listOf(BrandSky, BrandBlue, Brand, Violet, BrandSky),
-            center = Offset.Unspecified))
-        .clickable { haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove); onClick() },
-        contentAlignment = Alignment.Center) {
-        Canvas(Modifier.fillMaxSize()) {   // slow-moving highlight so the orb feels alive
-            val r = size.minDimension / 2
-            val rad = Math.toRadians(spin.toDouble())
-            drawCircle(Brush.radialGradient(listOf(Color.White.copy(alpha = 0.45f), Color.Transparent),
-                center = Offset(center.x + r * 0.45f * cos(rad).toFloat(), center.y + r * 0.45f * sin(rad).toFloat()),
-                radius = r * 0.9f), radius = r)
+    val send = { if (text.isNotBlank()) { onSend(text); text = "" } }
+    Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp)
+        .shadow(14.dp, CircleShape, clip = false)
+        .clip(CircleShape).background(t.card).border(0.5.dp, t.hair, CircleShape)
+        .padding(start = 20.dp, end = 6.dp, top = 6.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+        BasicTextField(
+            value = text, onValueChange = { text = it }, singleLine = true,
+            textStyle = TextStyle(color = t.text, fontSize = 17.sp),
+            cursorBrush = SolidColor(BrandBlue),
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+            keyboardActions = KeyboardActions(onSend = { send() }),
+            modifier = Modifier.weight(1f),
+            decorationBox = { inner ->
+                if (text.isEmpty()) Text("Ask Muisti…", color = t.sub, fontSize = 17.sp)
+                inner()
+            })
+        Spacer(Modifier.width(8.dp))
+        val typing = text.isNotBlank()
+        val spin by rememberInfiniteTransition(label = "spin").animateFloat(0f, 360f,
+            infiniteRepeatable(tween(6000, easing = LinearEasing)), label = "deg")
+        Box(Modifier.size(48.dp).clip(CircleShape)
+            .background(if (typing) Brush.linearGradient(listOf(BrandBlue, Brand)) else Brush.sweepGradient(listOf(BrandSky, BrandBlue, Brand, Violet, BrandSky)))
+            .clickable { haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove); if (typing) send() else onMic() },
+            contentAlignment = Alignment.Center) {
+            if (!typing) Canvas(Modifier.fillMaxSize()) {
+                val r = size.minDimension / 2
+                val rad = Math.toRadians(spin.toDouble())
+                drawCircle(Brush.radialGradient(listOf(Color.White.copy(alpha = 0.45f), Color.Transparent),
+                    center = Offset(center.x + r * 0.45f * cos(rad).toFloat(), center.y + r * 0.45f * sin(rad).toFloat()),
+                    radius = r * 0.9f), radius = r)
+            }
+            Icon(if (typing) Icons.Rounded.ArrowUpward else Icons.Rounded.Mic, if (typing) "Send" else "Talk",
+                tint = Color.White, modifier = Modifier.size(22.dp))
         }
-        Icon(Icons.Rounded.Mic, "Speak", tint = Color.White, modifier = Modifier.size(24.dp))
     }
 }
 

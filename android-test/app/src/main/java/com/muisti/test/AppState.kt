@@ -10,12 +10,15 @@ import androidx.compose.ui.graphics.ImageBitmap
 
 enum class VoicePhase { Idle, Listening, Thinking, Speaking }
 
+/** One remembered frame shown under an answer (already face-blurred). */
+data class Shot(val image: ImageBitmap, val whenText: String, val place: String?, val mapUri: String?)
+
 sealed class Msg {
     data class Question(val text: String) : Msg()
     data class Answer(
         val label: String,
         val text: String,
-        val thumbs: List<ImageBitmap> = emptyList(),
+        val shots: List<Shot> = emptyList(),
         val pending: Boolean = false,
         val place: String? = null,           // street (or coordinates) of the memory used
         val mapUri: String? = null,          // geo: link to open it in Maps
@@ -34,6 +37,7 @@ class AppState {
     var blurrySkipped by mutableIntStateOf(0)
     var facesBlurred by mutableIntStateOf(0)
     var hasLocation by mutableStateOf(false)
+    var street by mutableStateOf<String?>(null)
     var sameSkipped by mutableIntStateOf(0)
     var fps by mutableIntStateOf(0)
     var focusX by mutableFloatStateOf(0f)
