@@ -38,17 +38,22 @@ class OldMemoryScanWorker(ctx: Context, params: WorkerParameters) : CoroutineWor
 
     companion object {
         const val TAG = "MuistiPrivacy"
-        private const val NAME = "old-memory-scan"
+        // v2: the first version also required an idle phone and in practice never ran (phone in use all day)
+        private const val NAME = "old-memory-scan-v2"
+        private const val OLD_NAME = "old-memory-scan"
 
-        /** In the background, only while the battery is not low and the phone is idle. */
-        fun schedule(ctx: Context) = enqueue(ctx,
-            Constraints.Builder().setRequiresBatteryNotLow(true).setRequiresDeviceIdle(true).build(), ExistingWorkPolicy.KEEP)
+        /**
+         * In the background as soon as the battery is not low. Not "idle only": private frames stored before
+         * the gate existed must not wait for a night that may never come. It resumes where it stopped.
+         */
+        fun schedule(ctx: Context) = enqueue(ctx, Constraints.Builder().setRequiresBatteryNotLow(true).build(), ExistingWorkPolicy.KEEP)
 
         /** "Check now" from the privacy screen: battery constraint only. */
         fun now(ctx: Context) = enqueue(ctx, Constraints.Builder().setRequiresBatteryNotLow(true).build(), ExistingWorkPolicy.REPLACE)
 
         private fun enqueue(ctx: Context, c: Constraints, policy: ExistingWorkPolicy) {
             if (AppGraph.privacySettings.current.scan.done) return
+            WorkManager.getInstance(ctx).cancelUniqueWork(OLD_NAME)
             WorkManager.getInstance(ctx).enqueueUniqueWork(NAME, policy,
                 OneTimeWorkRequestBuilder<OldMemoryScanWorker>().setConstraints(c).build())
         }
