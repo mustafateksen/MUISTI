@@ -719,11 +719,13 @@ private fun VoiceOverlay(s: AppState, t: Tones, onClose: () -> Unit, onOrb: () -
                     Spacer(Modifier.width(12.dp))
                     Text("Live with MUISTI", color = t.text, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
                 }
-                Spacer(Modifier.weight(0.45f))
+                val speaking = s.phase == VoicePhase.Speaking
+                val orbSize by animateDpAsState(if (speaking) 150.dp else 300.dp, spring(dampingRatio = 0.8f, stiffness = 250f), label = "orb")
+                Spacer(Modifier.weight(if (speaking) 0.08f else 0.45f))
                 // no clip: the waves may move past the orb's box
                 Box(Modifier.clickable(interactionSource = remember { MutableInteractionSource() },
                     indication = null, onClick = onOrb)) {
-                    WaveOrb(s.phase, s.level, Modifier.size(300.dp))
+                    WaveOrb(s.phase, s.level, Modifier.size(orbSize))
                 }
                 Spacer(Modifier.height(18.dp))
                 Text(when (s.phase) {
@@ -741,15 +743,15 @@ private fun VoiceOverlay(s: AppState, t: Tones, onClose: () -> Unit, onOrb: () -
                     VoicePhase.Speaking -> answer.orEmpty()
                     VoicePhase.Idle -> ""
                 }
-                if (s.phase == VoicePhase.Speaking)
-                    Lyrics(s.spoken.ifEmpty { big }, s.spokenFrom, s.spokenTo, Modifier.fillMaxWidth().height(230.dp))
+                if (speaking)
+                    Lyrics(s.spoken.ifEmpty { big }, s.spokenTo, Modifier.fillMaxWidth().weight(1f))
                 else Text(big, color = if (s.phase == VoicePhase.Listening && s.partial.isEmpty()) t.sub else t.text,
                     fontSize = 27.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center, lineHeight = 33.sp, maxLines = 6)
                 if (s.phase == VoicePhase.Thinking) {
                     Spacer(Modifier.height(10.dp))
                     Text("Thinking…", color = t.sub, fontSize = 16.sp)
                 }
-                Spacer(Modifier.weight(1f))
+                if (!speaking) Spacer(Modifier.weight(1f)) else Spacer(Modifier.height(12.dp))
                 // the only way out of the live conversation
                 Box(Modifier.fillMaxWidth().height(56.dp)
                     .clip(CircleShape).background(Aura.End).border(0.5.dp, t.hair, CircleShape).clickable(onClick = onClose), contentAlignment = Alignment.Center) {
@@ -760,40 +762,49 @@ private fun VoiceOverlay(s: AppState, t: Tones, onClose: () -> Unit, onOrb: () -
     }
 }
 
+/** Splits what MUISTI says into short lyric lines (sentences, long ones at commas), with their character ranges. */
+private fun lyricLines(text: String): List<IntRange> {
+    val out = ArrayList<IntRange>()
+    var start = 0
+    fun add(endExcl: Int) {
+        var a = start; var b = endExcl
+        while (a < b && text[a].isWhitespace()) a++
+        while (b > a && text[b - 1].isWhitespace()) b--
+        if (b > a) out.add(a until b)
+        start = endExcl
+    }
+    var i = 0
+    while (i < text.length) {
+        val ch = text[i]
+        val len = i - start
+        if (ch in ".!?…" && (i + 1 == text.length || text[i + 1] == ' ')) add(i + 1)
+        else if (ch == ',' && len > 28) add(i + 1)
+        else if (ch == ' ' && len > 46) add(i + 1)
+        i++
+    }
+    add(text.length)
+    return out
+}
+
 /**
- * What MUISTI is saying, like synced lyrics: words already said are white, the word being said now
- * glows white, the rest waits in faint grey; the text scrolls by itself to keep the current line in view.
+ * What MUISTI is saying, like Spotify's synced lyrics: one short line per row, the line being said now
+ * in bright white, the others grey; the list scrolls by itself so the current line stays near the top.
  */
 @Composable
-private fun Lyrics(text: String, from: Int, to: Int, modifier: Modifier) {
-    val scroll = rememberScrollState()
-    var layout by remember { mutableStateOf<androidx.compose.ui.text.TextLayoutResult?>(null) }
-    val f = from.coerceIn(0, text.length); val e = to.coerceIn(f, text.length)
-    val glow by rememberInfiniteTransition(label = "glow").animateFloat(16f, 30f,
-        infiniteRepeatable(tween(650), RepeatMode.Reverse), label = "g")
-    val styled = androidx.compose.ui.text.buildAnnotatedString {
-        pushStyle(androidx.compose.ui.text.SpanStyle(color = Color.White.copy(alpha = 0.9f))); append(text.substring(0, f)); pop()
-        pushStyle(androidx.compose.ui.text.SpanStyle(color = Color.White,
-            shadow = androidx.compose.ui.graphics.Shadow(Color.White, blurRadius = glow))); append(text.substring(f, e)); pop()
-        pushStyle(androidx.compose.ui.text.SpanStyle(color = Color.White.copy(alpha = 0.26f))); append(text.substring(e)); pop()
-    }
-    BoxWithConstraints(modifier) {
-        val viewH = constraints.maxHeight
-        val tail = maxHeight * 0.6f
-        LaunchedEffect(e, layout) {
-            val l = layout ?: return@LaunchedEffect
-            if (text.isEmpty()) return@LaunchedEffect
-            val line = l.getLineForOffset(maxOf(0, e - 1))
-            scroll.animateScrollTo((l.getLineTop(line) - viewH * 0.32f).toInt().coerceAtLeast(0), tween(450))
+private fun Lyrics(text: String, spokenTo: Int, modifier: Modifier) {
+    val lines = remember(text) { lyricLines(text) }
+    val pos = maxOf(0, spokenTo - 1)
+    val current = lines.indexOfFirst { pos <= it.last }.let { if (it < 0) lines.lastIndex else it }
+    val list = rememberLazyListState()
+    LaunchedEffect(current) { if (current > 0) list.animateScrollToItem(maxOf(0, current - 1)) }
+    LazyColumn(modifier, state = list, verticalArrangement = Arrangement.spacedBy(14.dp),
+        contentPadding = PaddingValues(top = 6.dp, bottom = 240.dp)) {
+        itemsIndexed(lines) { idx, r ->
+            val on = idx == current
+            val col by animateColorAsState(if (on) Color.White else Color(0xFF8A8A8E), tween(260), label = "c")
+            Text(text.substring(r.first, r.last + 1), color = col, fontSize = 27.sp, lineHeight = 33.sp,
+                fontWeight = FontWeight.Bold, modifier = Modifier.fillMaxWidth())
         }
-        Column(Modifier.fillMaxSize().verticalScroll(scroll)) {
-            Text(styled, fontSize = 26.sp, lineHeight = 36.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center,
-                onTextLayout = { layout = it }, modifier = Modifier.fillMaxWidth())
-            Spacer(Modifier.height(tail))
-        }
-        // soft fade at the top and bottom edges, like a lyrics sheet
-        Box(Modifier.fillMaxWidth().height(26.dp).align(Alignment.TopCenter).background(Brush.verticalGradient(listOf(Aura.Bg, Color.Transparent))))
-        Box(Modifier.fillMaxWidth().height(56.dp).align(Alignment.BottomCenter).background(Brush.verticalGradient(listOf(Color.Transparent, Aura.Bg))))
     }
 }
 
