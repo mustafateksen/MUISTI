@@ -252,11 +252,13 @@ private fun LiveCard(act: MainActivity, s: AppState, t: Tones, expanded: Boolean
                     Spacer(Modifier.height(10.dp))
                     Text(s.glassesStatus.ifEmpty { "Connecting to your glasses…" }, color = Color.White.copy(alpha = 0.9f),
                         fontSize = 15.sp, textAlign = TextAlign.Center)
-                    if (s.glassesNeedsUpdate) {
+                    // any state that is not still in progress ("…") gets a Try again (e.g. "no eligible device")
+                    val stuck = s.glassesStatus.isNotEmpty() && !s.glassesStatus.endsWith("…")
+                    if (s.glassesNeedsUpdate || stuck) {
                         Spacer(Modifier.height(14.dp))
                         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                            PillButton("Update glasses", BrandBlue) { act.openGlassesUpdate() }
-                            PillButton("Try again", Color.White.copy(alpha = 0.18f)) { act.retryGlasses() }
+                            if (s.glassesNeedsUpdate) PillButton("Update glasses", BrandBlue) { act.openGlassesUpdate() }
+                            PillButton("Try again", if (s.glassesNeedsUpdate) Color.White.copy(alpha = 0.18f) else BrandBlue) { act.retryGlasses() }
                         }
                     }
                 }
