@@ -1,3 +1,3 @@
 enum AppTab: Hashable {
-    case assistant, memory
+    case assistant, memory, safety
 }

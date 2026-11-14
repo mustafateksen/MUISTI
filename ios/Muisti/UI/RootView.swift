@@ -19,6 +19,9 @@ struct RootView: View {
             MemoryListView(controller: controller)
                 .tabItem { Label("Memory", systemImage: "square.stack.3d.up") }
                 .tag(AppTab.memory)
+            SafetyView(safety: controller.safety)
+                .tabItem { Label("Safety", systemImage: "shield.lefthalf.filled") }
+                .tag(AppTab.safety)
         }
         // One palette everywhere: toggles, pickers and links follow the brand colour too.
         .tint(.brand)
@@ -34,6 +37,7 @@ struct RootView: View {
             if let arg = ProcessInfo.processInfo.arguments.first(where: { $0.hasPrefix("--tab=") }) {
                 switch arg.dropFirst(6) {
                 case "memory": tab = .memory
+                case "safety": tab = .safety
                 default: break
                 }
             }

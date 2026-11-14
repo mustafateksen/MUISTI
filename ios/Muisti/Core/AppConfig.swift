@@ -3,9 +3,10 @@ import Observation
 
 /// How frames are captured.
 enum CaptureMode: String, Codable, Sendable, CaseIterable, Identifiable {
-    /// Default. No continuous video: the glasses camera sits idle with only the photo
-    /// capability up, and the adaptive scheduler decides each still from phone GPS,
-    /// pedometer, motion activity, turning, blur risk, battery and heat.
+    /// Default. A 720p stream runs on the glasses but nothing is processed until the
+    /// scheduler (glasses IMU, GPS, pedometer, activity, battery, heat) asks; then the newest
+    /// stream frame is taken at once, silently (a photo plays the glasses' capture chime).
+    /// Standalone 12 MP photos took 10–18 s each over Bluetooth.
     case adaptive
     /// A: continuous low-rate stream (`.raw`, 2 or 7 fps).
     case stream
@@ -26,7 +27,9 @@ enum CaptureMode: String, Codable, Sendable, CaseIterable, Identifiable {
     }
 
     /// Modes that keep the glasses camera on the photo capability instead of a stream.
-    var usesPhotoCapability: Bool { self == .adaptive || self == .intervalPhoto }
+    var usesPhotoCapability: Bool { self == .intervalPhoto }
+    /// The scheduler picks the newest frame of a running stream (no photo transfer).
+    var picksStreamFrames: Bool { self == .adaptive }
     /// Modes whose stills are decided by the scheduler loop.
     var usesScheduler: Bool { self == .adaptive || self == .intervalPhoto }
 }
@@ -55,20 +58,24 @@ enum StillQuality: String, Codable, Sendable, CaseIterable, Identifiable {
 
 /// Tunables for the adaptive scheduler. Distances in metres, times in seconds.
 struct AdaptiveTuning: Codable, Sendable, Equatable {
-    var minInterval: Double = 3            // never faster than this (transfer + battery)
-    var maxPerMinute: Int = 15             // plan: 10–15 kept frames per minute
-    var walkingDistance: Double = 10       // new still every ~10 m walked
-    var walkingMaxInterval: Double = 8     // ...or every 8 s while walking
-    var fastDistance: Double = 30          // cycling / vehicle
-    var fastMaxInterval: Double = 4
-    var headingChange: Double = 35         // degrees; course or body yaw
-    var dwellSeconds: Double = 1.5         // stopped this long after moving → one still
-    var stationaryRefresh: Double = 45     // standing still: refresh this rarely
-    var stationaryMaxStills: Int = 3       // ...and stop after this many until moving again
-    var unknownActivityInterval: Double = 8 // no motion data (simulator): plain timer
+    var minInterval: Double = 2            // never faster than this (transfer + battery)
+    var maxPerMinute: Int = 30
+    var walkingDistance: Double = 8        // new still every ~8 m walked
+    var walkingMaxInterval: Double = 3     // ...or every 3 s while walking
+    var fastDistance: Double = 25          // cycling / vehicle
+    var fastMaxInterval: Double = 3
+    var headingChange: Double = 35         // degrees; GPS course or phone yaw
+    var viewChange: Double = 25            // degrees the head (glasses IMU) turned since the last still
+    var lookSettle: Double = 0.6           // ...and has held still this long: looking at something new
+    var headSteadyRate: Double = 0.35      // rad/s; below this the head counts as still
+    var headWalkingEnergy: Double = 0.06   // g RMS of head acceleration; above this = walking
+    var dwellSeconds: Double = 1.2         // stopped this long after moving → one still
+    var stationaryRefresh: Double = 5      // standing still: a refresh this often
+    var stationaryMaxStills: Int = 12      // ...then 2.5× slower until the view or place changes
+    var unknownActivityInterval: Double = 4 // no motion data at all: plain timer
     var blurGateMaxWait: Double = 1.2      // wait at most this long for a steady moment
     var blurAccelThreshold: Double = 0.18  // g, user acceleration magnitude
-    var blurRotationThreshold: Double = 1.2 // rad/s
+    var blurRotationThreshold: Double = 1.2 // rad/s (phone); the head uses half of it
     var batterySaver: Bool = true          // stretch intervals on low battery / heat
 }
 
@@ -132,6 +139,8 @@ final class AppConfig {
         didSet { KeychainStore.write(apiKey.trimmingCharacters(in: .whitespacesAndNewlines), for: "nvidia-api-key") }
     }
     var autoReconnect: Bool { didSet { save("autoReconnect", autoReconnect) } }
+    /// Start capturing by itself as soon as the glasses connect (no Start button).
+    var autoStart: Bool { didSet { save("autoStart", autoStart) } }
     var backgroundCapture: Bool { didSet { save("backgroundCapture", backgroundCapture) } }
     var glassesPhotoRotation: Int { didSet { save("glassesPhotoRotation", glassesPhotoRotation) } }
     var tuning: AdaptiveTuning {
@@ -143,11 +152,31 @@ final class AppConfig {
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         sourceKind = SourceKind(rawValue: defaults.string(forKey: "sourceKind") ?? "") ?? .glasses
-        mode = CaptureMode(rawValue: defaults.string(forKey: "mode") ?? "") ?? .adaptive
+        var storedMode = CaptureMode(rawValue: defaults.string(forKey: "mode") ?? "") ?? .adaptive
+        // Fixed-interval mode left over from device tests: capture is motion-driven now.
+        if !defaults.bool(forKey: "migratedToAdaptive2") {
+            defaults.set(true, forKey: "migratedToAdaptive2")
+            if storedMode == .intervalPhoto {
+                storedMode = .adaptive
+                defaults.set(storedMode.rawValue, forKey: "mode")
+            }
+        }
+        mode = storedMode
         streamQuality = StreamQuality(rawValue: defaults.string(forKey: "streamQuality") ?? "") ?? .high
         let fps = UInt(defaults.object(forKey: "streamFPS") as? Int ?? 7)
         streamFPS = Self.allowedFPS.contains(fps) ? fps : 7
-        stillResolution = StillResolution(rawValue: defaults.string(forKey: "stillResolution") ?? "") ?? .full
+        // 12 MP stills crawl over the Bluetooth link (10–18 s each, field 14 Nov) and the
+        // keyframe is cut to 1536 px anyway: default to a smaller, faster still.
+        // Capture intervals were shortened (real-time stream frames): drop stored tuning once.
+        if !defaults.bool(forKey: "migratedTuning3") {
+            defaults.set(true, forKey: "migratedTuning3")
+            defaults.removeObject(forKey: "tuning")
+        }
+        if !defaults.bool(forKey: "migratedStill2") {
+            defaults.set(true, forKey: "migratedStill2")
+            defaults.removeObject(forKey: "stillResolution")
+        }
+        stillResolution = StillResolution(rawValue: defaults.string(forKey: "stillResolution") ?? "") ?? .medium
         stillQuality = StillQuality(rawValue: defaults.string(forKey: "stillQuality") ?? "") ?? .medium
         intervalSeconds = defaults.object(forKey: "intervalSeconds") as? Double ?? 5
         passthroughEveryN = defaults.object(forKey: "passthroughEveryN") as? Int ?? 5
@@ -170,6 +199,7 @@ final class AppConfig {
         }
         apiKey = KeychainStore.read("nvidia-api-key") ?? ""
         autoReconnect = defaults.object(forKey: "autoReconnect") as? Bool ?? true
+        autoStart = defaults.object(forKey: "autoStart") as? Bool ?? true
         backgroundCapture = defaults.object(forKey: "backgroundCapture") as? Bool ?? true
         glassesPhotoRotation = defaults.object(forKey: "glassesPhotoRotation") as? Int ?? 90
         if let data = defaults.data(forKey: "tuning"),

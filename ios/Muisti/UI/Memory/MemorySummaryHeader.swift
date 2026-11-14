@@ -1,6 +1,7 @@
 import SwiftUI
 
-/// One quiet line of chips at the top of the memory list.
+/// One quiet line of chips at the top of the memory list, on the same white surface as the
+/// cards below so it reads as part of the page.
 struct MemorySummaryHeader: View {
     let total: Int
     let pending: Int
@@ -8,11 +9,11 @@ struct MemorySummaryHeader: View {
 
     var body: some View {
         FlowLayout(spacing: Theme.Spacing.xs) {
-            InfoChip(text: total == 1 ? "1 memory" : "\(total) memories", systemImage: "square.stack.3d.up.fill", tint: .brand)
+            MemoryStatChip(text: total == 1 ? "1 memory" : "\(total) memories", systemImage: "square.stack.3d.up.fill")
             if pending > 0 {
-                InfoChip(text: "\(pending) processing", systemImage: "sparkles", tint: .brandViolet)
+                MemoryStatChip(text: "\(pending) processing", systemImage: "sparkles")
             }
-            InfoChip(text: retentionDays == 1 ? "Kept 1 day" : "Kept \(retentionDays) days", systemImage: "clock.arrow.circlepath")
+            MemoryStatChip(text: retentionDays == 1 ? "Kept 1 day" : "Kept \(retentionDays) days", systemImage: "clock.arrow.circlepath")
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .combine)
@@ -20,6 +21,9 @@ struct MemorySummaryHeader: View {
 }
 
 #Preview {
-    MemorySummaryHeader(total: 42, pending: 3, retentionDays: 7)
-        .padding()
+    List {
+        MemorySummaryHeader(total: 42, pending: 3, retentionDays: 7)
+            .listRowInsets(EdgeInsets())
+            .listRowBackground(Color.clear)
+    }
 }

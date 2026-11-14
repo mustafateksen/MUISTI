@@ -1,10 +1,11 @@
 import Foundation
 import NaturalLanguage
+import UIKit
 
 struct AskResult: Sendable, Identifiable {
     let id = UUID()
     let question: String
-    let answer: String
+    var answer: String
     let label: AnswerLabel
     let evidence: [MemoryHit]
     let usedAI: Bool
@@ -14,6 +15,21 @@ struct AskResult: Sendable, Identifiable {
     var language: String?
     /// Stage timings and retrieval facts, for the developer view and logs.
     var trace: String?
+    /// Record ids of each context group, best first (evaluation / debugging).
+    var ranked: [[Int64]] = []
+    /// Muisti Turva command carried by this reply (run by the voice assistant).
+    var safety: SafetyCommand?
+    /// A command reply (rule, forget, log) rather than an answer about something seen.
+    var isCommand = false
+    /// Evidence frames from the safety log the reply relies on.
+    var safetyFrames: [URL] = []
+}
+
+/// What the answer engine needs from Muisti Turva, without depending on its actor.
+struct SafetyBridge: Sendable {
+    var context: @Sendable () async -> String
+    var forget: @Sendable (Date) async -> Void
+    var frames: @Sendable ([Int64]) async -> [URL]
 }
 
 /// On-phone RAG over everything the glasses saw:
@@ -29,6 +45,19 @@ struct AskResult: Sendable, Identifiable {
 actor QueryEngine {
     private let store: MemoryStore
     private let ai: NemotronClient
+    /// Ranked groups of the question being answered (copied into the result).
+    private var rankedForResult: [[Int64]] = []
+    private var safety: SafetyBridge?
+    /// The last question and reply, so "yes" / "not now" can answer what Muisti just said.
+    private var previous: (question: String, answer: String, at: Date)?
+
+    /// Muisti spoke first (a warning or a yes/no question): that is the previous exchange.
+    func noteMuistiSaid(_ text: String) { previous = ("(Muisti spoke first)", text, Date()) }
+
+    /// The reply actually given (a warning may replace the model's acknowledgement).
+    func noteExchange(question: String, answer: String) { previous = (question, answer, Date()) }
+
+    func setSafety(_ bridge: SafetyBridge) { safety = bridge }
 
     /// Groups shown to the answer model.
     static let answerContext = 8
@@ -36,8 +65,12 @@ actor QueryEngine {
     static let episodeContext = 3
     /// Frames shown per episode.
     static let framesPerEpisode = 14
+    /// Reranker logit above which the top record is very likely relevant. Measured on the
+    /// 80-question simulator set: questions about things never seen topped out at -2.94;
+    /// wrongly refused answers had -2.04…-2.71.
+    static let secondLookLogit = -2.8
     /// Groups sent to the reranker.
-    static let rerankDepth = 20
+    static let rerankDepth = 30
     /// Longest "forget" the model may trigger in one request (one day).
     static let maxForgetMinutes = 24 * 60
 
@@ -50,9 +83,13 @@ actor QueryEngine {
         let started = ContinuousClock.now
         let trimmed = question.trimmingCharacters(in: .whitespacesAndNewlines)
         var trace = Trace()
+        rankedForResult = []
         let ai = self.ai
         await ai.beginQuestion()
         defer { Task { await ai.endQuestion() } }
+        // Safety status/log (local, fast) is fetched while the question is embedded.
+        let safetyBridge = safety
+        async let safetyTextAsync = safetyBridge?.context() ?? ""
 
         // 1. Query vector (~0.3–0.9 s; skipped when embeddings are off or slow).
         let (embedding, embedMs) = await Self.queryVector(ai, question: trimmed)
@@ -62,6 +99,7 @@ actor QueryEngine {
         let searchStarted = ContinuousClock.now
         var search = MemorySearch()
         search.keywords = [trimmed]
+        search.limit = 60
         search.embedding = embedding
         let hits = await store.search(search)
 
@@ -89,6 +127,7 @@ actor QueryEngine {
             }
         }
         let context = Array(groups.prefix(Self.answerContext))
+        rankedForResult = groups.prefix(Self.rerankDepth).map { $0.allRecords.map(\.id) }
         if !context.isEmpty { trace.add("top: " + context.prefix(3).map(Self.traceLabel).joined(separator: ", ")) }
 
         // 5. One model call: understand the question and answer from the records only.
@@ -136,16 +175,32 @@ actor QueryEngine {
             return "- id \(r.id), minutes_ago: \(ago), \(Self.promptTime(r.seenAt))" + (what.isEmpty ? "" : ", \(what)")
                 + (r.street.map { ", \($0)" } ?? "")
         }
+        let safetyText = await safetyTextAsync
+        // The frames of the first records, as one picture: the model looks at them as well as
+        // reading their text (colours, layout, what the OCR missed).
+        let pictureRecords = context.prefix(4).map(\.record)
+        let store = self.store
+        let picture = Self.montage(pictureRecords.map { store.frameURL($0) })
+        let pictureCaption = picture == nil ? nil : "a grid of " + pictureRecords.enumerated()
+            .map { "\($0.offset + 1) = record id \($0.element.id)" }.joined(separator: ", ")
+            + " (1 top-left, 2 top-right, 3 bottom-left, 4 bottom-right)"
         let user = MemoryPrompts.answerUser(question: trimmed, language: language, now: now, hasLocation: location != nil,
                                             records: context.map { Self.describe($0, now: now, position: position[$0.record.id]) },
-                                            episodes: episodeText, latest: latest)
+                                            episodes: episodeText, latest: latest, safety: safetyText, picture: pictureCaption,
+                                            previous: previous.flatMap { now.timeIntervalSince($0.at) < 300 ? "user: \($0.question) / Muisti: \($0.answer)" : nil })
+        let image = picture.map { NemotronClient.ImagePart(jpeg: $0) }
         #if DEBUG
         // Last prompt, for checking retrieval/episode context (Documents/last_prompt.txt).
         if let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first {
             try? user.write(to: docs.appendingPathComponent("last_prompt.txt"), atomically: true, encoding: .utf8)
         }
         #endif
-        let answered = await Self.answer(ai, user: user, trace: &trace)
+        var answered = await Self.answer(ai, user: user, image: image, trace: &trace)
+        if case .failure = answered, image != nil {
+            // A host that refuses the picture must not cost the answer: once more, text only.
+            trace.add("retry without picture")
+            answered = await Self.answer(ai, user: user, image: nil, trace: &trace)
+        }
         let draft: AnswerDraft
         switch answered {
         case .success(let value):
@@ -155,15 +210,24 @@ actor QueryEngine {
             Log.net.error("answer call failed: \(why, privacy: .public)")
             return offline(trimmed, context, started, note: "Nemotron didn't answer (\(why)); local search.", trace)
         }
-        trace.add("answer \((ContinuousClock.now - answerStarted).milliseconds) ms")
+        trace.add("answer \((ContinuousClock.now - answerStarted).milliseconds) ms\(image == nil ? "" : " · picture")")
+
+        // Muisti Turva commands: the reply is an acknowledgement / read-back, run by the caller.
+        if let command = draft.safetyCommand {
+            trace.add("safety: \(draft.action.rawValue)")
+            var r = result(trimmed, draft.answer, .seen, [], true, started, nil, draft.language, trace)
+            r.safety = command
+            r.isCommand = true
+            return r
+        }
 
         // One repair round: tell the model exactly which check failed and let it answer again.
         var final = draft
-        if final.action == .answer, let why = Self.rejection(final, hits: pool) {
+        if final.action == .answer, let why = Self.rejection(final, hits: pool, extra: safetyText) {
             Log.pipeline.info("evidence check failed (\(why, privacy: .public)); asking again")
             let retry = user + "\n\nYour previous reply was rejected by the evidence check: \(why). " +
                 "Answer again following the rules: leave out anything you cannot copy from the records' text."
-            if case .success(let second) = await Self.answer(ai, user: retry, trace: &trace) {
+            if case .success(let second) = await Self.answer(ai, user: retry, image: image, trace: &trace) {
                 final = second
                 trace.add("repair round")
             }
@@ -175,30 +239,89 @@ actor QueryEngine {
                 trace.add("forget: invalid span (\(draft.forget_minutes.map(String.init) ?? "-"))")
                 return result(trimmed, draft.unclear_reply ?? draft.answer, .unknown, [], true, started, nil, draft.language, trace)
             }
-            let removed = await store.delete(since: now.addingTimeInterval(-Double(minutes) * 60))
+            let since = now.addingTimeInterval(-Double(minutes) * 60)
+            let removed = await store.delete(since: since)
+            await safetyBridge?.forget(since)
             trace.add("forget: \(minutes) min, \(removed) records deleted")
-            return result(trimmed, draft.answer, .seen, [], true, started, nil, draft.language, trace)
+            var r = result(trimmed, draft.answer, .seen, [], true, started, nil, draft.language, trace)
+            r.isCommand = true
+            return r
         }
-        return checked(final, question: trimmed, hits: pool, started: started, trace: trace)
+        // Second look: the model said "not seen" although the reranker found the top record very
+        // relevant. One more call with that fact; the evidence checks still apply after it.
+        let refused = final.action == .answer
+            && (AnswerLabel(rawValue: final.label.uppercased()) != .seen || final.found == false)
+        if refused, let top = context.first?.signals.rerankLogit, top >= Self.secondLookLogit {
+            let retry = user + "\n\nSecond look: search ranked record id \(context[0].record.id) as highly relevant to this question. " +
+                "Re-read it and its episode. If it answers the question, even in other words, from a sign, plaque or advertisement, " +
+                "or from the order of frames in its episode, give that answer with found true and label GORDUM. " +
+                "If it really does not, keep BILMIYORUM."
+            if case .success(let second) = await Self.answer(ai, user: retry, image: image, trace: &trace),
+               AnswerLabel(rawValue: second.label.uppercased()) == .seen, second.found != false,
+               Self.rejection(second, hits: pool, extra: safetyText) == nil {
+                final = second
+                trace.add("second look")
+            }
+        }
+        var answer = checked(final, question: trimmed, hits: pool, started: started, trace: trace, extra: safetyText)
+        if let ids = final.event_ids, !ids.isEmpty {
+            answer.safetyFrames = await safetyBridge?.frames(ids) ?? []
+        }
+        return answer
     }
 
     /// The answer call: the configured Nemotron (Verda) gets 12 s; if it fails or is slow, the
     /// same model on NVIDIA build answers. (Verda alone left answers as "Nemotron didn't answer"
     /// when it was busy.)
-    private static func answer(_ ai: NemotronClient, user: String, trace: inout Trace) async -> Result<AnswerDraft, Error> {
+    private static func answer(_ ai: NemotronClient, user: String, image: NemotronClient.ImagePart? = nil,
+                               trace: inout Trace) async -> Result<AnswerDraft, Error> {
         let primary = await withTimeoutResult(seconds: 12) {
-            try await ai.chatJSON(AnswerDraft.self, system: MemoryPrompts.answerSystem, user: user,
-                                  jsonSchema: MemoryPrompts.answerSchema, schemaName: "answer", maxTokens: 400, temperature: 0)
+            try await ai.chatJSON(AnswerDraft.self, system: MemoryPrompts.answerSystem, user: user, image: image,
+                                  jsonSchema: MemoryPrompts.answerSchema, schemaName: "answer", maxTokens: 1000, temperature: 0)
         }
         guard case .failure(let error) = primary, await ai.fallbackAvailable else { return primary }
         let why = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         Log.net.info("answer: primary failed (\(why, privacy: .public)); using NVIDIA build")
         trace.add("fallback endpoint (\(why.prefix(40)))")
         return await withTimeoutResult(seconds: 20) {
-            try await ai.chatJSON(AnswerDraft.self, system: MemoryPrompts.answerSystem, user: user,
-                                  jsonSchema: MemoryPrompts.answerSchema, schemaName: "answer", maxTokens: 400, temperature: 0,
+            try await ai.chatJSON(AnswerDraft.self, system: MemoryPrompts.answerSystem, user: user, image: image,
+                                  jsonSchema: MemoryPrompts.answerSchema, schemaName: "answer", maxTokens: 1000, temperature: 0,
                                   route: .fallback)
         }
+    }
+
+    /// Up to four keyframes (already blurred) in a 2×2 grid, numbered 1–4, as one JPEG: one
+    /// picture works on every host, several do not.
+    static func montage(_ urls: [URL], cell: CGFloat = 640) -> Data? {
+        let images = urls.prefix(4).compactMap { url -> CGImage? in
+            guard let data = try? Data(contentsOf: url) else { return nil }
+            return ImageData.thumbnail(data, maxPixel: Int(cell))
+        }
+        guard !images.isEmpty else { return nil }
+        let columns = images.count == 1 ? 1 : 2
+        let rows = images.count <= 2 ? 1 : 2
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        let size = CGSize(width: cell * CGFloat(columns), height: cell * CGFloat(rows))
+        let rendered = UIGraphicsImageRenderer(size: size, format: format).image { ctx in
+            UIColor.black.setFill()
+            ctx.fill(CGRect(origin: .zero, size: size))
+            for (i, image) in images.enumerated() {
+                let origin = CGPoint(x: CGFloat(i % columns) * cell, y: CGFloat(i / columns) * cell)
+                let w = CGFloat(image.width), h = CGFloat(image.height)
+                let scale = min(cell / w, cell / h)
+                let rect = CGRect(x: origin.x + (cell - w * scale) / 2, y: origin.y + (cell - h * scale) / 2,
+                                  width: w * scale, height: h * scale)
+                UIImage(cgImage: image).draw(in: rect)
+                let label = NSAttributedString(string: " \(i + 1) ", attributes: [
+                    .font: UIFont.boldSystemFont(ofSize: 44),
+                    .foregroundColor: UIColor.white,
+                    .backgroundColor: UIColor.black.withAlphaComponent(0.75),
+                ])
+                label.draw(at: CGPoint(x: origin.x + 8, y: origin.y + 8))
+            }
+        }
+        return rendered.jpegData(compressionQuality: 0.7)
     }
 
     /// Language of the question (Apple NaturalLanguage), as an English name for the prompt.
@@ -327,17 +450,22 @@ actor QueryEngine {
     /// - every number in the reply must appear in the OCR text of the cited records (the only
     ///   exceptions are when the frame was seen).
     /// Returns why the draft is rejected, or nil when it passes.
-    private static func rejection(_ draft: AnswerDraft, hits: [MemoryHit]) -> String? {
+    private static func rejection(_ draft: AnswerDraft, hits: [MemoryHit], extra: String = "") -> String? {
         guard AnswerLabel(rawValue: draft.label.uppercased()) == .seen else { return nil }
         let evidence = evidence(for: draft, in: hits)
         let ocr = evidence.map(mergedOCR).joined(separator: "\n")
-        let fullText = evidence.map(recordText).joined(separator: "\n")
+        // Quotes: anything the model was shown (it may merge spans of two reads of one badge);
+        // numbers stay strict: only the OCR of the records it cites.
+        // The safety status and log shown to the model are evidence too (times, states).
+        let fullText = (hits.map(recordText) + hits.flatMap(\.allRecords).map { promptTime($0.seenAt) } + [extra])
+            .joined(separator: "\n")
         var reasons: [String] = []
         // Our own "(none)" placeholder for frames without text is not a quote.
-        if let quote = draft.quotes.first(where: { !$0.hasPrefix("(") && !EvidenceRule.supports($0, in: fullText) }) {
+        if let quote = draft.quotes.first(where: { !$0.hasPrefix("(") && !EvidenceRule.quoteSupported($0, in: fullText) }) {
             reasons.append("the quote \"\(quote)\" is not in the text of the records listed in used_ids")
         }
-        let missing = EvidenceRule.unsupportedNumbers(in: draft.answer, ocr: ocr, allowed: seenTimes(evidence))
+        let allowed = seenTimes(evidence).union(EvidenceRule.numberRuns(extra).map(EvidenceRule.canonicalNumber))
+        let missing = EvidenceRule.unsupportedNumbers(in: draft.answer, ocr: ocr, allowed: allowed)
         if !missing.isEmpty {
             reasons.append("these numbers are not in the OCR text of the records listed in used_ids: \(missing.joined(separator: ", "))")
         }
@@ -350,26 +478,31 @@ actor QueryEngine {
         return used.isEmpty ? Array(hits.prefix(1)) : used
     }
 
-    /// When a frame was seen may be said even though it is not on the sign.
-    private static func seenTimes(_ evidence: [MemoryHit]) -> Set<String> {
+    /// When a frame was seen (every number of the date/time shown to the model, and how many
+    /// minutes ago) may be said even though it is not on the sign.
+    private static func seenTimes(_ evidence: [MemoryHit], now: Date = Date()) -> Set<String> {
         Set(evidence.flatMap(\.allRecords).flatMap { record -> [String] in
-            let d = record.seenAt
-            let cal = Calendar.current
-            let h = cal.component(.hour, from: d), m = cal.component(.minute, from: d)
-            return [String(format: "%d:%02d", h, m), String(format: "%02d:%02d", h, m), String(cal.component(.day, from: d))]
+            let shown = promptTime(record.seenAt)
+            let minutesAgo = max(0, Int(now.timeIntervalSince(record.seenAt) / 60))
+            return (EvidenceRule.numberRuns(shown) + [String(minutesAgo), String(minutesAgo / 60)])
                 .map(EvidenceRule.canonicalNumber)
-        })
+        } + EvidenceRule.numberRuns(promptTime(now)).map(EvidenceRule.canonicalNumber))
     }
 
     /// Final result: a reply that still fails the checks becomes "not clearly seen"; a reply
     /// the model itself marks "inferred" is shown as its observations, labelled NOT SURE.
     private func checked(_ draft: AnswerDraft, question: String, hits: [MemoryHit],
-                         started: ContinuousClock.Instant, trace: Trace) -> AskResult {
+                         started: ContinuousClock.Instant, trace: Trace, extra: String = "") -> AskResult {
         let evidence = Self.evidence(for: draft, in: hits)
         var label = AnswerLabel(rawValue: draft.label.uppercased()) ?? .unknown
         var answer = draft.answer
         var trace = trace
-        if let why = Self.rejection(draft, hits: hits) {
+        // The model's own structured verdict wins over its label ("no, I did not see it" + GORDUM).
+        if draft.found == false, label == .seen {
+            label = .unknown
+            trace.add("found=false")
+        }
+        if let why = Self.rejection(draft, hits: hits, extra: extra) {
             label = .unknown
             answer = draft.unclear_reply ?? Self.unclearText
             trace.add("evidence rule rejected")
@@ -403,15 +536,20 @@ actor QueryEngine {
         let r = best.record
         let text = Self.mergedOCR(best).split(separator: "\n").prefix(3).joined(separator: ", ")
         let time = r.seenAt.formatted(date: .omitted, time: .shortened)
-        let answer = text.isEmpty ? "Closest frame at \(time); no text was read." : "Closest record (at \(time)): \(text)."
+        // Without the model there is no real answer: say so plainly, then the closest frame.
+        let answer = text.isEmpty
+            ? "I couldn't reach Nemotron, so I can't answer this properly right now. The closest frame is from \(time)."
+            : "I couldn't reach Nemotron, so I can't answer this properly right now. The closest thing I saw, at \(time), read: \(text)."
         return result(question, answer, .unknown, [best], false, started, note, nil, trace)
     }
 
     private func result(_ q: String, _ a: String, _ l: AnswerLabel, _ e: [MemoryHit], _ ai: Bool,
                         _ started: ContinuousClock.Instant, _ note: String?, _ language: String?, _ trace: Trace) -> AskResult {
-        AskResult(question: q, answer: a, label: l, evidence: e, usedAI: ai,
+        previous = (q, a, Date())
+        return AskResult(question: q, answer: a, label: l, evidence: e, usedAI: ai,
                   latencyMs: (ContinuousClock.now - started).milliseconds, note: note, language: language,
-                  trace: trace.parts.isEmpty ? nil : trace.parts.joined(separator: " · "))
+                  trace: trace.parts.isEmpty ? nil : trace.parts.joined(separator: " · "),
+                  ranked: rankedForResult)
     }
 
     struct Trace: Sendable {

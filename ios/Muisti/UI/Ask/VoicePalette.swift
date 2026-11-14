@@ -7,10 +7,10 @@ enum VoicePalette {
 
     static func colors(for phase: VoiceAssistant.Phase) -> [RGB] {
         switch phase {
-        case .idle: [Palette.brand, Palette.sky, Palette.violet]
-        case .listening: [Palette.brand * 0.9, Palette.sky, Palette.violet]
-        case .thinking: [Palette.brand, Palette.orchid, Palette.violet]
-        case .speaking: [Palette.brand, Palette.mint, Palette.sky]
+        case .idle: [Palette.brand, Palette.sky, Palette.blue]
+        case .listening: [Palette.brand * 0.9, Palette.sky, Palette.blue]
+        case .thinking: [Palette.ink * 1.6, Palette.blue, Palette.sky]
+        case .speaking: [Palette.brand, Palette.sky, Palette.sky * 0.6 + 0.4]
         case .failed: [Palette.rose * 0.9, Palette.amber, Palette.rose]
         }
     }

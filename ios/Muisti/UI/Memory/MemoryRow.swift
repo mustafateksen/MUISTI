@@ -26,7 +26,7 @@ struct MemoryRow: View {
                             InfoChip(text: hours, systemImage: "clock.fill", tint: .brandSky)
                         }
                         if record.status == .pending {
-                            InfoChip(text: "Processing", systemImage: "sparkles", tint: .brandViolet)
+                            InfoChip(text: "Processing", systemImage: "sparkles", tint: .brandBlue)
                         }
                     }
                     .padding(.top, Theme.Spacing.xxs)

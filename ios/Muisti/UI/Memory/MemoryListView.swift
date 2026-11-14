@@ -20,18 +20,16 @@ struct MemoryListView: View {
         NavigationStack {
             List {
                 if !records.isEmpty, query.isEmpty {
-                    // A header, not a row: rows clip their content (the outer cards' edges were
-                    // cut off) and their cells reach past the screen edges.
-                    Section {
-                    } header: {
-                        MemorySummaryHeader(
-                            total: controller.memoryCount,
-                            pending: controller.pendingCount,
-                            retentionDays: controller.config.retentionDays
-                        )
-                        .textCase(nil)
-                        .padding(.bottom, Theme.Spacing.xs)
-                    }
+                    // A bare row with zero insets: its edges line up with the search field and
+                    // the episode cards below.
+                    MemorySummaryHeader(
+                        total: controller.memoryCount,
+                        pending: controller.pendingCount,
+                        retentionDays: controller.config.retentionDays
+                    )
+                    .listRowInsets(EdgeInsets(top: Theme.Spacing.xs, leading: 0, bottom: 0, trailing: 0))
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
                 }
 
                 if query.isEmpty {

@@ -1,4 +1,5 @@
 import Foundation
+import simd
 
 /// Everything the scheduler looks at, gathered once per tick. Plain values: easy to log,
 /// easy to unit-test, no sensors needed.
@@ -11,6 +12,9 @@ struct SchedulerInputs: Sendable {
     var odometer: Double           // GPS metres since start
     var stepDistance: Double       // pedometer metres since start (indoors)
     var yawDegrees: Double?        // phone body yaw
+    var headOrientation: simd_quatf?   // glasses IMU, nil when not streaming
+    var headRotation: Double?      // glasses rotation rate, rad/s
+    var headEnergy: Double?        // glasses acceleration RMS, g
     var phoneBattery: Double?      // 0...1
     var phoneLowPower: Bool
     var phoneThermal: ProcessInfo.ThermalState
@@ -50,8 +54,10 @@ enum SchedulerDecision: Equatable, Sendable {
 /// 2. **Dwell.** When someone walking stops for ~1.5 s they are usually looking at something
 ///    (a sign, a menu, a stand). That moment gets one still.
 /// 3. **Turns.** A course or body-yaw change of ~35° means a new view.
-/// 4. **Ceilings.** Never faster than `minInterval`, never more than `maxPerMinute`, and while
-///    standing still only a few slow refreshes before going quiet.
+/// 4. **Head view.** With the glasses IMU: the head turned ≥ `viewChange`° since the last still
+///    and has settled → the wearer is looking at something new. Walking is read from head bob.
+/// 5. **Ceilings.** Never faster than `minInterval`, never more than `maxPerMinute`. Standing
+///    still never stops capture: a refresh every `stationaryRefresh`, slower after a while.
 /// 5. **Battery and heat stretch everything.** Low phone/glasses battery or heat multiplies
 ///    intervals and distances; critical heat pauses capture.
 /// 6. **Blur gate** (in `CaptureController`): once a still is due, wait up to ~1 s for a calm
@@ -65,6 +71,8 @@ struct AdaptiveScheduler: Sendable {
     private var stepsAtLast: Double = 0
     private var courseAtLast: Double?
     private var yawAtLast: Double?
+    private var headAtLast: simd_quatf?
+    private var headSettledSince: Date?
     private var recent: [Date] = []
     private var stillSince: Date?
     private var movedSinceDwell = false
@@ -101,6 +109,7 @@ struct AdaptiveScheduler: Sendable {
         recent.removeAll { now.timeIntervalSince($0) > 60 }
         movement = classify(input)
         trackMovement(now)
+        trackHead(input)
 
         // Heat first: critical heat on either device pauses capture altogether.
         if input.phoneThermal == .critical || input.glassesHeat == .critical {
@@ -125,6 +134,12 @@ struct AdaptiveScheduler: Sendable {
         let moved = max(input.odometer - odometerAtLast, input.stepDistance - stepsAtLast)
         let turned = turnSinceLast(input)
 
+        // Looking at something new: the head turned and has held still there.
+        if let view = viewChangeSinceLast(input), view >= tuning.viewChange,
+           let settled = headSettledSince, now.timeIntervalSince(settled) >= tuning.lookSettle {
+            return .capture(.heading)
+        }
+
         switch movement {
         case .walking:
             if moved >= tuning.walkingDistance * factor { return .capture(.distance) }
@@ -142,12 +157,13 @@ struct AdaptiveScheduler: Sendable {
             if let stillSince, movedSinceDwell, now.timeIntervalSince(stillSince) >= tuning.dwellSeconds {
                 return .capture(.dwell)
             }
-            if stationaryStills >= tuning.stationaryMaxStills {
-                return .hold("You're still; resumes when you move")
+            if input.headOrientation == nil, let turned, turned >= tuning.headingChange * 1.3 {
+                return .capture(.heading)
             }
-            if let turned, turned >= tuning.headingChange * 1.3 { return .capture(.heading) }
-            if elapsed >= tuning.stationaryRefresh * factor { return .capture(.idleRefresh) }
-            return .wait("Still")
+            // Never goes quiet; after a few refreshes of the same view, refresh more slowly.
+            let refresh = tuning.stationaryRefresh * factor * (stationaryStills >= tuning.stationaryMaxStills ? 2.5 : 1)
+            if elapsed >= refresh { return .capture(.idleRefresh) }
+            return .wait(String(format: "Still · next in %.0f s", max(0, refresh - elapsed)))
 
         case .unknown:
             // No motion data (simulator, permission denied): fall back to distance + timer.
@@ -165,6 +181,7 @@ struct AdaptiveScheduler: Sendable {
         stepsAtLast = input.stepDistance
         courseAtLast = input.gpsCourse ?? courseAtLast
         yawAtLast = input.yawDegrees ?? yawAtLast
+        headAtLast = input.headOrientation ?? headAtLast
         followUpRequested = false
         if trigger == .dwell { movedSinceDwell = false }
         if movement == .still { stationaryStills += 1 }
@@ -175,6 +192,11 @@ struct AdaptiveScheduler: Sendable {
     private func classify(_ input: SchedulerInputs) -> Movement {
         let speed = input.gpsSpeed
         let gpsTrusted = (input.gpsAccuracy ?? .infinity) <= 20
+        // The glasses are on the head: head bob says walking even with the phone on a table.
+        if let energy = input.headEnergy, input.activity != .automotive, input.activity != .cycling {
+            if gpsTrusted, let speed, speed > 4 { return .fast }
+            return energy >= tuning.headWalkingEnergy ? .walking : .still
+        }
         switch input.activity {
         case .automotive, .cycling:
             return .fast
@@ -203,6 +225,26 @@ struct AdaptiveScheduler: Sendable {
         case .unknown:
             break
         }
+    }
+
+    /// Head held still (glasses IMU) since when; nil while it moves or without glasses data.
+    private mutating func trackHead(_ input: SchedulerInputs) {
+        guard let rate = input.headRotation else {
+            headSettledSince = nil
+            return
+        }
+        if rate >= tuning.headSteadyRate {
+            headSettledSince = nil
+        } else if headSettledSince == nil {
+            headSettledSince = input.now
+        }
+    }
+
+    /// Degrees the head turned since the last still (glasses orientation).
+    private func viewChangeSinceLast(_ input: SchedulerInputs) -> Double? {
+        guard let now = input.headOrientation, let then = headAtLast else { return nil }
+        let d = min(1, abs(simd_dot(now.vector, then.vector)))
+        return Double(2 * acos(d)) * 180 / .pi
     }
 
     /// Degrees turned since the last still: GPS course while moving, else phone yaw.

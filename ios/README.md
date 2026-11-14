@@ -98,6 +98,28 @@ soru → Nemotron 3.5 Embed (~0,3 sn) → telefonda hibrit arama (FTS5 + bellek 
 - Örnek veri: Geliştirici > "Hafızayı silip örnek fotoğrafları yükle" (`Documents/ingest/manifest.json`), ya da `--script-only=wipe@0,ingest@1 --ingest=ingest`. Telefona: `devicectl device copy to … --destination Documents/ingest`.
 - Test: `--ask-only --asks=soru1||soru2` (son istem `Documents/last_prompt.txt`, DEBUG).
 
+### Ölçüm (simülatör, 73 fotoğraf / 79 soru)
+
+`Pipeline/EvalRunner.swift` (DEBUG): `--script-only=wipe@0,ingest@1,waitidle@2,eval@3 --ingest=ingest2 --eval=ingest2`.
+`Documents/ingest2/eval.json`: `{"q", "expect": [foto], "must": [biri] | null}`; sonuç `eval_result.json` + `eval_summary.txt`.
+Veri: 7 bölümde 73 açık lisanslı fotoğraf (benzer çeldiriciler: 3 fırın, 3 eczane, 3 tramvay, 3 müze, 3 tuvalet…), sorular: metin, nesne, ilişki/sıra, yenilik, Türkçe, görülmeyenler.
+
+| Koşu | Değişiklik | Doğru cevap (çekirdek 53) | Görülmedi (7) | r@1 | p50 |
+|---|---|---|---|---|---|
+| 1 | başlangıç | 46 | 7 | 46 | 1,8 sn |
+| 2 | tarih sayıları + alıntı kapsamı + 8B gömme | 47 | 6 | 45 | 3,7 sn (8B sorgu vektörü zaman aşımı) |
+| 3 | 1B gömmeye dönüş | 49 | 6 | 47 | 2,1 sn |
+| 4 | alıntı %80 kelime, 800 token, `found` alanı | 50 | 7 | 47 | 1,7 sn |
+| 6 | reranker skoruyla ikinci bakış (≥ −2,8) | **52** | **7** | 47 | 2,0 sn |
+
+- `nemotron-3.5-embed-8b` (4096-d) hesapta var ama sorgu anında 5+ sn / zaman aşımı → 1B kaldı.
+- İkinci bakış eşiği ölçümden: görülmeyen şey sorularında en iyi skor ≤ −2,94, yanlış reddedilen cevaplarda −2,04…−2,71.
+
+### Gözlükten aktarım hızı
+- 12 MP fotoğraf Bluetooth'tan 10–14 sn, Wi-Fi'dan ~1 sn. SDK Wi-Fi yolu için Info.plist (`NSLocalNetworkUsageDescription`, `NSBonjourServices`) ve yerel ağ izni ister: açılışta Bonjour taramasıyla izin kontrol edilir, reddedildiyse uyarı gösterilir; aktarım hızı ölçülür, iki kez < 400 KB/s ise "Bluetooth'tan yavaş geliyor" uyarısı.
+- Kayıt sürerken soru telefon mikrofonundan dinlenir (gözlük mikrofonu HFP, kamera bağlantısıyla aynı radyoyu paylaşır); cevap yine gözlükten (A2DP).
+- Fotoğrafın zamanı istendiği an (geldiği an değil), GPS o ana göre eşlenir.
+
 ### Arka planda kayıt
 
 Meta SDK `.hvc1` (HEVC) akışını arka planda sürdürür (`.raw` durur; CHANGELOG 0.5.0). Arka planda iOS GPU/donanım çözücü vermediği için:

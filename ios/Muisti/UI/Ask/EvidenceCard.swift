@@ -1,7 +1,8 @@
 import MapKit
 import SwiftUI
 
-/// One remembered frame: blurred keyframe, when and where, the text read on it, a map pin.
+/// One remembered frame: blurred keyframe, when and where, a map pin. The raw OCR text is not
+/// shown here; the answer above already quotes what matters.
 struct EvidenceCard: View {
     let hit: MemoryHit
     let store: MemoryStore
@@ -28,16 +29,6 @@ struct EvidenceCard: View {
             }
             .font(.footnote)
             .foregroundStyle(.secondary)
-
-            if !record.ocrText.isEmpty {
-                Text(record.ocrText.replacingOccurrences(of: "\n", with: " · "))
-                    .font(.footnote.monospaced())
-                    .lineLimit(4)
-                    .padding(Theme.Spacing.s)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(.background.tertiary, in: .rect(cornerRadius: Theme.Radius.small))
-                    .accessibilityLabel("Recognized text: \(record.ocrText)")
-            }
 
             if let lat = record.latitude, let lon = record.longitude {
                 let coordinate = CLLocationCoordinate2D(latitude: lat, longitude: lon)

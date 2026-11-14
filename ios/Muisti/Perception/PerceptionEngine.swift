@@ -185,9 +185,12 @@ actor PerceptionEngine {
         request.recognitionLevel = .accurate
         request.usesLanguageCorrection = true
         request.minimumTextHeight = 0.012
-        let wanted = ["fi-FI", "sv-SE", "en-US", "tr-TR", "de-DE"]
+        // Signs can be in any script (Finnish, English, Turkish, Chinese, Japanese…): let Vision
+        // detect the language per frame; the preferred list only breaks ties.
+        request.automaticallyDetectsLanguage = true
+        let preferred = ["en-US", "fi-FI", "sv-SE", "tr-TR", "de-DE"]
         if let supported = try? request.supportedRecognitionLanguages() {
-            request.recognitionLanguages = wanted.filter { supported.contains($0) }
+            request.recognitionLanguages = preferred.filter { supported.contains($0) }
         }
         let handler = VNImageRequestHandler(cgImage: image, options: [:])
         do { try handler.perform([request]) } catch { return [] }

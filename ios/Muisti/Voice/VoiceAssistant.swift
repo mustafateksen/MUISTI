@@ -11,6 +11,8 @@ final class VoiceAssistant {
     enum Phase: Equatable {
         case idle, listening, thinking, speaking
         case failed(String)
+
+        var isFailed: Bool { if case .failed = self { true } else { false } }
     }
 
     private(set) var phase: Phase = .idle
@@ -19,8 +21,13 @@ final class VoiceAssistant {
     private(set) var history: [AskResult] = []
     var localeIdentifier = "en-US"
     var speakAnswers = true
+    /// Whether listening may use the glasses mic (HFP). Set by the controller: false while the
+    /// glasses camera is streaming.
+    @ObservationIgnored var prefersGlassesMic: () -> Bool = { true }
     /// Microphone spectrum and spoken-word pulses for the visualizer.
     let levels = VoiceLevels()
+    /// Runs a Muisti Turva command from a reply; may return a reply to say instead.
+    @ObservationIgnored var safetyHandler: (SafetyCommand) async -> String? = { _ in nil }
 
     @ObservationIgnored private let engine: QueryEngine
     @ObservationIgnored private let location: LocationProvider
@@ -63,7 +70,7 @@ final class VoiceAssistant {
             return
         }
         do {
-            try Self.activateAudioSession()
+            try Self.activateAudioSession(glassesMic: prefersGlassesMic())
             let session = SpeechSession(recognizer: recognizer)
             let levels = levels
             try session.start { [weak self] text, isFinal in
@@ -99,7 +106,10 @@ final class VoiceAssistant {
             Self.deactivateAudioSession()
             return
         }
-        await ask(question)
+        // We usually get here from the silence/max timer task, which was just cancelled above:
+        // asking inside it would cancel every Nemotron request at once (instant local-search
+        // answer). A fresh task does not inherit that cancellation.
+        await Task { await self.ask(question) }.value
     }
 
     /// Stops listening without asking, or stops reading the answer aloud.
@@ -135,7 +145,11 @@ final class VoiceAssistant {
     func ask(_ question: String) async {
         transcript = question
         phase = .thinking
-        let result = await engine.ask(question, location: location.freshFix(maxAge: 120))
+        var result = await engine.ask(question, location: location.freshFix(maxAge: 120))
+        if let command = result.safety, let reply = await safetyHandler(command) {
+            result.answer = reply
+            await engine.noteExchange(question: question, answer: reply)
+        }
         Log.pipeline.info("ask “\(question, privacy: .public)” → [\(result.label.rawValue, privacy: .public)] \(result.answer, privacy: .public) · evidence \(result.evidence.map(\.record.id), privacy: .public) · \(result.latencyMs) ms · ai \(result.usedAI) · note \(result.note ?? "-", privacy: .public) · \(result.trace ?? "", privacy: .public)")
         lastResult = result
         history.insert(result, at: 0)
@@ -146,6 +160,25 @@ final class VoiceAssistant {
         }
         phase = .idle
         Self.deactivateAudioSession()
+    }
+
+    /// Muisti speaks first: a safety warning or a yes/no question. Shown in the chat too; a
+    /// question opens the microphone for the answer.
+    func announce(_ text: String, language: String?, expectsReply: Bool, frame: URL? = nil) async {
+        let note = AskResult(question: expectsReply ? "Muisti asks" : "Safety warning", answer: text, label: .seen,
+                             evidence: [], usedAI: false, latencyMs: 0, note: nil, language: language,
+                             isCommand: true, safetyFrames: frame.map { [$0] } ?? [])
+        lastResult = note
+        history.insert(note, at: 0)
+        if history.count > 20 { history.removeLast() }
+        await engine.noteMuistiSaid(text)
+        // Never talk over the user or over an answer being read.
+        guard phase == .idle || phase.isFailed else { return }
+        phase = .speaking
+        await speak(text, language: language ?? localeIdentifier)
+        phase = .idle
+        Self.deactivateAudioSession()
+        if expectsReply { await startListening() }
     }
 
     private func handlePartial(_ text: String, isFinal: Bool) {
@@ -213,22 +246,29 @@ final class VoiceAssistant {
 
     // MARK: Audio session
 
-    /// Glasses appear as a Bluetooth headset: HFP gives the glasses mic, A2DP/HFP the speakers.
-    static func activateAudioSession() throws {
+    /// Glasses appear as a Bluetooth headset: HFP gives the glasses mic, A2DP the speakers.
+    /// `glassesMic: false` (camera streaming): no HFP at all — HFP shares the Bluetooth radio
+    /// with the camera link and drops it to 1-3 fps; the phone's mic listens, the answer still
+    /// plays on the glasses over A2DP.
+    static func activateAudioSession(glassesMic: Bool = true) throws {
         let session = AVAudioSession.sharedInstance()
-        let bluetooth: AVAudioSession.CategoryOptions
-        if #available(iOS 26.0, *) {
-            bluetooth = .allowBluetoothHFP
-        } else {
-            bluetooth = AVAudioSession.CategoryOptions(rawValue: 0x4)   // .allowBluetooth
+        var options: AVAudioSession.CategoryOptions = [.allowBluetoothA2DP, .defaultToSpeaker]
+        if glassesMic {
+            if #available(iOS 26.0, *) {
+                options.insert(.allowBluetoothHFP)
+            } else {
+                options.insert(AVAudioSession.CategoryOptions(rawValue: 0x4))   // .allowBluetooth
+            }
         }
-        try session.setCategory(.playAndRecord, mode: .default, options: [bluetooth, .allowBluetoothA2DP, .defaultToSpeaker])
+        try session.setCategory(.playAndRecord, mode: .default, options: options)
         // Smaller IO buffers → more frequent spectrum updates for the orb (a hint; iOS may ignore it).
         try? session.setPreferredIOBufferDuration(0.02)
         try session.setActive(true)
-        // Prefer a Bluetooth input (the glasses) when one is connected.
-        if let bt = session.availableInputs?.first(where: { $0.portType == .bluetoothHFP }) {
+        // Prefer the glasses mic when allowed, the phone's own mic otherwise.
+        if glassesMic, let bt = session.availableInputs?.first(where: { $0.portType == .bluetoothHFP }) {
             try? session.setPreferredInput(bt)
+        } else if !glassesMic, let builtIn = session.availableInputs?.first(where: { $0.portType == .builtInMic }) {
+            try? session.setPreferredInput(builtIn)
         }
     }
 

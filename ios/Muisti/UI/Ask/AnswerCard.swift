@@ -15,6 +15,15 @@ struct AnswerCard: View {
             HStack(alignment: .firstTextBaseline) {
                 // Backed by evidence → "Seen". Otherwise no verdict chip: a yellow warning that
                 // what follows is the most relevant result, not a confirmed answer.
+                if result.isCommand {
+                    // A rule, a warning, "noted": not a claim about something seen.
+                    Label("Muisti", systemImage: "shield.lefthalf.filled")
+                        .font(.subheadline.bold())
+                        .foregroundStyle(Color.accentColor)
+                        .padding(.horizontal, Theme.Spacing.s)
+                        .padding(.vertical, Theme.Spacing.xxs)
+                        .background(Color.accentColor.opacity(0.14), in: Capsule())
+                } else {
                 Label {
                     Text(seen ? "Seen" : "Showing the closest match")
                         .foregroundStyle(seen ? Color.success : Color.primary)
@@ -26,6 +35,7 @@ struct AnswerCard: View {
                     .padding(.horizontal, Theme.Spacing.s)
                     .padding(.vertical, Theme.Spacing.xxs)
                     .background((seen ? Color.success : .attention).opacity(seen ? 0.16 : 0.22), in: Capsule())
+                }
                 Spacer()
                 ShareLink(item: result.answer) {
                     Label("Share", systemImage: "square.and.arrow.up")
@@ -65,7 +75,42 @@ struct AnswerCard: View {
             if !result.evidence.isEmpty {
                 EvidenceCarousel(hits: result.evidence, store: store)
             }
+
+            // Safety log frames the answer or warning relies on (blurred, on the phone).
+            if !result.safetyFrames.isEmpty {
+                ScrollView(.horizontal) {
+                    HStack(spacing: Theme.Spacing.s) {
+                        ForEach(result.safetyFrames, id: \.self) { url in
+                            SafetyFrameThumb(url: url)
+                        }
+                    }
+                }
+                .scrollIndicators(.hidden)
+            }
         }
         .card()
+    }
+}
+
+/// A blurred evidence frame from the safety log.
+private struct SafetyFrameThumb: View {
+    let url: URL
+    @State private var image: UIImage?
+
+    var body: some View {
+        Group {
+            if let image {
+                Image(uiImage: image).resizable().scaledToFill()
+            } else {
+                Color.secondary.opacity(0.15)
+            }
+        }
+        .frame(width: 160, height: 120)
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .accessibilityLabel("Evidence frame")
+        .task(id: url) {
+            let url = url
+            image = await Task.detached { (try? Data(contentsOf: url)).flatMap(UIImage.init(data:)) }.value
+        }
     }
 }

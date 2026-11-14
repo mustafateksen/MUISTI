@@ -28,7 +28,7 @@ struct GlassesIsland: View {
             }
         }
         .frame(maxWidth: expanded ? .infinity : nil, alignment: .topLeading)
-        .background(.black, in: shape)
+        .background(.ink, in: shape)
         .overlay { shape.strokeBorder(.white.opacity(0.12), lineWidth: 0.5) }
         .shadow(color: .black.opacity(expanded ? 0.25 : 0.12), radius: expanded ? 18 : 6, y: expanded ? 8 : 2)
         .environment(\.colorScheme, .dark)

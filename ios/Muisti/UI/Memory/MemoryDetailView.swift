@@ -76,17 +76,22 @@ struct MemoryDetailView: View {
                     .card()
                 }
 
-                VStack(alignment: .leading, spacing: Theme.Spacing.s) {
-                    Label("Text in the frame", systemImage: "text.viewfinder")
-                        .font(.headline)
-                    Text(record.ocrText.isEmpty ? "No text was read." : record.ocrText)
-                        .font(.callout.monospaced())
-                        .foregroundStyle(record.ocrText.isEmpty ? .secondary : .primary)
-                        .textSelection(.enabled)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                // The raw OCR text is noisy; keep it one tap away instead of on the page.
+                if !record.ocrText.isEmpty {
+                    DisclosureGroup {
+                        Text(record.ocrText)
+                            .font(.callout.monospaced())
+                            .textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.top, Theme.Spacing.s)
+                    } label: {
+                        Label("Text in the frame", systemImage: "text.viewfinder")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
+                    .card()
                 }
-                .card()
 
                 if let coordinate {
                     Map(initialPosition: .region(MKCoordinateRegion(center: coordinate, latitudinalMeters: 500, longitudinalMeters: 500))) {

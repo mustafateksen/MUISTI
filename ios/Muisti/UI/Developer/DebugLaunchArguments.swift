@@ -31,6 +31,12 @@ enum DebugLaunchArguments {
             if parts.count > 1 { config.rerankKey = parts[1] }
             await controller.applySettings()
         }
+        // `--still=<small|medium|large|full>[|<low|medium|high>]`: photo size on the glasses.
+        if let still = args.first(where: { $0.hasPrefix("--still=") }) {
+            let parts = still.dropFirst(8).split(separator: "|").map(String.init)
+            if let res = parts.first.flatMap(StillResolution.init(rawValue:)) { config.stillResolution = res }
+            if parts.count > 1, let q = StillQuality(rawValue: parts[1]) { config.stillQuality = q }
+        }
         if let rot = args.first(where: { $0.hasPrefix("--rotate=") }), let deg = Int(rot.dropFirst(9)) {
             config.glassesPhotoRotation = deg
         }
@@ -108,6 +114,23 @@ enum DebugLaunchArguments {
                     await controller.voice.ask(question)
                 }
             case "wipe": await controller.deleteAllMemories()
+            case "eval":
+                // `--eval=<folder in Documents>`: retrieval + answer evaluation (eval.json).
+                let folder = ProcessInfo.processInfo.arguments.first { $0.hasPrefix("--eval=") }.map { String($0.dropFirst(7)) } ?? "ingest"
+                await EvalRunner.run(controller: controller, folder: folder)
+            case "safetyeval":
+                // `--safety=<folder in Documents>`: Muisti Turva scenarios, photos, conversation.
+                let folder = ProcessInfo.processInfo.arguments.first { $0.hasPrefix("--safety=") }.map { String($0.dropFirst(9)) } ?? "safety"
+                await SafetyEval.run(controller: controller, folder: folder)
+            case "waitidle":
+                // Wait until every frame is structured, embedded and every episode summarised.
+                for _ in 0..<600 {
+                    let counts = await controller.store.count()
+                    if counts.pending == 0, await controller.store.missingEmbeddings(limit: 1).isEmpty,
+                       await controller.store.episodeNeedingSummary(settle: 0) == nil { break }
+                    try? await Task.sleep(for: .seconds(2))
+                }
+                Log.mock.info("idle: all frames processed")
             case "ingest":
                 // `--ingest=<folder in Documents>`: test photos through the real pipeline.
                 let folder = ProcessInfo.processInfo.arguments.first { $0.hasPrefix("--ingest=") }.map { String($0.dropFirst(9)) } ?? "ingest"

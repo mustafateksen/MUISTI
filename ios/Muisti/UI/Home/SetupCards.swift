@@ -61,7 +61,7 @@ struct SetupCards: View {
                     title: "Turn on AI",
                     message: "Once you add a key, recordings are organized into names, phone numbers, and times, and questions get better answers. Until then, recordings wait on your phone.",
                     button: "Go to Settings",
-                    tint: .brandViolet,
+                    tint: .brandBlue,
                     action: openSettings
                 )
             }

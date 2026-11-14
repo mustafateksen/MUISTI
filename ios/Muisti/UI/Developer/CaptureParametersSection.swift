@@ -21,6 +21,7 @@ struct CaptureParametersSection: View {
             Stepper("Fixed interval (C): \(Int(config.intervalSeconds)) s", value: $config.intervalSeconds, in: 2...60, step: 1)
             Stepper("Inspect 1 in \(config.passthroughEveryN) stream frames", value: $config.passthroughEveryN, in: 1...30)
             Toggle("Reconnect when glasses return", isOn: $config.autoReconnect)
+            Toggle("Start when glasses connect", isOn: $config.autoStart)
             Toggle("Keep recording in background", isOn: $config.backgroundCapture)
             Picker("Rotate glasses photo", selection: $config.glassesPhotoRotation) {
                 Text("0°").tag(0)

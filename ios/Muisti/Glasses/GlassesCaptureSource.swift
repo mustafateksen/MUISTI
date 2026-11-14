@@ -56,6 +56,10 @@ final class GlassesCaptureSource: CaptureSource {
     @ObservationIgnored private let wearables: any WearablesInterface
     @ObservationIgnored private let selector: AutoDeviceSelector
     @ObservationIgnored private var session: DeviceSession?
+    /// Head IMU from the glasses (10 Hz) while a session runs; drives the adaptive scheduler.
+    @ObservationIgnored let headMotion = GlassesMotion()
+    /// Newest stream frame and when it arrived (adaptive mode); written off the main actor.
+    @ObservationIgnored private let latestFrame = OSAllocatedUnfairLock<(VideoFrame, Date)?>(initialState: nil)
     @ObservationIgnored private var camera: MWDATCamera.Camera?
     @ObservationIgnored private var config: CaptureConfig?
 
@@ -138,8 +142,28 @@ final class GlassesCaptureSource: CaptureSource {
 
     /// Battery / heat warning derived from device state (brief §7). The SDK also reports
     /// `StreamError.batteryLow/.thermalHot`, but those arrive only once the device acts.
+    /// Recent photo transfer speeds (bytes/s). Wi-Fi moves a 12 MP still in about a second;
+    /// Bluetooth Classic needs 10+ s, which means the SDK's Wi-Fi link is not up.
+    @ObservationIgnored private var recentThroughput: [Double] = []
+    private(set) var slowLink = false
+
+    private func noteThroughput(bytes: Int, millis: Int) {
+        guard bytes > 200_000, millis > 0, !MockRuntime.isActive else { return }
+        recentThroughput.append(Double(bytes) / (Double(millis) / 1000))
+        recentThroughput = Array(recentThroughput.suffix(3))
+        // Two of the last three under 400 KB/s: Bluetooth.
+        slowLink = recentThroughput.filter { $0 < 400_000 }.count >= 2
+        if slowLink { Log.glasses.info("slow photo link: \(self.recentThroughput.map { Int($0 / 1000) }, privacy: .public) KB/s") }
+    }
+
     var healthWarning: String? {
         guard hasActiveDevice else { return nil }
+        if LocalNetworkPermission.shared.denied {
+            return "Local Network is off for Muisti, so the glasses send photos over slow Bluetooth. Turn it on in Settings › Privacy & Security › Local Network."
+        }
+        if slowLink {
+            return "Photos arrive slowly over Bluetooth. Turn on the phone's Wi-Fi and allow Local Network for Muisti (Settings › Privacy & Security › Local Network) so the glasses can use Wi-Fi."
+        }
         let suggestion = usesPhoto ? "" : " Switching to adaptive mode saves battery and reduces heat."
         switch device.thermal {
         case .critical, .emergency, .shutdown:
@@ -265,14 +289,39 @@ final class GlassesCaptureSource: CaptureSource {
     }
 
     func captureStill(trigger: CaptureTrigger) async -> CapturedFrame? {
-        guard usesPhoto else { return nil }   // stream modes deliver through `frames`
         guard !recordingInBackground else { return nil }   // background: the stream is recorded instead
         guard let config else { return nil }
+        // Silent: a stream photo plays the glasses' capture chime every time.
+        if config.mode.picksStreamFrames { return await newestStreamFrame(trigger: trigger) }
+        guard usesPhoto else { return nil }   // stream modes deliver through `frames`
         return await takePhoto(
             resolution: config.stillResolution.sdk,
             quality: config.stillQuality.sdk,
             trigger: trigger
         )
+    }
+
+    /// Newest frame of the running stream (adaptive mode): no transfer wait. Waits up to 2 s
+    /// for one that is less than a second old.
+    private func newestStreamFrame(trigger: CaptureTrigger) async -> CapturedFrame? {
+        let deadline = Date().addingTimeInterval(2)
+        var picked: (VideoFrame, Date)?
+        while picked == nil, Date() < deadline {
+            if streamState == .streaming, let latest = latestFrame.withLock({ $0 }),
+               Date().timeIntervalSince(latest.1) < 1 {
+                picked = latest
+            } else {
+                try? await Task.sleep(for: .milliseconds(100))
+            }
+        }
+        guard let (frame, at) = picked, device.don != .doffed else { return nil }
+        latestFrame.withLock { $0 = nil }   // the next still must be a new frame
+        let origin = streamOrigin
+        return await Task.detached(priority: .userInitiated) { () -> CapturedFrame? in
+            guard let image = frame.makeUIImage(), let jpeg = image.jpegData(compressionQuality: 0.9) else { return nil }
+            let size = CGSize(width: image.size.width * image.scale, height: image.size.height * image.scale)
+            return CapturedFrame(capturedAt: at, origin: origin, jpeg: jpeg, pixelSize: size, isHighRes: false, trigger: trigger)
+        }.value
     }
 
     func requestHighResPhoto() async -> CapturedFrame? {
@@ -313,6 +362,9 @@ final class GlassesCaptureSource: CaptureSource {
         }
         transferFraction = 0
         let t0 = ContinuousClock.now
+        // The picture is taken now; the transfer can take 10+ s over Bluetooth. Time and GPS
+        // belong to this moment, not to the arrival ("the street we just passed").
+        let takenAt = Date()
         camera.photo.capturePhoto(resolution: resolution, quality: quality)
         guard let data = await pendingPhoto.wait(timeout: Self.photoTimeout),
               let raw = ImageData.ensureJPEG(data)
@@ -340,7 +392,8 @@ final class GlassesCaptureSource: CaptureSource {
         }.value
         let size = ImageData.pixelSize(of: jpeg)
         Log.glasses.info("photo \(Int(size.width))x\(Int(size.height)) \(jpeg.count) B in \(self.lastTransferMillis ?? -1) ms (rotated \(rotation)°)")
-        return CapturedFrame(origin: photoOrigin, jpeg: jpeg, pixelSize: size, isHighRes: true, trigger: trigger)
+        noteThroughput(bytes: raw.count, millis: lastTransferMillis ?? 0)
+        return CapturedFrame(capturedAt: takenAt, origin: photoOrigin, jpeg: jpeg, pixelSize: size, isHighRes: true, trigger: trigger)
     }
 
     private static func usableResolution(_ wanted: PhotoResolution, excluding failed: Set<PhotoResolution>) -> PhotoResolution {
@@ -386,6 +439,7 @@ final class GlassesCaptureSource: CaptureSource {
             reconnectAttempts = 0
             lastError = nil   // recovered: stale teardown errors no longer apply
             attachCameraIfNeeded()
+            if let session { headMotion.attach(to: session) }
         case .stopped:
             // Terminal. A new session is needed to continue (hinge reopen does not revive it).
             cleanupSession()
@@ -400,6 +454,7 @@ final class GlassesCaptureSource: CaptureSource {
 
     private func cleanupSession() {
         sessionTokens.clear()
+        headMotion.detach()
         cameraTokens.clear()
         pendingPhoto.fulfill(nil)
         pendingStreamPhoto.fulfill(nil)
@@ -446,6 +501,10 @@ final class GlassesCaptureSource: CaptureSource {
         } else if config.mode.usesPhotoCapability {
             // Wake-up stream only: compressed, smallest, slowest. Nothing decodes it.
             streamConfig = StreamConfiguration(videoCodec: .hvc1, resolution: .low, frameRate: 2)
+        } else if config.mode.picksStreamFrames {
+            // Only the newest frame is ever used: 2 fps leaves Bluetooth room for 720p
+            // (at 7 fps the SDK dropped to 504×896 after a minute, field 14 Nov).
+            streamConfig = StreamConfiguration(videoCodec: .raw, resolution: .high, frameRate: 2)
         } else {
             streamConfig = StreamConfiguration(
                 videoCodec: .raw,
@@ -505,6 +564,13 @@ final class GlassesCaptureSource: CaptureSource {
             }.store(in: cameraTokens)
             photo.transferProgressPublisher.listen { [weak self] progress in
                 Task { @MainActor in self?.transferFraction = progress.fraction }
+            }.store(in: cameraTokens)
+        } else if config?.mode.picksStreamFrames == true, recorder == nil {
+            // Adaptive: keep only the newest frame; the scheduler takes it when a still is due.
+            let latest = latestFrame
+            latest.withLock { $0 = nil }
+            stream.videoFramePublisher.listen { frame in
+                latest.withLock { $0 = (frame, Date()) }
             }.store(in: cameraTokens)
         } else if let recorder {
             // Background: compressed samples go straight to the file, nothing is decoded.

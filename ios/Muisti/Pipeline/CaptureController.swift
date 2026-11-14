@@ -70,6 +70,8 @@ final class CaptureController {
     @ObservationIgnored private let worker: EnrichmentWorker
     @ObservationIgnored let queryEngine: QueryEngine
     let voice: VoiceAssistant
+    /// Muisti Turva: the user's own safety rules over what the glasses see.
+    let safety: SafetyMonitor
     @ObservationIgnored private let pipeline: MemoryPipeline
     @ObservationIgnored private let pipelineInput: AsyncStream<PipelineItem>.Continuation
     @ObservationIgnored private var tasks: [Task<Void, Never>] = []
@@ -87,6 +89,21 @@ final class CaptureController {
         voice.localeIdentifier = config.voiceLocale
         voice.speakAnswers = config.speakAnswers
         pipeline = MemoryPipeline(recorder: recorder, store: store, worker: worker)
+        safety = SafetyMonitor(store: SafetyStore(), ai: ai, location: location)
+        let safety = safety
+        let voice = voice
+        safety.announce = { text, language, expectsReply, frame in
+            await voice.announce(text, language: language, expectsReply: expectsReply, frame: frame)
+        }
+        voice.safetyHandler = { command in await safety.handle(command) }
+        let safetyStore = safety.store
+        let bridge = SafetyBridge(
+            context: { await safety.promptContext() },
+            forget: { since in await safetyStore.delete(since: since) },
+            frames: { ids in await safety.frames(forEvents: ids) }
+        )
+        let engine = queryEngine
+        Task { await engine.setSafety(bridge) }
 
         let (pipelineStream, pipelineInput) = AsyncStream.makeStream(of: PipelineItem.self, bufferingPolicy: .bufferingNewest(6))
         self.pipelineInput = pipelineInput
@@ -132,7 +149,15 @@ final class CaptureController {
             await self.refreshCounts()
             await self.applySettings()
             await self.worker.start()
+            // Ask for Local Network early: without it the glasses send photos over Bluetooth.
+            if self.config.sourceKind == .glasses { LocalNetworkPermission.shared.check() }
         }
+        tasks.append(Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(1))
+                await self?.autoStartIfReady()
+            }
+        })
         Task.detached(priority: .utility) { PerceptionEngine.warmUpModels() }
     }
 
@@ -143,8 +168,28 @@ final class CaptureController {
 
     // MARK: Start / stop
 
+    @ObservationIgnored private var stoppedByUser = false
+    @ObservationIgnored private var autoStarting = false
+
+    /// Capture starts by itself once the glasses are connected (foreground, glasses source).
+    /// A manual Stop holds it off until the glasses disconnect and connect again.
+    private func autoStartIfReady() async {
+        let connected = glasses.hasActiveDevice && glasses.device.link == .connected
+        guard connected else {
+            stoppedByUser = false
+            return
+        }
+        guard config.autoStart, config.sourceKind == .glasses, !isRunning, !stoppedByUser, !autoStarting,
+              UIApplication.shared.applicationState == .active else { return }
+        autoStarting = true
+        defer { autoStarting = false }
+        Log.pipeline.info("glasses connected: starting capture automatically")
+        await start()
+    }
+
     func start() async {
         notice = nil
+        LocalNetworkPermission.shared.check()
         isRunning = true
         UIApplication.shared.isIdleTimerDisabled = true   // backgrounding ends the glasses session
         UIDevice.current.isBatteryMonitoringEnabled = true
@@ -180,6 +225,7 @@ final class CaptureController {
 
     func stop() async {
         isRunning = false
+        stoppedByUser = true   // no auto-start until the glasses disconnect and come back
         schedulerTask?.cancel()
         schedulerTask = nil
         await glasses.stop()
@@ -200,6 +246,12 @@ final class CaptureController {
         scheduler.tuning = config.tuning
         voice.localeIdentifier = config.voiceLocale
         voice.speakAnswers = config.speakAnswers
+        // While the glasses camera streams, the glasses mic (Bluetooth HFP) would share the
+        // radio and stall the camera: listen with the phone's mic then.
+        voice.prefersGlassesMic = { [weak self] in
+            guard let self else { return true }
+            return !(self.isRunning && self.config.sourceKind == .glasses)
+        }
         await worker.signal()
     }
 
@@ -247,13 +299,17 @@ final class CaptureController {
 
     /// "Forget the last N minutes": deletes records and keyframes on the phone.
     func forget(minutes: Int) async {
-        let removed = await store.delete(since: Date().addingTimeInterval(TimeInterval(-60 * minutes)))
+        let since = Date().addingTimeInterval(TimeInterval(-60 * minutes))
+        let removed = await store.delete(since: since)
+        await safety.forget(since: since)
         notice = "Deleted \(removed) records from the last \(minutes) minutes."
         await refreshCounts()
     }
 
     func deleteAllMemories() async {
         let removed = await store.deleteAll()
+        await safety.store.deleteAll()
+        await safety.reload()
         notice = "Deleted \(removed) records."
         await refreshCounts()
     }
@@ -313,6 +369,7 @@ final class CaptureController {
             return 0
         }
         var kept = 0
+        var ids: [String: Int64] = [:]
         for entry in entries.sorted(by: { $0.seen_at < $1.seen_at }) {
             guard let raw = try? Data(contentsOf: dir.appendingPathComponent(entry.file)),
                   let jpeg = ImageData.ensureJPEG(raw),
@@ -332,8 +389,11 @@ final class CaptureController {
                 let reasons = after.filter { before[$0.key, default: 0] < $0.value }.map { "\($0.key)" }
                 Log.pipeline.info("ingest \(entry.file, privacy: .public) dropped: \(reasons.joined(separator: ","), privacy: .public)")
             }
-            if id != nil { kept += 1 }
+            if let id { kept += 1; ids[entry.file] = id }
             Log.pipeline.info("ingest \(entry.file, privacy: .public) → \(id.map(String.init) ?? "dropped", privacy: .public)")
+        }
+        if let data = try? JSONEncoder().encode(ids) {
+            try? data.write(to: dir.appendingPathComponent("ids.json"))
         }
         await refreshCounts()
         return kept
@@ -423,6 +483,7 @@ final class CaptureController {
         }
         failedStills = 0
         retryNotBefore = nil
+        Log.scheduler.info("still \(trigger.rawValue, privacy: .public) \(Int(frame.pixelSize.width))x\(Int(frame.pixelSize.height)) age \(Int(Date().timeIntervalSince(frame.capturedAt) * 1000)) ms · \(self.scheduler.movement.rawValue, privacy: .public) head \(self.glasses.headMotion.isLive ? String(format: "%.2f rad/s %.3f g", self.glasses.headMotion.rotation, self.glasses.headMotion.energy) : "off", privacy: .public)")
         if let input {
             var after = input
             after.now = Date()
@@ -442,8 +503,15 @@ final class CaptureController {
         }
         let tuning = config.tuning
         let deadline = Date().addingTimeInterval(tuning.blurGateMaxWait)
-        while Date() < deadline,
-              !motion.isSteady(accelThreshold: tuning.blurAccelThreshold, rotationThreshold: tuning.blurRotationThreshold) {
+        // The camera is on the head: its IMU decides when it can, the phone otherwise.
+        func steady() -> Bool {
+            let head = glasses.headMotion
+            if config.sourceKind == .glasses, head.isLive {
+                return head.isSteady(rotationThreshold: tuning.blurRotationThreshold / 2, accelThreshold: tuning.blurAccelThreshold)
+            }
+            return motion.isSteady(accelThreshold: tuning.blurAccelThreshold, rotationThreshold: tuning.blurRotationThreshold)
+        }
+        while Date() < deadline, !steady() {
             try? await Task.sleep(for: .milliseconds(80))
         }
     }
@@ -452,6 +520,7 @@ final class CaptureController {
         let fix = location.freshFix(maxAge: 10)
         let battery = UIDevice.current.batteryLevel
         let usingGlasses = config.sourceKind == .glasses
+        let head = usingGlasses && glasses.headMotion.isLive ? glasses.headMotion : nil
         return SchedulerInputs(
             now: Date(),
             activity: motion.activity,
@@ -461,6 +530,9 @@ final class CaptureController {
             odometer: location.odometer,
             stepDistance: motion.stepDistance,
             yawDegrees: motion.yawDegrees,
+            headOrientation: head?.orientation,
+            headRotation: head?.rotation,
+            headEnergy: head?.energy,
             phoneBattery: battery >= 0 ? Double(battery) : nil,
             phoneLowPower: ProcessInfo.processInfo.isLowPowerModeEnabled,
             phoneThermal: ProcessInfo.processInfo.thermalState,
@@ -473,7 +545,8 @@ final class CaptureController {
 
     private func ingest(_ frame: CapturedFrame) {
         var frame = frame
-        if let fix = location.freshFix(maxAge: 10, now: frame.capturedAt) {
+        // GPS at the moment the picture was taken (photos can arrive 10+ s later).
+        if let fix = location.fix(near: frame.capturedAt) ?? location.freshFix(maxAge: 10, now: frame.capturedAt) {
             frame.latitude = fix.latitude
             frame.longitude = fix.longitude
             frame.horizontalAccuracy = fix.accuracy
@@ -498,6 +571,8 @@ final class CaptureController {
             await self?.setPreview(image)
         }
         pipelineInput.yield(PipelineItem(frame: frame, street: location.street))
+        // Safety rules look at every frame (duplicates included: a stove frame looks the same).
+        safety.consider(frame)
     }
 
     private static func freeDiskBytes() -> Int64? {

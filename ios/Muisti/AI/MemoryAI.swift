@@ -34,7 +34,17 @@ enum AnswerLabel: String, Codable, Sendable {
 
 /// The model's reading of the question plus its answer (see `MemoryPrompts.answerSystem`).
 struct AnswerDraft: Codable, Sendable {
-    enum Action: String, Codable, Sendable { case answer, forget }
+    enum Action: String, Codable, Sendable {
+        case answer, forget
+        // Muisti Turva (see `SafetyPrompts.answerRules`).
+        case create_rule, confirm, cancel, delete_rule, log_event, leaving, arriving, set_home, snooze
+    }
+
+    struct EventDraft: Codable, Sendable {
+        var object: String
+        var kind: String
+        var value: String
+    }
 
     enum Support: String, Codable, Sendable { case stated, inferred }
 
@@ -42,12 +52,38 @@ struct AnswerDraft: Codable, Sendable {
     var forget_minutes: Int?
     var language: String?
     var label: String
+    /// Whether the exact thing asked about appears in the records (decided before answering).
+    var found: Bool?
     var support: Support
     var answer: String
     var used_ids: [Int64]?
     var quotes: [String]
     var observations: String?
     var unclear_reply: String?
+    var rule: SafetyRule?
+    var event: EventDraft?
+    var rule_id: String?
+    /// Safety log events the reply relies on (their frames are shown with the answer).
+    var event_ids: [Int64]?
+
+    /// The safety command this reply carries, if any.
+    var safetyCommand: SafetyCommand? {
+        switch action {
+        case .answer, .forget: return nil
+        case .create_rule: return rule.map(SafetyCommand.createRule)
+        case .confirm: return .confirm
+        case .cancel: return .cancel
+        case .delete_rule: return rule_id.map(SafetyCommand.deleteRule)
+        case .log_event:
+            guard let event else { return nil }
+            return .logEvent(object: event.object.lowercased(), kind: event.kind.lowercased() == "state" ? .state : .action,
+                             value: event.value.lowercased())
+        case .leaving: return .leaving
+        case .arriving: return .arriving
+        case .set_home: return .setHome
+        case .snooze: return .snooze
+        }
+    }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -59,11 +95,16 @@ struct AnswerDraft: Codable, Sendable {
         forget_minutes = c.lenientDouble(.forget_minutes).map { Int($0) }
         language = c.lenientString(.language)?.lowercased()
         label = c.lenientString(.label) ?? AnswerLabel.unknown.rawValue
+        found = c.lenientBool(.found)
         support = c.lenientString(.support).flatMap { Support(rawValue: $0.lowercased()) } ?? .stated
         used_ids = c.lenientStrings(.used_ids)?.compactMap { Int64($0.filter(\.isNumber)) }
         quotes = (try? c.decodeIfPresent([String].self, forKey: .quotes)) ?? []
         observations = c.lenientString(.observations)
         unclear_reply = c.lenientString(.unclear_reply)
+        rule = (try? c.decodeIfPresent(SafetyRule.self, forKey: .rule)) ?? nil
+        event = (try? c.decodeIfPresent(EventDraft.self, forKey: .event)) ?? nil
+        rule_id = c.lenientString(.rule_id)
+        event_ids = c.lenientStrings(.event_ids)?.compactMap { Int64($0.filter(\.isNumber)) }
     }
 }
 
@@ -129,9 +170,20 @@ enum MemoryPrompts {
     00:00, "this morning" = minutes since 06:00; no span given = 10. The answer confirms in one \
     short sentence what will be forgotten. Never choose "forget" for a question that only \
     mentions forgetting ("what did I forget to buy?").
+    - A safety action (create_rule, confirm, cancel, delete_rule, log_event, leaving, \
+    arriving, set_home, snooze): see SAFETY RULES at the end. When the message shows a pending \
+    yes/no (not "(nothing)") and the user's words answer it (yes, no, right, okay, do it, \
+    evet, hayır, kyllä, ei …), the action MUST be "confirm" or "cancel", never log_event or \
+    create_rule: a yes to a new rule is not a report that something was done. Read the \
+    previous exchange: a short reply often answers what Muisti just asked or warned about.
     - "answer": everything else.
 
     STEP 2: answer from the records only.
+    - The "Muisti Turva" section (safety rules, watched objects' last states, safety log) is \
+    evidence too. For questions about watched objects, medicines, rules, or what the user told \
+    Muisti, answer from it first: it counts as found, with label GORDUM when it answers the \
+    question; put the event ids you rely on in event_ids. Log entries with source user_voice or \
+    user_confirmed are the user's own words: say so.
     - Use ONLY the records. Never use outside knowledge about places, businesses, phone numbers, \
     addresses, prices, floors or opening hours. Never guess or fill gaps.
     - Text fields ("Name on sign", "Phone on sign", "Hours on sign", "Rows on sign", "Other text \
@@ -184,7 +236,10 @@ enum MemoryPrompts {
     the sign, a directory row "SAUNA AND POOL -> 7TH FLOOR"), and for anything read from the \
     order of frames in an episode list (#4 comes right after #3, so "what came after X" is \
     stated).
-    - "inferred" if you had to interpret or conclude something the text does not say: e.g. which \
+    - Reading the records is not inferring: that a line is marked PICTURE (so the thing was only \
+    a picture), what type of place a record is, what is in "Visible things", and what was said \
+    on a sign are all stated.
+    - "inferred" only if you had to conclude something no record says: e.g. which \
     floor the user is on from an elevator indicator, a number plaque or an arrow (an elevator \
     indicator shows where the ELEVATOR is, never where the user is), or that a place is closed \
     on a day its hours do not list. A floor label as the TITLE of a floor directory in an \
@@ -196,9 +251,26 @@ enum MemoryPrompts {
     facts you saw, without any conclusion (e.g. "The directory header said 5TH FLOOR and a small \
     plaque above the elevator showed 4.").
 
-    label:
-    - "GORDUM" when the records answer the question; "BILMIYORUM" when they do not (then say \
-    briefly that you did not see it, and optionally the closest thing you did see).
+    found: true only if the specific thing the user asked about (that place, object, sign, \
+    text or event) appears in the records, episode frames or the Muisti Turva status/log; false \
+    if only something similar \
+    or nearby does. Decide this first. Use common sense about what counts:
+    - A sign, plaque, poster, menu or advertisement that names or shows a place is how the \
+    user saw that place: the place counts as seen (you may say it was its sign or an ad).
+    - The user's words may differ from the sign's: a barber is a hair dressing parlor, toilets \
+    are restrooms or WC, a cafe sign may say "coffee". Same thing, different words: found.
+    - Text read on a sign (OCR text) counts even when the vision model did not list it as an \
+    object (e.g. "SUPERMARKET" in the OCR text means a supermarket sign was seen).
+
+    label (whether the thing asked about was seen):
+    - "GORDUM" when the records answer the question, even partly: give that answer and mention \
+    any limit in a few words ("the panel showed buttons up to 7"). Do not hide an answer the \
+    records contain behind doubt.
+    - "BILMIYORUM" when they do not: say briefly that you did not see it, and optionally the \
+    closest thing you did see. A reply that says "no, I did not see it" is always BILMIYORUM.
+    - Exception: questions answered from the Muisti Turva status or log are GORDUM even when \
+    the answer is "I did not see you turn it off" or "you have not told me": that IS the \
+    answer, read from the log.
 
     Language: write answer, observations and unclear_reply in the "Answer language" given in \
     the message (detected from the question), never in the language of the signs, street names \
@@ -211,36 +283,56 @@ enum MemoryPrompts {
     when or where something was seen only when it helps.
 
     Output exactly one JSON object and nothing else, with keys:
-    action ("answer" | "forget"), forget_minutes (integer or null), language (ISO 639-1 code of \
-    the question, e.g. "tr", "en", "fi"), label ("GORDUM" | "BILMIYORUM"), support ("stated" | \
+    action ("answer" | "forget" | a safety action below), forget_minutes (integer or null), language (ISO 639-1 code of \
+    the question, e.g. "tr", "en", "fi"), found (boolean), label ("GORDUM" | "BILMIYORUM"), support ("stated" | \
     "inferred"), answer (the spoken reply), used_ids (ids of the records the reply relies on), \
     quotes (one short exact span copied from EACH record you used, one quote per record, never \
     merged), observations (string), unclear_reply (one short sentence in the question's \
-    language meaning "I didn't see that clearly; here is the closest frame.").
-    """
+    language meaning "I didn't see that clearly; here is the closest frame."), rule (object or \
+    null), event (object or null), rule_id (string or null), event_ids (ids of the safety log \
+    events the reply relies on, else []).
+
+    PICTURES: the message may come with one picture: a grid of the frames of the first records \
+    (its caption says which number is which record id). Look at it for visual questions \
+    (colours, what something looked like, where things were) and to check the records. Text you \
+    can only read in the picture and not in the record text may be used for words, but never for \
+    numbers (the number rule above still holds).
+    """ + SafetyPrompts.answerRules
 
     static let answerSchema = #"""
     {"type":"object","properties":{
-      "action":{"type":"string","enum":["answer","forget"]},
+      "action":{"type":"string","enum":["answer","forget","create_rule","confirm","cancel","delete_rule","log_event","leaving","arriving","set_home","snooze"]},
       "forget_minutes":{"type":["integer","null"]},
       "language":{"type":"string"},
+      "found":{"type":"boolean"},
       "label":{"type":"string","enum":["GORDUM","BILMIYORUM"]},
       "support":{"type":"string","enum":["stated","inferred"]},
       "answer":{"type":"string"},
       "used_ids":{"type":"array","items":{"type":"integer"}},
       "quotes":{"type":"array","items":{"type":"string"}},
       "observations":{"type":"string"},
-      "unclear_reply":{"type":"string"}},
-     "required":["action","forget_minutes","language","label","support","answer","used_ids","quotes","observations","unclear_reply"]}
+      "unclear_reply":{"type":"string"},
+      "rule":RULE_SCHEMA,
+      "event":EVENT_SCHEMA,
+      "rule_id":{"type":["string","null"]},
+      "event_ids":{"type":"array","items":{"type":"integer"}}},
+     "required":["action","forget_minutes","language","found","label","support","answer","used_ids","quotes","observations","unclear_reply","rule","event","rule_id","event_ids"]}
     """#
+        .replacingOccurrences(of: "RULE_SCHEMA", with: SafetyPrompts.ruleSchema)
+        .replacingOccurrences(of: "EVENT_SCHEMA", with: SafetyPrompts.eventSchema)
 
     static func answerUser(question: String, language: (code: String, name: String)?, now: Date, hasLocation: Bool,
-                           records: [String], episodes: [String] = [], latest: [String] = []) -> String {
+                           records: [String], episodes: [String] = [], latest: [String] = [],
+                           safety: String = "", picture: String? = nil, previous: String? = nil) -> String {
         """
         Answer language: \(language.map { "\($0.name) (\($0.code)), detected from the question" } ?? "the language of the question")
         Current local time: \(QueryEngine.promptTime(now))
         User position known: \(hasLocation ? "yes" : "no")
+        Previous exchange: \(previous ?? "(none)")
         Question: \(question)
+
+        Muisti Turva (safety rules, watched objects, safety log, pending yes/no):
+        \(safety.isEmpty ? "(no safety rules)" : safety)
 
         Most recent frames (newest first; "last" / "just now" / "where am I now" start here):
         \(latest.isEmpty ? "(none)" : latest.joined(separator: "\n"))
@@ -250,6 +342,8 @@ enum MemoryPrompts {
 
         Episodes of these records (every frame of the same walk or visit, in the order seen):
         \(episodes.isEmpty ? "(none)" : episodes.joined(separator: "\n\n"))
+
+        Picture: \(picture ?? "(none attached)")
         """
     }
 }
@@ -313,6 +407,22 @@ enum EvidenceRule {
             if !supported { missing.append(run) }
         }
         return missing
+    }
+
+    /// A quote backs the answer when every number in it is in `text` and at least 80 % of its
+    /// words (3+ letters) are: the model may drop labels in between (e.g. "(other, center,
+    /// near)") or join two reads, but it cannot invent content.
+    static func quoteSupported(_ quote: String, in text: String) -> Bool {
+        if supports(quote, in: text) { return true }
+        let textDigits = digits(text)
+        for run in numberRuns(quote) where digits(run).count >= 2 {
+            guard textDigits.contains(digits(run)) else { return false }
+        }
+        let quoteWords: [String] = words(quote).split(separator: " ").map(String.init).filter { $0.count >= 3 }
+        guard !quoteWords.isEmpty else { return false }
+        let textWords: Set<String> = Set(words(text).split(separator: " ").map(String.init))
+        let found = quoteWords.filter { textWords.contains($0) }.count
+        return Double(found) >= 0.8 * Double(quoteWords.count)
     }
 
     /// Letters/digits only, lower-cased, accent-folded, single spaces ("NOT LENAC | EUROP" → "not lenac europ").
