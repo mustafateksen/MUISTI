@@ -13,12 +13,12 @@ is absent. Tasks whose "Done when" needs the device or those memories cannot be 
 | metric | baseline | now |
 |---|---|---|
 | agent accuracy /31 (video set) | BLOCKED (no results/) | BLOCKED |
-| fixture accuracy /20 | 20/20 | 20/20 |
+| fixture accuracy /20 | 20/20 | 20/20 (end of Phase 1) |
 | traps abstained, hallucinations (fixture) | 10/10, 0 | 10/10, 0 |
-| avg latency s / calls per question (fixture) | 1.3 / 2.4 | 1.3 / 2.4 |
+| avg latency s / calls per question (fixture) | 1.3 / 2.4 | 1.6 / 2.2 (end of Phase 1) |
 | cold start | BLOCKED (no device) | BLOCKED |
 | Nemotron req/min (recording, 2 min) | BLOCKED (no device) | BLOCKED |
-| unit tests | 6 pass / 3 skip / 0 fail | 6 / 3 / 0 |
+| unit tests | 6 pass / 3 skip / 0 fail | 34 pass / 2 skip / 0 fail (36, live tests on; end of Phase 1) |
 
 ## iOS reference (origin/main, behaviour in one line each)
 - InterventionPolicy: silent < notification < chime < spoken; safety always spoken; 5-min topic pause; 40 spoken/day; 2-min gap; quiet hours 22–07 → notification; driving holds notices.
@@ -50,11 +50,11 @@ is absent. Tasks whose "Done when" needs the device or those memories cannot be 
 | D2 | Sentence vectors can go stale | DONE | gradle checkPrivacyPrompts (in preBuild): passes in sync, fails with 'privacy_prompts.json is stale' after a script edit (checked by hand); regenerated json has identical 68 vectors + source_sha256 | ebbc859 | MobileCLIP text model in git-ignored tools/mobileclip/ |
 | D3 | Agent regression lost points (30 → 27/31) | BLOCKED | - | 5948ed6 | Needs the 31-question video memories (nemotron/results) to measure. Decision: fix the prompt, not the grader (the grader's must_contain checks the asked object is named, which is what users need). The exported AGENT_PROMPT already says 'name the thing asked about'; re-measure when results/ is available |
 | D4 | Speech-correction gap ("not eat") | DONE | NotesTest.speechFix (bare 'not eat'/'knot it'/'not dat' fixed; 6 real sentences untouched; alternatives left to the agent); NoteCommandsLiveTest case 3 | 5948ed6 | engine/SpeechFix, applied in PhoneEngine.ask, original hearing passed to the agent |
-| D5 | Glasses: unclear "Waiting…" when the Meta AI channel is stuck | PARTIAL | GlassesHintTest (stuck channel = REGISTERED + empty device list for 10 s; folded/disconnected/doffed/hot/battery/update) | next | GlassesSource status now from SDK state only. Real stuck-channel repro needs the glasses: BLOCKED (no device) |
+| D5 | Glasses: unclear "Waiting…" when the Meta AI channel is stuck | PARTIAL | GlassesHintTest (stuck channel = REGISTERED + empty device list for 10 s; folded/disconnected/doffed/hot/battery/update) | bf8c736 | GlassesSource status now from SDK state only. Real stuck-channel repro needs the glasses: BLOCKED (no device) |
 | D6 | "note it" (`engine/Notes.kt`) is not on this branch (never committed) | PARTIAL | NotesTest (store/search/forget, agent calls note via merged tool list); NoteCommandsLiveTest 4/4 NOTED with live Nemotron | 5948ed6 | Re-implemented: engine/Notes.kt (NoteStore + note tool, frames redacted, searchable as type note, forget clears them). Original Notes.kt was never committed, behaviour reconstructed from the prompt. On-device voice check BLOCKED (no device) |
 | D7 | ParityTest crashed (NPE) without `nemotron/results` | DONE | ParityTest now skips (JUnit Assume) | | |
 | D8 | Embedder called the NVIDIA API with a key that does not exist → semantic search silently off | DONE | curl /v2/embed 200; FixtureRegressionTest 20/20 | | now Verda `/v2/embed`, new cache file |
-| P2.1 | Adaptive Capture Scheduler | TODO | | | |
+| P2.1 | Adaptive Capture Scheduler | PARTIAL | CaptureSchedulerTest: policy table, battery/heat factors, thermal >= SEVERE pauses, 60 s still = 15 windows vs walking 60 (-75 %) | next | Wired: MotionMeter (linear accel RMS), GPS speed, battery/power-save/PowerManager thermal, glasses battery+thermal from DAT Device; header shows 'Paused · phone is too hot'. DAT SDK 1.0.1 exposes no glasses IMU (javap). On-device MuistiRate still-vs-walk measurement: BLOCKED (no device) |
 | P2.2 | No-Record Zones | TODO | | | |
 | P2.3 | Memory Episodes | TODO | | | |
 | P2.4 | AI Episode Summaries | TODO | | | |

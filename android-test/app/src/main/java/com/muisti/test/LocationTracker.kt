@@ -52,6 +52,13 @@ class LocationTracker(private val ctx: Context) {
         running = false
     }
 
+    /** GPS speed (m/s) and accuracy (m) of the latest fresh fix, for the capture scheduler. */
+    fun speed(): Pair<Float?, Float?> {
+        val l = latest ?: return null to null
+        if (System.currentTimeMillis() - l.time > 10_000) return null to null
+        return (if (l.hasSpeed()) l.speed else null) to l.accuracy
+    }
+
     /** Latest fix if younger than [maxAgeMs] (iOS brief: no location older than 10 s). */
     fun fresh(maxAgeMs: Long = 10_000): Fix? {
         val l = latest ?: return null

@@ -215,6 +215,7 @@ private fun Header(s: AppState, t: Tones, onSettings: () -> Unit) {
         }
         val (label, color) = when {
             !s.network -> (if (s.queued > 0) "Offline · ${s.queued} queued" else "Offline") to Amber
+            s.recording && s.capturePause != null -> "Paused · ${s.capturePause}" to Amber
             s.recording -> "Remembering" to Rose
             !s.online -> "Not connected to Nemotron" to Amber
             else -> "Ready" to Color(0xFF34C759)

@@ -275,13 +275,43 @@ class MainActivity : ComponentActivity() {
     //
     // The camera runs like a video (~30 fps) into ImageAnalysis. Nothing waits for focus:
     //  - each frame gets a cheap sharpness score on the grey (Y) plane,
-    //  - every WINDOW_MS the sharpest frame of that window is kept (2 per second),
+    //  - every scheduler window (0.5-7.5 s: motion, speed, battery, heat; see CaptureScheduler) the sharpest frame is kept,
     //  - it is dropped if it is blurry compared with recent windows (same rule as process_video.py)
     //    or if the view has not changed since the last frame sent (dHash),
     //  - the rest go to an upload queue: at most MAX_UPLOADS requests at once; when the queue is
     //    full the OLDEST waiting frame is dropped, so memory always follows what is in front of you.
 
-    private val WINDOW_MS = 500L
+    /** Window length comes from the adaptive scheduler (motion, speed, battery, heat); see capture/CaptureScheduler. */
+    private val scheduler = com.muisti.capture.CaptureScheduler()
+    private val motion by lazy { MotionMeter(applicationContext) }
+    @Volatile private var decision = com.muisti.capture.CaptureDecision(1500, com.muisti.capture.Motion.UNKNOWN, 1.0, false, "starting")
+    private var decidedAt = 0L
+
+    private fun signals(): com.muisti.capture.CaptureSignals {
+        val pm = getSystemService(android.os.PowerManager::class.java)
+        val bm = getSystemService(android.os.BatteryManager::class.java)
+        val (speed, acc) = location.speed()
+        val g = if (state.useGlasses) glasses.current() else null
+        return com.muisti.capture.CaptureSignals(motion.rms(), speed, acc,
+            bm?.getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CAPACITY)?.takeIf { it in 0..100 },
+            pm?.isPowerSaveMode == true, pm?.currentThermalStatus ?: 0, g?.battery?.takeIf { it in 0..100 }, g?.thermal)
+    }
+
+    /** Re-decided once a second while recording. */
+    private fun currentDecision(now: Long): com.muisti.capture.CaptureDecision {
+        if (now - decidedAt >= 1000) {
+            decidedAt = now
+            val d = scheduler.decide(signals())
+            if (d.paused != decision.paused) android.util.Log.i("MuistiRate", if (d.paused) "capture paused: ${d.reason}" else "capture resumed")
+            decision = d
+            runOnUiThread {
+                state.capturePause = if (d.paused) d.reason else null
+                state.captureMode = if (d.paused) "" else "${d.reason} · %.1f s".format(d.intervalMs / 1000.0)
+                if (d.paused && state.recording) state.lastFrame = "Paused · ${d.reason}"
+            }
+        }
+        return decision
+    }
     private val MAX_UPLOADS = 3
     private val uploads = Channel<Pair<Bitmap, Long>>(capacity = 2, onBufferOverflow = BufferOverflow.DROP_OLDEST)
     private val analysisExec = Executors.newSingleThreadExecutor()
@@ -528,7 +558,8 @@ class MainActivity : ComponentActivity() {
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
                 location.start(); state.hasLocation = true
             } else locationPermission.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION))
-        } else location.stop()
+            motion.start()
+        } else { location.stop(); motion.stop(); state.capturePause = null }
         windowBest = null; windowBestScore = -1.0; windowStart = 0L
     }
 
@@ -557,13 +588,15 @@ class MainActivity : ComponentActivity() {
         }
         releaseHeld(now)
         if (!state.recording) return
+        val d = currentDecision(now)
+        if (d.paused) { windowBest = null; windowBestScore = -1.0; windowStart = 0L; return }
         if (windowStart == 0L) windowStart = now
         val sc = score()
         if (sc > windowBestScore) {            // only the window's new best is turned into a bitmap
             windowBestScore = sc
             windowBest = bitmap()
         }
-        if (now - windowStart >= WINDOW_MS) {
+        if (now - windowStart >= d.intervalMs) {
             val best = windowBest
             val s = windowBestScore
             windowBest = null; windowBestScore = -1.0; windowStart = now
@@ -669,6 +702,7 @@ class MainActivity : ComponentActivity() {
         if (lastSentHash != -1L && java.lang.Long.bitCount(h xor lastSentHash) <= 6) {
             state.sameSkipped++; return                     // same view as the last frame sent
         }
+        if (lastSentHash != -1L) scheduler.onKept(java.lang.Long.bitCount(h xor lastSentHash))
         lastSentHash = h
         synchronized(held) { held.addLast(Held(bmp, h, System.currentTimeMillis())); while (held.size > 12) held.removeFirst() }
     }
@@ -839,7 +873,8 @@ class MainActivity : ComponentActivity() {
                 runCatching { state.memories = withContext(Dispatchers.IO) { engine.store.sightings().size } }
                 if (location.running) location.fresh(60_000)?.street?.let { state.street = it }
                 android.util.Log.i("MuistiRate", "Nemotron requests in the last minute: ${com.muisti.engine.Llm.perMinute()}, " +
-                    "peak concurrent ${com.muisti.engine.Llm.peakConcurrent()}, queued ${state.queued}, network ${state.network} " +
+                    "peak concurrent ${com.muisti.engine.Llm.peakConcurrent()}, queued ${state.queued}, network ${state.network}, " +
+                    "capture ${if (decision.paused) "paused (${decision.reason})" else "${decision.reason} ${decision.intervalMs} ms"} " +
                     "(recording=${state.recording}, source=${if (state.useGlasses) "glasses" else "phone"}, sent frames=${state.framesSent})")
                 delay(6000)
             }
