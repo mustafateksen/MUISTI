@@ -705,20 +705,18 @@ private fun Composer(t: Tones, s: AppState, onSend: (String) -> Unit, onMic: () 
 
 @Composable
 private fun VoiceOverlay(s: AppState, t: Tones, onClose: () -> Unit, onOrb: () -> Unit) {
+    // the phone's back button / gesture ends the live conversation (no X, no End button)
+    androidx.activity.compose.BackHandler(enabled = s.live) { onClose() }
     AnimatedVisibility(s.live, enter = fadeIn(tween(250)), exit = fadeOut(tween(300))) {
         // swallow touches so the screen below does not react; only the orb, X and End do something
         Box(Modifier.fillMaxSize().background(Aura.Bg)
             .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {}) {
+            Aura(true)
             Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().padding(horizontal = 22.dp, vertical = 14.dp),
                 horizontalAlignment = Alignment.CenterHorizontally) {
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Box(Modifier.size(40.dp).clip(RoundedCornerShape(12.dp)).background(t.card).border(0.5.dp, t.hair, RoundedCornerShape(12.dp))
-                        .clickable(onClick = onClose), contentAlignment = Alignment.Center) {
-                        Icon(Icons.Rounded.Close, "Close", tint = t.text, modifier = Modifier.size(20.dp))
-                    }
-                    Spacer(Modifier.width(12.dp))
-                    Text("Live with MUISTI", color = t.text, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
-                }
+                // same look as the home greeting; leaving is the phone's back gesture
+                Text("Live with MUISTI", color = t.text, fontSize = 30.sp, fontWeight = FontWeight.Bold, letterSpacing = (-0.6).sp,
+                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp))
                 val speaking = s.phase == VoicePhase.Speaking
                 val orbSize by animateDpAsState(if (speaking) 240.dp else 300.dp, spring(dampingRatio = 0.8f, stiffness = 250f), label = "orb")
                 Spacer(Modifier.weight(if (speaking) 0.2f else 0.45f))
@@ -752,11 +750,6 @@ private fun VoiceOverlay(s: AppState, t: Tones, onClose: () -> Unit, onOrb: () -
                     Text("Thinking…", color = t.sub, fontSize = 16.sp)
                 }
                 if (!speaking) Spacer(Modifier.weight(1f)) else Spacer(Modifier.height(12.dp))
-                // the only way out of the live conversation
-                Box(Modifier.fillMaxWidth().height(56.dp)
-                    .clip(CircleShape).background(Aura.End).border(0.5.dp, t.hair, CircleShape).clickable(onClick = onClose), contentAlignment = Alignment.Center) {
-                    Text("End", color = Aura.Lilac, fontSize = 17.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.5.sp)
-                }
             }
         }
     }
