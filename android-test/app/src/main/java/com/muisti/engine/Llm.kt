@@ -43,6 +43,9 @@ interface Images {
     fun downscale(jpeg: ByteArray, longSide: Int = 1536): ByteArray
 }
 
+/** An image was judged private on the phone, so the request was not made. */
+class PrivacyBlocked : RuntimeException("blocked on the phone: private view")
+
 class LlmConfig(val baseUrl: String, val model: String, val key: String, val embedKey: String)
 
 /** All prompt text comes from docs/prompts.json (exported from the Python code), never copied by hand. */
@@ -79,7 +82,15 @@ class Llm(private val cfg: LlmConfig) {
         .connectTimeout(20, TimeUnit.SECONDS).readTimeout(120, TimeUnit.SECONDS).build()
     private val jsonType = "application/json".toMediaType()
 
+    /**
+     * Last line of defence: EVERY image that leaves the phone is built here, so the app sets a check that runs on
+     * the phone right before it is put in a request (true = private -> PrivacyBlocked, nothing is sent).
+     * Null only in JVM tests.
+     */
+    @Volatile var imageGuard: ((ByteArray) -> Boolean)? = null
+
     fun imagePart(jpeg: ByteArray): JSONObject = JSONObject()
+        .also { if (imageGuard?.invoke(jpeg) == true) throw PrivacyBlocked() }
         .put("type", "image_url")
         .put("image_url", JSONObject().put("url", "data:image/jpeg;base64," + Base64.getEncoder().encodeToString(jpeg)))
 

@@ -101,10 +101,26 @@ class PrivacyGuard(ctx: Context) {
         val byClass = HashMap<String, Float>()
         for (i in prompts.indices) byClass.merge(prompts[i].first, e[i] / sum, Float::plus)
         val kindOf = prompts.associate { it.first to it.second }
-        val stopClasses = byClass.filterKeys { kindOf[it] == "stop" }
-        return Scores(byClass, stopClasses.values.sum(), byClass["pin"] ?: 0f,
+        // only the situations switched on in ACTIVE count (first stage: bathroom / toilet only)
+        val stopClasses = byClass.filterKeys { kindOf[it] == "stop" && it in ACTIVE }
+        return Scores(byClass, stopClasses.values.sum(), if ("pin" in ACTIVE) byClass["pin"] ?: 0f else 0f,
             listOf("card", "document", "screen").sumOf { (byClass[it] ?: 0f).toDouble() }.toFloat(),
             stopClasses.maxByOrNull { it.value }?.key ?: "", System.currentTimeMillis() - t0)
+    }
+
+    /**
+     * Stateless check of one image (JPEG), used at the network exit and for old memories.
+     * Fail-closed: model missing, unreadable image or an error all count as private.
+     */
+    fun isPrivateImage(jpeg: ByteArray): Boolean {
+        if (session == null) return true
+        val bmp = android.graphics.BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size) ?: return true
+        val s = runCatching { score(bmp) }.getOrNull() ?: return true
+        if (s.stop >= 0.7f || s.pin >= 0.7f) {
+            android.util.Log.i("MuistiPrivacy", "blocked image: stop %.2f (%s) pin %.2f".format(s.stop, s.stopClass, s.pin))
+            return true
+        }
+        return false
     }
 
     // ---------------- state over time ----------------
@@ -126,7 +142,7 @@ class PrivacyGuard(ctx: Context) {
         lastScore = s.priv; lastTextual = s.textual
         recentStop.addLast(s.stop); while (recentStop.size > 3) recentStop.removeFirst()
         // a room: one very clear frame, or three fairly clear ones in a row (~1.5 s); a WC sign glimpsed in passing is not enough
-        val stopNow = s.stop >= 0.8f || (recentStop.size == 3 && recentStop.all { it >= 0.6f })
+        val stopNow = s.stop >= 0.8f || (recentStop.size == 3 && recentStop.all { it >= 0.7f })
         val pinNow = s.pin >= 0.7f
         if (stopNow) {
             val ev = if (!paused) Event.ENTER else if (kind != Kind.STOP) Event.UPGRADE else null
@@ -167,6 +183,11 @@ class PrivacyGuard(ctx: Context) {
 
     companion object {
         const val MODEL = "mobileclip_s0_vision.onnx"
+        /**
+         * Which situations pause recording. First stage: only bathroom / toilet (incl. showers, urinals).
+         * Others are ready in the model and the sentence list: "changing", "medical", "pin" (ATM / card terminal).
+         */
+        val ACTIVE = setOf("bathroom")
         private val ROOM = mapOf("bathroom" to "a bathroom", "changing" to "a changing room", "medical" to "a medical room")
     }
 }
@@ -180,7 +201,11 @@ object PrivacyText {
         """identity card|id card|account number|tilinumero|social security)\b""", RegexOption.IGNORE_CASE)
 
     /** Returns why the frame must not be kept, or null. [textual] = how much the scene looks like a card/screen/document. */
+    /** Off in the first stage (bathroom only); the unit tests switch it on. */
+    @Volatile var enabled = false
+
     fun check(lines: List<String>, textual: Float): String? {
+        if (!enabled) return null
         val all = lines.joinToString("\n")
         for (m in digitsRun.findAll(all)) {
             val d = m.value.filter { it.isDigit() }

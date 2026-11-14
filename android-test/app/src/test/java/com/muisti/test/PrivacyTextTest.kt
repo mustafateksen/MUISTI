@@ -5,6 +5,7 @@ import org.junit.Assert.assertNull
 import org.junit.Test
 
 class PrivacyTextTest {
+    init { PrivacyText.enabled = true }
     @Test
     fun strongPatterns() {
         assertEquals("a card number", PrivacyText.check(listOf("VISA", "4111 1111 1111 1111", "12/28"), 0f))

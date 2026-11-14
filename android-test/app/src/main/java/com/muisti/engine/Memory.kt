@@ -62,6 +62,21 @@ class MemoryStore(private val dir: File) {
         out
     }
 
+    /** Deletes stored frames (record + JPEG) whose image [isPrivate] says is private. Returns how many. */
+    fun removePrivate(isPrivate: (ByteArray) -> Boolean): Int {
+        val ids = synchronized(lock) { load().map { it.optInt("id") } }
+        val bad = ids.filter { id -> File(frameDir, "$id.jpg").let { f -> f.exists() && isPrivate(f.readBytes()) } }.toSet()
+        if (bad.isEmpty()) return 0
+        return synchronized(lock) {
+            val all = load()
+            bad.forEach { File(frameDir, "$it.jpg").delete() }
+            all.removeAll { it.optInt("id") in bad }
+            framesFile.writeText(all.joinToString("") { it.toString() + "\n" })
+            cache = null
+            bad.size
+        }
+    }
+
     /** "Forget the last N minutes": delete everything seen at or after [sinceMs]. */
     fun forget(sinceMs: Long): Int = synchronized(lock) {
         val all = load()

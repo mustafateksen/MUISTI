@@ -150,7 +150,7 @@ class MainActivity : ComponentActivity() {
                         ?: return@withContext "Not saved: the privacy check failed (nothing was sent)."
                     run {
                         android.util.Log.i("MuistiPrivacy", "import: stop %.2f (%s) pin %.2f text %.2f, %d ms".format(sc.stop, sc.stopClass, sc.pin, sc.textual, sc.ms))
-                        if (sc.stop >= 0.6f) return@withContext "Not saved: this looks like a private place (privacy)."
+                        if (sc.stop >= 0.7f) return@withContext "Not saved: this looks like a private place (privacy)."
                         if (sc.pin >= 0.7f) return@withContext "Not saved: a PIN pad or card terminal (privacy)."
                     }
                     PrivacyText.check(obs.map { it.text }, sc?.textual ?: 0f)?.let { return@withContext "Not saved: it shows $it (privacy)." }
@@ -206,7 +206,21 @@ class MainActivity : ComponentActivity() {
             override fun onError(id: String?) { if (id == "answer") runOnUiThread { afterTurn() } }
         })
         engine.warm()
-        Thread { privacy.loadError?.let { e -> runOnUiThread { state.toast("Privacy check off: $e") } } }.start()   // loads the model early
+        Thread {
+            // loads the model; from now on every image leaving the phone is checked at the exit too (fail-closed before this)
+            privacy.loadError?.let { e -> runOnUiThread { state.toast("Privacy model missing: nothing will be sent ($e)") } }
+            engine.setImageGuard { privacy.isPrivateImage(it) }
+            // once: memories stored before the privacy gate existed are checked, private ones deleted on the phone
+            val prefs = getSharedPreferences("privacy", MODE_PRIVATE)
+            if (privacy.available && !prefs.getBoolean("oldMemoryScanned", false)) {
+                val n = runCatching { engine.store.removePrivate { privacy.isPrivateImage(it) } }.getOrNull()
+                if (n != null) {
+                    prefs.edit().putBoolean("oldMemoryScanned", true).apply()
+                    if (n > 0) runOnUiThread { state.memories = engine.store.sightings().size; state.toast("Privacy: removed $n private frame(s) from memory") }
+                    android.util.Log.i("MuistiPrivacy", "old memory scan: removed $n")
+                }
+            }
+        }.start()
 
         val need = listOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO,
             Manifest.permission.READ_CALENDAR, Manifest.permission.WRITE_CALENDAR)
@@ -216,7 +230,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
-        statsJob?.cancel(); analysisExec.shutdown(); glasses.disconnect(); location.stop()
+        statsJob?.cancel(); analysisExec.shutdown(); glassesExec.shutdown(); glasses.disconnect(); location.stop()
         speech?.destroy(); tts?.shutdown(); recognizer.close()
         super.onDestroy()
     }
@@ -270,7 +284,7 @@ class MainActivity : ComponentActivity() {
             null -> {}
         }
         // during a pause nothing leaves; outside a pause, a single frame that leans private is still not sent
-        return privacy.paused || s.stop >= 0.5f || s.pin >= 0.5f
+        return privacy.paused || s.stop >= 0.7f || s.pin >= 0.7f
     }
 
     private fun onPrivacyEnter() {
@@ -532,14 +546,27 @@ class MainActivity : ComponentActivity() {
         val now = System.currentTimeMillis()
         if (now - secondStart >= 1000) { state.fps = framesThisSecond; framesThisSecond = 0; secondStart = now }
         framesThisSecond++
-        var cached: Bitmap? = null
-        val toBitmap = { cached ?: i420ToBitmap(data, w, h).also { cached = it } }
-        considerFrame(now, { yPlaneSharpness(data, w, h) }, toBitmap)
-        if (now - lastPreviewAt >= 150) {     // ~6 fps preview of what the glasses see
+        // preview: half resolution, converted directly (a few ms) - ~15 fps
+        if (now - lastPreviewAt >= 60) {
             lastPreviewAt = now
-            state.glassesPreview = toBitmap().asImageBitmap()
+            state.glassesPreview = i420ToBitmap(data, w, h, step = 2).asImageBitmap()
+        }
+        // everything heavy (full-size bitmap, privacy model, OCR queue) runs on its own thread;
+        // frames that arrive while it is busy are simply not considered, so the stream never waits
+        if (glassesBusy) return
+        glassesBusy = true
+        glassesExec.execute {
+            try {
+                var cached: Bitmap? = null
+                val toBitmap = { cached ?: i420ToBitmap(data, w, h).also { cached = it } }
+                considerFrame(now, { yPlaneSharpness(data, w, h) }, toBitmap)
+            } catch (e: Exception) {
+                android.util.Log.w("MuistiGlasses", "frame processing failed", e)
+            } finally { glassesBusy = false }
         }
     }
+    private val glassesExec = Executors.newSingleThreadExecutor()
+    @Volatile private var glassesBusy = false
 
     private fun yPlaneSharpness(y: ByteArray, w: Int, h: Int): Double {
         val step = 3
@@ -562,20 +589,31 @@ class MainActivity : ComponentActivity() {
     }
 
     /** I420 -> NV21 -> JPEG -> Bitmap (YuvImage only takes NV21). */
-    private fun i420ToBitmap(i420: ByteArray, w: Int, h: Int): Bitmap {
+    /** I420 -> ARGB directly (BT.601), every [step]-th pixel. No JPEG round trip. */
+    private fun i420ToBitmap(i420: ByteArray, w: Int, h: Int, step: Int = 1): Bitmap {
+        val ow = w / step; val oh = h / step
+        val px = IntArray(ow * oh)
         val ySize = w * h
-        val q = ySize / 4
-        val nv21 = ByteArray(ySize + 2 * q)
-        System.arraycopy(i420, 0, nv21, 0, ySize)
-        for (i in 0 until q) {
-            nv21[ySize + 2 * i] = i420[ySize + q + i]      // V
-            nv21[ySize + 2 * i + 1] = i420[ySize + i]      // U
+        val cw = w / 2
+        val uOff = ySize; val vOff = ySize + ySize / 4
+        var o = 0
+        for (oy in 0 until oh) {
+            val y = oy * step
+            val yRow = y * w
+            val cRow = (y / 2) * cw
+            for (ox in 0 until ow) {
+                val x = ox * step
+                val yy = ((i420[yRow + x].toInt() and 255) - 16).coerceAtLeast(0) * 1192
+                val ci = cRow + x / 2
+                val u = (i420[uOff + ci].toInt() and 255) - 128
+                val v = (i420[vOff + ci].toInt() and 255) - 128
+                val r = ((yy + 1634 * v) shr 10).coerceIn(0, 255)
+                val g = ((yy - 833 * v - 400 * u) shr 10).coerceIn(0, 255)
+                val b = ((yy + 2066 * u) shr 10).coerceIn(0, 255)
+                px[o++] = (0xFF shl 24) or (r shl 16) or (g shl 8) or b
+            }
         }
-        val out = ByteArrayOutputStream()
-        android.graphics.YuvImage(nv21, android.graphics.ImageFormat.NV21, w, h, null)
-            .compressToJpeg(android.graphics.Rect(0, 0, w, h), 90, out)
-        val bytes = out.toByteArray()
-        return BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+        return Bitmap.createBitmap(px, ow, oh, Bitmap.Config.ARGB_8888)
     }
 
     private fun offerFrame(bmp: Bitmap, score: Double) {
@@ -739,9 +777,10 @@ class MainActivity : ComponentActivity() {
         val pending = Msg.Answer(label = "", text = "", pending = true)
         state.messages.add(pending)
         state.phase = if (spoken) VoicePhase.Thinking else VoicePhase.Idle
-        // feels like a person listening: a soft "got it" tick now, and a short spoken filler if the answer takes a while
+        // feels like a person listening: a soft "got it" tick
         if (spoken) runCatching { earcon?.startTone(android.media.ToneGenerator.TONE_PROP_BEEP, 70) }
-        val filler = if (spoken && ttsReady && state.live) lifecycleScope.launch {
+        // no spoken filler ("One sec…"): it got repetitive; the tick + the thinking animation are enough
+        val filler: Job? = if (false) lifecycleScope.launch {
             delay(1300)
             var i: Int
             do { i = fillers.indices.random() } while (i == lastFiller)

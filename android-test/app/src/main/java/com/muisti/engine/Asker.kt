@@ -240,8 +240,11 @@ class Asker(private val llm: Llm, private val prompts: Prompts, private val imag
     }
 
     internal fun liveLook(question: String, frame: ByteArray): String {
+        val img = try { llm.imagePart(images.downscale(frame)) } catch (e: PrivacyBlocked) {
+            return "I can't look right now: the view looks private, so nothing was sent."
+        }
         val msgs = JSONArray().put(JSONObject().put("role", "user").put("content", JSONArray()
-            .put(llm.imagePart(images.downscale(frame)))
+            .put(img)
             .put(llm.textPart("This photo is what the user's camera sees right now. Answer their question about it in one or two " +
                 "short spoken sentences. If there is readable text that matters, read it exactly; if it is not in the language of " +
                 "the question, also say what it means in that language. Do not guess what you cannot see. " +
@@ -407,8 +410,11 @@ class Asker(private val llm: Llm, private val prompts: Prompts, private val imag
             printedByNature(doc.name) -> prompts.fill(prompts.lookPrinted, "name" to doc.name)
             else -> prompts.fill(prompts.lookReal, "name" to doc.name)
         }
+        val img = try { llm.imagePart(images.downscale(f.readBytes())) } catch (e: PrivacyBlocked) {
+            return true to "frame kept private on the phone, trusted memory"
+        }
         val msgs = JSONArray().put(JSONObject().put("role", "user").put("content", JSONArray()
-            .put(llm.imagePart(images.downscale(f.readBytes()))).put(llm.textPart(txt))))
+            .put(img).put(llm.textPart(txt))))
         return try {
             val r = JsonText.parse(llm.call(msgs, llm.schemaFormat("look", prompts.lookSchema), 200, 0.0))
             r.bool("present") to (r.str("where") ?: "").take(160)

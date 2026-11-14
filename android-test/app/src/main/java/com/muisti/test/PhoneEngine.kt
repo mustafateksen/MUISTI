@@ -40,7 +40,11 @@ object AndroidImages : Images {
 class PhoneEngine(ctx: Context) {
     private val appCtx = ctx.applicationContext
     private val cfg = LlmConfig(BuildConfig.LLM_BASE_URL, BuildConfig.LLM_MODEL, BuildConfig.LLM_KEY, BuildConfig.EMBED_KEY)
-    private val llm = Llm(cfg)
+    // fail-closed until the app installs the real on-phone privacy check: no image can be sent before that
+    private val llm = Llm(cfg).apply { imageGuard = { true } }
+
+    /** The on-phone privacy check every outgoing image must pass (see Llm.imageGuard). */
+    fun setImageGuard(isPrivate: (ByteArray) -> Boolean) { llm.imageGuard = isPrivate }
     private val prompts = Prompts(ctx.assets.open("prompts.json").bufferedReader().use { it.readText() })
     private val extractor = Extractor(llm, prompts, AndroidImages)
     private val embedder = Embedder(cfg.embedKey, File(ctx.filesDir, "embed_cache.tsv"))
@@ -58,7 +62,7 @@ class PhoneEngine(ctx: Context) {
                 lines = OcrRepair.repair(lines, HashMap(recentWords))
             }
         }
-        val record = extractor.extract(jpeg, lines)
+        val record = try { extractor.extract(jpeg, lines) } catch (e: com.muisti.engine.PrivacyBlocked) { return false }
         if (!record.bool("useful")) return false
         store.addFrame(seenAtMs, record, lines, jpeg, dhash, fix?.lat, fix?.lon, fix?.street)
         warmSoon()
