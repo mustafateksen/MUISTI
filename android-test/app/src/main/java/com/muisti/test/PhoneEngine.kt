@@ -47,7 +47,9 @@ class PhoneEngine(ctx: Context) {
     fun setImageGuard(isPrivate: (ByteArray) -> Boolean) { llm.imageGuard = isPrivate }
     private val prompts = Prompts(ctx.assets.open("prompts.json").bufferedReader().use { it.readText() })
     private val extractor = Extractor(llm, prompts, AndroidImages)
-    private val embedder = Embedder(cfg.embedKey, File(ctx.filesDir, "embed_cache.tsv"))
+    // v2: vectors from the Verda nemotron-3.5-embed deployment (the old NVIDIA-API cache is dropped, never mixed)
+    private val embedder = Embedder(cfg.embedKey, File(ctx.filesDir, "embed_cache_v2.tsv"))
+        .also { File(ctx.filesDir, "embed_cache.bin").delete() }
     private val asker = Asker(llm, prompts, AndroidImages, embedder)
     private val agent = com.muisti.engine.Agent(llm, prompts, asker)
     val store = MemoryStore(File(ctx.filesDir, "memory"))

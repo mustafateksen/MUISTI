@@ -20,7 +20,12 @@ class ParityTest {
     private val nem = File(repo, "nemotron")
     private val mem = System.getProperty("muisti.mem") ?: "v21z"
 
-    private fun memFiles() = File(nem, "results").listFiles()!!.map { File(it, "$mem/results.json") }.filter { it.exists() }.sortedBy { it.path }
+    /** The Python test memories are not in git (results/ holds unblurred frames); without them these tests are skipped. */
+    private fun memFiles(): List<File> {
+        val all = (File(nem, "results").listFiles() ?: emptyArray()).map { File(it, "$mem/results.json") }.filter { it.exists() }.sortedBy { it.path }
+        org.junit.Assume.assumeTrue("no test memories in nemotron/results/*/$mem (videos not processed on this machine)", all.isNotEmpty())
+        return all
+    }
 
     /** ask._video_start: WhatsApp name carries the send time; recording started ~90 s earlier. Naive clock as UTC. */
     private fun videoStart(path: String): Long {
