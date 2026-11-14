@@ -62,19 +62,19 @@ is absent. Tasks whose "Done when" needs the device or those memories cannot be 
 | P2.6 | Advanced hybrid retrieval | DONE | HybridTest (RRF order, tie rule, reranker fails soft); fixture A/B, 2 runs each: hybrid 20/20 at 2.2 / 2.1 calls vs off 20/20 at 2.2 / 2.2 (reranks: 1 per run) | 77f7615 | RRF k=60: keyword scorer + Nemotron text vectors + MobileCLIP image vectors (phone) + recency (time questions, 0.5); /classify rerank only when top two tie; abstention gate still on keyword score. Video-set check BLOCKED (no results/) |
 | P2.7 | Proactive Agent Center | PARTIAL | AgentCenterTest: max 1 alert / 15 min (24-notice storm -> <= 4 alerts), quiet hours, mute, relevance, topic dedupe, calendar source finds the hackathon poster, arrival near a note, closing-soon from sign hours (Finnish/English), 'by Friday' deadline, inbox store | 77f7615 | Wired: calendar instances (next 45 min), notes, sign hours; Android notification + TTS when the voice session listens; Agent Center screen (bell in header) with mute per type. Real notice from a device calendar event: BLOCKED (no device) |
 | P2.8 | Safety Monitor | PARTIAL | SafetyTest: 16 scripted scenes (9 hazards, 7 look-alikes: shop EXIT, wet paint, movie poster, staff picks, non-toxic, CCTV, pharmacy) precision 1.00 recall 1.00; no repeat same rule+place within 10 min; image check only on text hits, image 'no' cancels; add_safety_rule proposed then stored (Finnish phrase matches) | 8a1ee0f | Scenes are hand-written (not field data). Built-ins: wet floor, do not enter, hazard, emergency exit; FI/EN/SV phrases. Alerts go through the Agent Center (SAFETY ignores the 15-min gap and quiet hours, but can be muted). On-device alert: BLOCKED (no device) |
-| P2.9 | Audio and speech | BLOCKED | javap of mwdat-camera 1.0.1: Stream.audioStream (AudioFrame: ByteBuffer + timestamp) exists, AudioCodec is an empty public interface (no codec to pass in StreamConfiguration); no button/gesture API in mwdat-core public classes | next | Not implemented this session (out of time). Unblock: a device to learn the glasses audio format; fallback planned = phone mic over Bluetooth SCO (AudioManager.setCommunicationDevice) + energy VAD barge-in. Recognizer-alternatives correction kept; tap barge-in exists |
-| P2.10 | Android shortcuts and assistant integration | TODO | - | next | Not started (out of time). App Actions skipped on request |
-| P2.11 | High-resolution capture | TODO | javap: Camera.photo.capturePhoto(PhotoResolution FULL/LARGE/MEDIUM/SMALL, PhotoQuality) and Stream.capturePhoto() exist | next | Not started (out of time); API exists, needs the glasses to verify |
-| P3.1 | Evidence-based answers (SEEN/INFERRED/UNKNOWN) | TODO | - | next | Not started (out of time) |
+| P2.9 | Audio and speech | BLOCKED | javap of mwdat-camera 1.0.1: Stream.audioStream (AudioFrame: ByteBuffer + timestamp) exists, AudioCodec is an empty public interface (no codec to pass in StreamConfiguration); no button/gesture API in mwdat-core public classes | b4773b3 | Not implemented this session (out of time). Unblock: a device to learn the glasses audio format; fallback planned = phone mic over Bluetooth SCO (AudioManager.setCommunicationDevice) + energy VAD barge-in. Recognizer-alternatives correction kept; tap barge-in exists |
+| P2.10 | Android shortcuts and assistant integration | TODO | - | b4773b3 | Not started (out of time). App Actions skipped on request |
+| P2.11 | High-resolution capture | TODO | javap: Camera.photo.capturePhoto(PhotoResolution FULL/LARGE/MEDIUM/SMALL, PhotoQuality) and Stream.capturePhoto() exist | b4773b3 | Not started (out of time); API exists, needs the glasses to verify |
+| P3.1 | Evidence-based answers (SEEN/INFERRED/UNKNOWN) | TODO | - | b4773b3 | Not started (out of time) |
 | P3.2 | Memory Timeline | PARTIAL | Timeline screen built in P2.3 (day picker, episode time/place/summary, key frames -> detail sheet, lazy thumbnails) | be9823f | gfxinfo jank test with >=1000 frames on device: BLOCKED (no device) |
-| P3.3 | Natural-language memory management | TODO | - | next | Not started (out of time) |
-| P3.4 | Contextual proactive intelligence | TODO | - | next | Not started (out of time) |
-| P3.5 | People and places memory | TODO | - | next | Not started (out of time) |
-| P3.6 | Memory insights | TODO | - | next | Not started (out of time) |
-| P4.1 | UI/UX pass | TODO | - | next | Not started (out of time) |
-| P4.2 | Battery and performance | TODO | - | next | Not started (out of time) |
-| P4.3 | Integration tests | TODO | - | next | Not started (out of time) |
-| P4.4 | Documentation | PARTIAL | README section 'What is real today' added | next | Points to docs/CHECKLIST.md as the source of truth |
+| P3.3 | Natural-language memory management | TODO | - | b4773b3 | Not started (out of time) |
+| P3.4 | Contextual proactive intelligence | TODO | - | b4773b3 | Not started (out of time) |
+| P3.5 | People and places memory | TODO | - | b4773b3 | Not started (out of time) |
+| P3.6 | Memory insights | TODO | - | b4773b3 | Not started (out of time) |
+| P4.1 | UI/UX pass | TODO | - | b4773b3 | Not started (out of time) |
+| P4.2 | Battery and performance | TODO | - | b4773b3 | Not started (out of time) |
+| P4.3 | Integration tests | TODO | - | b4773b3 | Not started (out of time) |
+| P4.4 | Documentation | PARTIAL | README section 'What is real today' added | b4773b3 | Points to docs/CHECKLIST.md as the source of truth |
 
 ## Remaining work (backup plan, kept current after every task)
 If the session stops, continue from the top of this list. Branch omer/android-app; nothing is pushed yet
