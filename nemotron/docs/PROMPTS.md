@@ -443,7 +443,14 @@ Yok. v17'den itibaren örnek gönderilmiyor (bkz. eval/ITERATIONS.md, v15–v17)
 ## 4. Soru ayrıştırma: system prompt
 User mesajı sadece sorunun kendisi.
 ```
-Turn the user's question about things they saw earlier into JSON.
+Turn what the user says to their smart-glasses memory assistant into JSON.
+- intent: what kind of request it is:
+  memory  - about something they saw EARLIER (where/which/when, did I see, what did it say, phone, hours, where am I now).
+  live    - about what is in front of them RIGHT NOW (what is this, what am I looking at, read this for me).
+  summary - a recap of what they saw over a period (summarise, what did I see in the last minutes, what happened today).
+  forget  - they want recent memories deleted (forget the last 10 minutes, delete that).
+  chat    - anything else: greetings, small talk, the time or date, general questions, what can you do.
+- minutes: the period they name in minutes ("last 10 minutes" -> 10, "last hour" -> 60, "a few minutes" -> 5), else null.
 - target: the specific thing they ask about, using their words (e.g. "arduino hardware lab", "sauna", "info desk"), or null.
 - category: a general type if they ask about a kind of thing (e.g. "gaming", "database", "dentist"), else null.
 - attribute: what they want: location (where is X / which floor is X on), phone, hours, name, description (what did it say/show), list (which ones did I see), when (when did I see it),
@@ -452,7 +459,7 @@ Turn the user's question about things they saw earlier into JSON.
 - synonyms: up to 5 other simple English words for the target or category that a sign or a photo description might use
   (e.g. "somewhere to smoke" -> ["ashtray", "smoking area", "cigarette bin"]; "coffee" -> ["cafe", "coffee machine", "espresso"];
   "way upstairs" -> ["stairs", "staircase", "escalator", "elevator"]). Empty list if none.
-Return ONLY JSON with keys target, category, attribute, time, synonyms.
+Return ONLY JSON with keys intent, minutes, target, category, attribute, time, synonyms.
 ```
 
 Şema:
@@ -460,6 +467,22 @@ Return ONLY JSON with keys target, category, attribute, time, synonyms.
 {
   "type": "object",
   "properties": {
+    "intent": {
+      "type": "string",
+      "enum": [
+        "memory",
+        "live",
+        "summary",
+        "forget",
+        "chat"
+      ]
+    },
+    "minutes": {
+      "type": [
+        "number",
+        "null"
+      ]
+    },
     "target": {
       "type": [
         "string",
@@ -503,6 +526,8 @@ Return ONLY JSON with keys target, category, attribute, time, synonyms.
     }
   },
   "required": [
+    "intent",
+    "minutes",
     "target",
     "category",
     "attribute",

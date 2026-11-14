@@ -23,20 +23,31 @@ import embed
 
 ATTRIBUTES = ["location", "phone", "hours", "name", "description", "list", "when", "current_location", "other"]
 TIMES = ["just_now", "last_hour", "today", "any"]
+# What the user wants. Decided by the model in the same parse call (no extra call), not by keyword rules.
+INTENTS = ["memory", "live", "summary", "forget", "chat"]
 
 PARSE_SCHEMA = {
     "type": "object",
     "properties": {
+        "intent": {"type": "string", "enum": INTENTS},
+        "minutes": {"type": ["number", "null"]},
         "target": {"type": ["string", "null"]},
         "category": {"type": ["string", "null"]},
         "attribute": {"type": "string", "enum": ATTRIBUTES},
         "time": {"type": "string", "enum": TIMES},
         "synonyms": {"type": "array", "items": {"type": "string"}},
     },
-    "required": ["target", "category", "attribute", "time", "synonyms"],
+    "required": ["intent", "minutes", "target", "category", "attribute", "time", "synonyms"],
 }
 
-PARSE_PROMPT = """Turn the user's question about things they saw earlier into JSON.
+PARSE_PROMPT = """Turn what the user says to their smart-glasses memory assistant into JSON.
+- intent: what kind of request it is:
+  memory  - about something they saw EARLIER (where/which/when, did I see, what did it say, phone, hours, where am I now).
+  live    - about what is in front of them RIGHT NOW (what is this, what am I looking at, read this for me).
+  summary - a recap of what they saw over a period (summarise, what did I see in the last minutes, what happened today).
+  forget  - they want recent memories deleted (forget the last 10 minutes, delete that).
+  chat    - anything else: greetings, small talk, the time or date, general questions, what can you do.
+- minutes: the period they name in minutes ("last 10 minutes" -> 10, "last hour" -> 60, "a few minutes" -> 5), else null.
 - target: the specific thing they ask about, using their words (e.g. "arduino hardware lab", "sauna", "info desk"), or null.
 - category: a general type if they ask about a kind of thing (e.g. "gaming", "database", "dentist"), else null.
 - attribute: what they want: location (where is X / which floor is X on), phone, hours, name, description (what did it say/show), list (which ones did I see), when (when did I see it),
@@ -45,7 +56,7 @@ PARSE_PROMPT = """Turn the user's question about things they saw earlier into JS
 - synonyms: up to 5 other simple English words for the target or category that a sign or a photo description might use
   (e.g. "somewhere to smoke" -> ["ashtray", "smoking area", "cigarette bin"]; "coffee" -> ["cafe", "coffee machine", "espresso"];
   "way upstairs" -> ["stairs", "staircase", "escalator", "elevator"]). Empty list if none.
-Return ONLY JSON with keys target, category, attribute, time, synonyms."""
+Return ONLY JSON with keys intent, minutes, target, category, attribute, time, synonyms."""
 
 ANSWER_SCHEMA = {
     "type": "object",
@@ -334,6 +345,9 @@ def parse_question(q: str) -> dict:
     p = _json_call(PARSE_PROMPT, q, PARSE_SCHEMA, "query")
     p["attribute"] = p.get("attribute") if p.get("attribute") in ATTRIBUTES else "other"
     p["time"] = p.get("time") if p.get("time") in TIMES else "any"
+    p["intent"] = p.get("intent") if p.get("intent") in INTENTS else "memory"
+    if not isinstance(p.get("minutes"), (int, float)) or p["minutes"] <= 0:
+        p["minutes"] = None
     return p
 
 
@@ -345,9 +359,6 @@ def _ago(now: dt.datetime, t: dt.datetime) -> str:
 
 # --- summaries and "which names did I see" -------------------------------------
 
-_SUMMARY_Q = re.compile(r"\b(summar\w*|recap|overview|what (have|did) i (just )?(see|seen|look at)\b(?!.*\b(on|at|near|next to|inside|under)\b)"
-                        r"|what happened|what was around me|describe (my|the) (day|walk|last))", re.I)
-_LAST_MIN = re.compile(r"\blast\s+(\d+|few|couple of)\s*(minutes?|mins?|hours?)\b", re.I)
 _NAMEISH = {"brand", "brands", "logo", "logos", "company", "companies", "name", "names", "sign", "signs",
             "text", "store", "stores", "shop", "shops", "sponsor", "sponsors", "product", "products"}
 
@@ -361,10 +372,8 @@ SUMMARY_SCHEMA = {"type": "object", "properties": {"answer": {"type": "string"},
 
 
 def _summary_window(question: str, parsed: dict) -> float:
-    m = _LAST_MIN.search(question)
-    if m:
-        n = {"few": 5, "couple of": 3}.get(m.group(1).lower(), None) or int(m.group(1))
-        return n * (60 if m.group(2).lower().startswith("hour") else 1)
+    if parsed.get("minutes"):
+        return float(parsed["minutes"])
     return {"just_now": 15, "last_hour": 60, "today": 24 * 60, "any": 10 ** 6}[parsed["time"]]
 
 
@@ -426,7 +435,11 @@ def ask(question: str, docs: list[dict], now: dt.datetime, min_score: float = 0.
 
     # "Summarise what I saw (in the last N minutes)": no single thing to search for, so take the
     # time window, spread the evidence over it and let the model write a short recap from it.
-    if _SUMMARY_Q.search(question) and not parsed.get("target"):
+    if parsed["intent"] == "forget":
+        # the caller (server / app) deletes; ask() only understands the request
+        mins = int(parsed.get("minutes") or 10)
+        return result("FORGET", f"Okay, I forgot everything from the last {mins} minutes.", why=f"forget {mins} min")
+    if parsed["intent"] == "summary":
         win = _summary_window(question, parsed)
         pool = sorted((d for d in docs if d["type"] == "sighting" and d["seen_at"] <= now
                        and (now - d["seen_at"]).total_seconds() <= win * 60), key=lambda d: d["seen_at"])

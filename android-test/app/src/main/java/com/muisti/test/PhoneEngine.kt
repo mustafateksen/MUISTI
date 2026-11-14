@@ -16,6 +16,7 @@ import com.muisti.engine.OcrRepair
 import com.muisti.engine.Prompts
 import com.muisti.engine.TextLines
 import com.muisti.engine.bool
+import com.muisti.engine.num
 import java.io.ByteArrayOutputStream
 import java.io.File
 
@@ -61,36 +62,28 @@ class PhoneEngine(ctx: Context) {
         return true
     }
 
-    private val FORGET = Regex("""\bforget\b.*?\b(?:last|past)\s+(\d+|one|two|three|five|ten|fifteen|twenty|thirty)?\s*(minutes?|mins?|hours?)\b""", RegexOption.IGNORE_CASE)
-    private val WORDS = mapOf("one" to 1, "two" to 2, "three" to 3, "five" to 5, "ten" to 10, "fifteen" to 15, "twenty" to 20, "thirty" to 30)
-
-    /** /ask, plus the voice command "forget the last N minutes" and the live camera frame for "what is this?". */
+    /** /ask on the phone. Nemotron reads the request (memory / live / summary / forget / chat) in its parse call. */
     fun ask(question: String, liveFrame: ByteArray?): Answer {
         val now = System.currentTimeMillis()
-        FORGET.find(question)?.let { m ->
-            val n = m.groupValues[1].let { it.toIntOrNull() ?: WORDS[it.lowercase()] ?: 1 }
-            val minutes = n * (if (m.groupValues[2].lowercase().startsWith("hour")) 60 else 1)
-            store.forget(now - minutes * 60_000L)
-            return Answer(question, "FORGOT", "Okay, I forgot everything from the last $minutes minutes.", emptyList(), emptyList(),
-                "forget command", 0, 0.0, org.json.JSONObject())
-        }
         val docs = Asker.docsFromSightings(store.sightings())
-        val memory = if (docs.isEmpty() && liveFrame == null) null else asker.ask(question, docs, now, liveFrame)
-        // Nothing in memory and the question is not about something seen ("what time is it?",
-        // "how are you?") -> answer like a normal assistant. Memory questions stay strict: a
-        // "did I see a piano?" with no match is still an honest "I didn't see it".
-        val answer = if ((memory == null || (memory.label == "DONT_KNOW" && memory.why in CHAT_FALLBACK_WHY)) &&
-            !MEMORY_Q.containsMatchIn(question)) chat(question, now)
-        else memory ?: Answer(question, "DONT_KNOW", "I haven't seen anything yet.", emptyList(), emptyList(), "empty memory", 0, 0.0, org.json.JSONObject())
+        val r = asker.ask(question, docs, now, liveFrame)
+        val answer = when (r.label) {
+            "FORGET" -> {
+                val minutes = (r.parsed.num("minutes").takeIf { it > 0 } ?: 10.0).toInt()
+                store.forget(now - minutes * 60_000L)
+                Answer(question, "FORGOT", "Okay, I forgot everything from the last $minutes minutes.", emptyList(), emptyList(),
+                    "forget $minutes min", r.calls, r.latencyS, r.parsed)
+            }
+            "ROUTE_CHAT" -> chat(question, now)
+            else -> if (docs.isEmpty() && r.label == "DONT_KNOW") Answer(question, "DONT_KNOW", "I haven't seen anything yet.",
+                emptyList(), emptyList(), "empty memory", r.calls, r.latencyS, r.parsed) else r
+        }
         remember(question, answer.answer)
         return answer
     }
 
     // --- small talk -------------------------------------------------------------------
 
-    private val CHAT_FALLBACK_WHY = setOf("no relevant memory (gate)", "model abstained", "empty memory")
-    /** Questions about the user's own past sightings: never answered from general knowledge. */
-    private val MEMORY_Q = Regex("""\b((did|have|had) i (see|seen|saw|walk|pass|look|notice|read|visit)|i saw|i've seen|where (was|were|did|is|are|can i find)|which (floor|booth|shop|store|one)|when did i|what (did|was) (it|the|that) (say|show|written)|remember|earlier|before|last time|phone number|opening hours|how many .* (did i|were there))\b""", RegexOption.IGNORE_CASE)
     private val history = ArrayDeque<Pair<String, String>>()   // last turns, so a chat can refer back
 
     private fun remember(q: String, a: String) {

@@ -189,6 +189,7 @@ class Asker(private val llm: Llm, private val prompts: Prompts, private val imag
         val p = llm.jsonCall(prompts.parsePrompt, q, prompts.parseSchema, "query")
         if (p.optString("attribute") !in ATTRIBUTES) p.put("attribute", "other")
         if (p.optString("time") !in TIMES) p.put("time", "any")
+        if (p.optString("intent") !in listOf("memory", "live", "summary", "forget", "chat")) p.put("intent", "memory")
         return p
     }
 
@@ -199,19 +200,13 @@ class Asker(private val llm: Llm, private val prompts: Prompts, private val imag
 
     // --- summaries, names, live look -------------------------------------------------
 
-    private val SUMMARY_Q = Regex("""\b(summar\w*|recap|overview|what (have|did) i (just )?(see|seen|look at)\b(?!.*\b(on|at|near|next to|inside|under)\b)|what happened|what was around me|describe (my|the) (day|walk|last))""", RegexOption.IGNORE_CASE)
-    private val LAST_MIN = Regex("""\blast\s+(\d+|few|couple of)\s*(minutes?|mins?|hours?)\b""", RegexOption.IGNORE_CASE)
     private val NAMEISH = setOf("brand", "brands", "logo", "logos", "company", "companies", "name", "names", "sign", "signs",
         "text", "store", "stores", "shop", "shops", "sponsor", "sponsors", "product", "products")
     private val FLOOR_INFO = Regex("""\b(\d{1,2}(st|nd|rd|th)\s*floor|floor\s*(label|number|indicator)|floor\s+\d+|level\s*\d+|[BL]\d{1,2}|\d+\.\s*kat)\b""", RegexOption.IGNORE_CASE)
-    /** Phone-only: questions about what is in front of the camera NOW go to the live frame, not to memory. */
-    private val LIVE_Q = Regex("""\b(right now|in front of me|what (am i|are you) (looking at|seeing)|what (do|can) you see|what is this|what's this|what is that|read (this|that|it)( for me)?|what does (this|it) say)\b""", RegexOption.IGNORE_CASE)
 
+    /** Period for summaries / name lists: the minutes the model read from the question, else its time range. */
     private fun summaryWindow(question: String, parsed: JSONObject): Double {
-        LAST_MIN.find(question)?.let { m ->
-            val n = when (m.groupValues[1].lowercase()) { "few" -> 5; "couple of" -> 3; else -> m.groupValues[1].toInt() }
-            return n * (if (m.groupValues[2].lowercase().startsWith("hour")) 60.0 else 1.0)
-        }
+        if (parsed.num("minutes") > 0) return parsed.num("minutes")
         return when (parsed.optString("time")) { "just_now" -> 15.0; "last_hour" -> 60.0; "today" -> 24 * 60.0; else -> 1e6 }
     }
 
@@ -258,12 +253,17 @@ class Asker(private val llm: Llm, private val prompts: Prompts, private val imag
             return Answer(question, label, answer, used, ev, why, calls, (System.currentTimeMillis() - t0) / 1000.0, parsed)
         }
 
-        if (liveFrame != null && LIVE_Q.containsMatchIn(question)) {
-            val a = liveLook(question, liveFrame); calls++
-            return result("SEEN", a, why = "live look at the current camera frame")
-        }
-
+        // One model call understands the request; routing follows its "intent" (no keyword rules).
         parsed = parseQuestion(question); calls++
+        when (parsed.optString("intent")) {
+            "live" -> if (liveFrame != null) {
+                val a = liveLook(question, liveFrame); calls++
+                return result("SEEN", a, why = "live look at the current camera frame")
+            }
+            "forget" -> return result("FORGET", "Okay, I forgot everything from the last ${(parsed.num("minutes").takeIf { it > 0 } ?: 10.0).toInt()} minutes.",
+                why = "forget request")
+            "chat" -> return result("ROUTE_CHAT", "", why = "small talk")
+        }
         val target = parsed.str("target")
         val attr = parsed.optString("attribute")
         hits = if (attr == "current_location") {
@@ -274,7 +274,7 @@ class Asker(private val llm: Llm, private val prompts: Prompts, private val imag
             (floorish.take(3) + recent.filter { it !in floorish.take(3) }).take(5).map { 1.0 to it }
         } else search(parsed, docs, now, qvec = semanticSetup(question, docs))
 
-        if (SUMMARY_Q.containsMatchIn(question) && target == null) {
+        if (parsed.optString("intent") == "summary") {
             val win = summaryWindow(question, parsed)
             val pool = docs.filter { it.type == "sighting" && it.seenAt <= now && (now - it.seenAt) / 60000.0 <= win }.sortedBy { it.seenAt }
             if (pool.isEmpty()) return result("DONT_KNOW", "I haven't seen anything in that time.", why = "summary: nothing in window")

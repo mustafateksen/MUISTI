@@ -137,27 +137,20 @@ def ingest(body: IngestIn):
             "rejected": record.get("rejected"), "latency_s": round(time.time() - t0, 2)}
 
 
-_FORGET_RE = re.compile(r"\bforget\b.*?\b(?:last|past)\s+(\d+|a|an|one|ten|five|fifteen|thirty)?\s*(minute|minutes|min|hour|hours)\b", re.I)
-_WORDS = {"a": 1, "an": 1, "one": 1, "five": 5, "ten": 10, "fifteen": 15, "thirty": 30}
 
 
 @app.post("/ask")
 def ask_ep(body: AskIn):
     now = _now(body.now)
-    m = _FORGET_RE.search(body.question)
-    if m:  # voice command: "forget the last 10 minutes"
-        n = m.group(1) or "1"
-        n = int(n) if n.isdigit() else _WORDS.get(n.lower(), 1)
-        minutes = n * (60 if m.group(2).lower().startswith("hour") else 1)
-        deleted = store.forget(now - dt.timedelta(minutes=minutes))
-        return {"answer": f"Okay, I forgot everything from the last {minutes} minutes.",
-                "label": "FORGOT", "label_tr": "UNUTTUM", "deleted_frames": deleted, "evidence": [], "sources": []}
-
     docs = A.docs_from_sightings(store.sightings())
     if not docs:
         return {"answer": "I haven't seen anything yet.", "label": "DONT_KNOW", "label_tr": "BILMIYORUM",
                 "evidence": [], "sources": []}
     r = A.ask(body.question, docs, now)
+    if r["label"] == "FORGET":   # "forget the last 10 minutes" (the model read the request and the minutes)
+        minutes = int(r["parsed"].get("minutes") or 10)
+        deleted = store.forget(now - dt.timedelta(minutes=minutes))
+        return {"answer": r["answer"], "label": "FORGOT", "label_tr": "UNUTTUM", "deleted_frames": deleted, "evidence": [], "sources": []}
     by_frame = {s.get("evidence_frame"): s for s in store.sightings()}
     used = set(r["evidence_used"])
     evidence = []
