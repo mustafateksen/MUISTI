@@ -11,7 +11,15 @@ import androidx.compose.ui.graphics.ImageBitmap
 enum class VoicePhase { Idle, Listening, Thinking, Speaking }
 
 /** One remembered frame shown under an answer (already face-blurred). */
-data class Shot(val image: ImageBitmap, val whenText: String, val place: String?, val mapUri: String?)
+data class Shot(val image: ImageBitmap, val whenText: String, val place: String?, val mapUri: String?,
+                val full: ImageBitmap? = null, val detail: ShotDetail? = null)
+
+/** Everything one memory holds, for the detail sheet. */
+data class ShotDetail(
+    val title: String, val kind: String?, val whenFull: String,
+    val signLines: List<String>, val rows: List<Pair<String, String>>,
+    val phone: String?, val hours: String?, val caption: String?, val things: List<String>,
+) { fun signText(): String? = (signLines + rows.map { "${it.first}: ${it.second}" }).joinToString("\n").ifEmpty { null } }
 
 sealed class Msg {
     data class Question(val text: String) : Msg()
@@ -53,6 +61,7 @@ class AppState {
     var level by mutableFloatStateOf(0f)
     var toastText by mutableStateOf<String?>(null)
     val messages = mutableStateListOf<Msg>()
+    var openShot by mutableStateOf<Shot?>(null)   // detail sheet
 
     fun toast(text: String) { toastText = text }
 }

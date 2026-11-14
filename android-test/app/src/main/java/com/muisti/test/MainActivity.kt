@@ -212,6 +212,49 @@ class MainActivity : ComponentActivity() {
 
     fun openGlassesUpdate() = glasses.openUpdate()
 
+    private val PHONE = Regex("""\+?\d[\d\s\-().]{5,}\d""")
+
+    /** The memory (sighting) a frame belongs to, as the detail sheet shows it. */
+    private fun detailFor(frame: String, seenAt: Long, whenText: String): ShotDetail? {
+        val s = engine.store.sightings().firstOrNull { sg ->
+            val fr = sg.optJSONArray("frames") ?: return@firstOrNull false
+            (0 until fr.length()).any { fr.optString(it) == frame }
+        } ?: return null
+        fun str(k: String) = if (s.has(k) && !s.isNull(k)) s.optString(k).ifEmpty { null } else null
+        val name = str("name")
+        val sign = listOfNotNull(name) + (str("other_text")?.split(" / ")?.map { it.trim() }?.filter { it.isNotEmpty() } ?: emptyList())
+        val items = s.optJSONArray("items")
+        val rows = (0 until (items?.length() ?: 0)).mapNotNull { i -> items!!.optJSONObject(i) }
+            .map { it.optString("label") to it.optString("value") }
+        val objs = s.optJSONArray("objects")
+        val things = (0 until (objs?.length() ?: 0)).mapNotNull { i -> objs!!.optJSONObject(i) }
+            .filter { !it.optBoolean("uncertain") }
+            .map { o -> o.optString("name") + (if (o.optInt("count", 1) > 1) " ×${o.optInt("count")}" else "") }
+        // a number to call: the verified phone field, else a phone-like number read on the sign
+        val phone = str("phone") ?: (sign + rows.map { it.second } + rows.map { it.first }).firstNotNullOfOrNull { line ->
+            PHONE.findAll(line).map { it.value.trim() }.firstOrNull { v -> v.count { it.isDigit() } in 7..15 }
+        }
+        val kind = str("subtype") ?: str("kind")
+        val stamp = java.text.SimpleDateFormat("EEE d MMM, HH:mm", java.util.Locale.US).format(java.util.Date(seenAt))
+        return ShotDetail(
+            title = name ?: kind?.replaceFirstChar { it.uppercase() } ?: "What I saw",
+            kind = kind, whenFull = if (whenText.startsWith("Today")) stamp else "$stamp · $whenText", signLines = sign, rows = rows,
+            phone = phone, hours = str("hours"), caption = str("caption"), things = things)
+    }
+
+    /** Opens the dialer with the number filled in; the user presses call (nothing is dialled automatically). */
+    fun dial(phone: String) {
+        val digits = phone.filter { it.isDigit() || it == '+' }
+        runCatching { startActivity(Intent(Intent.ACTION_DIAL, android.net.Uri.parse("tel:$digits"))) }
+            .onFailure { state.toast("No phone app found.") }
+    }
+
+    fun copyText(text: String) {
+        val cm = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
+        cm.setPrimaryClip(android.content.ClipData.newPlainText("MUISTI", text))
+        state.toast("Copied")
+    }
+
     fun openMap(uri: String) {
         runCatching { startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(uri))) }
             .onFailure { state.toast("No maps app found.") }
@@ -528,7 +571,8 @@ class MainActivity : ComponentActivity() {
                 }
                 val place = e.street ?: e.lat?.let { "%.4f, %.4f".format(it, e.lon) }
                 val uri = e.lat?.let { "geo:${it},${e.lon}?q=${it},${e.lon}(${android.net.Uri.encode(e.street ?: "Seen here")})" }
-                Shot(img, whenText, place, uri)
+                val full = BitmapFactory.decodeFile(file.path)?.asImageBitmap()
+                Shot(img, whenText, place, uri, full, detailFor(e.frame, e.seenAt, whenText))
             }.getOrNull()
         }
     }

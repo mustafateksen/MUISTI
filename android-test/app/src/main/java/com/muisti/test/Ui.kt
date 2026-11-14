@@ -63,6 +63,15 @@ import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -78,6 +87,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.draw.scale
@@ -152,6 +162,7 @@ fun MuistiApp(act: MainActivity) {
                 }
             }
 
+            s.openShot?.let { shot -> ShotSheet(shot, t, act) { s.openShot = null } }
             VoiceOverlay(s, t, onClose = { act.stopVoice() }, onOrb = { act.interrupt() })
             Toast(s, t)
 
@@ -435,7 +446,7 @@ private fun Transcript(act: MainActivity, s: AppState, t: Tones) {
             itemsIndexed(s.messages) { _, m ->
                 when (m) {
                     is Msg.Question -> QuestionBubble(m.text)
-                    is Msg.Answer -> AnswerBlock(m, t) { uri -> act.openMap(uri) }
+                    is Msg.Answer -> AnswerBlock(m, t, onOpen = { s.openShot = it }) { uri -> act.openMap(uri) }
                 }
             }
         }
@@ -456,7 +467,7 @@ private fun QuestionBubble(text: String) {
 
 /** Assistant turn: small orb, a "seen / not sure" badge, the answer, and the frames that prove it. */
 @Composable
-private fun AnswerBlock(m: Msg.Answer, t: Tones, onMap: (String) -> Unit) {
+private fun AnswerBlock(m: Msg.Answer, t: Tones, onOpen: (Shot) -> Unit, onMap: (String) -> Unit) {
     Row(Modifier.fillMaxWidth()) {
         AvatarOrb(thinking = m.pending)
         Spacer(Modifier.width(10.dp))
@@ -468,7 +479,7 @@ private fun AnswerBlock(m: Msg.Answer, t: Tones, onMap: (String) -> Unit) {
             if (m.shots.isNotEmpty()) {
                 Spacer(Modifier.height(12.dp))
                 LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    items(m.shots.size) { i -> EvidenceCard(m.shots[i], t, onMap) }
+                    items(m.shots.size) { i -> EvidenceCard(m.shots[i], t) { onOpen(m.shots[i]) } }
                 }
             } else if (m.place != null) {
                 Spacer(Modifier.height(10.dp))
@@ -480,9 +491,9 @@ private fun AnswerBlock(m: Msg.Answer, t: Tones, onMap: (String) -> Unit) {
 
 /** One remembered frame (already face-blurred): image, when, and where with a map pin. */
 @Composable
-private fun EvidenceCard(shot: Shot, t: Tones, onMap: (String) -> Unit) {
+private fun EvidenceCard(shot: Shot, t: Tones, onOpen: () -> Unit) {
     Column(Modifier.width(176.dp).clip(RoundedCornerShape(20.dp)).background(t.card).border(0.5.dp, t.hair, RoundedCornerShape(20.dp))
-        .then(if (shot.mapUri != null) Modifier.clickable { onMap(shot.mapUri) } else Modifier).padding(6.dp)) {
+        .clickable(onClick = onOpen).padding(6.dp)) {
         Image(shot.image, contentDescription = "Seen here", contentScale = ContentScale.Crop,
             modifier = Modifier.fillMaxWidth().height(118.dp).clip(RoundedCornerShape(15.dp)))
         Column(Modifier.padding(horizontal = 6.dp, vertical = 7.dp)) {
@@ -713,4 +724,116 @@ private fun SettingsDialog(current: String, onSave: (String) -> Unit, onClear: (
         confirmButton = { TextButton(onClick = { onSave(url) }) { Text("Save", fontWeight = FontWeight.SemiBold) } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
+}
+
+// ---------------- memory detail sheet ----------------
+
+/**
+ * Tap on an evidence card: a sheet slides up (not full height - the chat stays visible above it)
+ * with the whole frame, when/where, actions (Call if a number was read, Maps if there is a place,
+ * Copy the sign text) and everything that was read or noticed in that memory.
+ */
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
+@Composable
+private fun ShotSheet(shot: Shot, t: Tones, act: MainActivity, onClose: () -> Unit) {
+    val sheet = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val scope = rememberCoroutineScope()
+    val close: () -> Unit = { scope.launch { sheet.hide() }.invokeOnCompletion { onClose() } }
+    val d = shot.detail
+    ModalBottomSheet(onDismissRequest = onClose, sheetState = sheet, containerColor = t.bg,
+        shape = RoundedCornerShape(topStart = 30.dp, topEnd = 30.dp),
+        dragHandle = { Box(Modifier.padding(top = 10.dp, bottom = 4.dp).size(38.dp, 5.dp).clip(CircleShape).background(t.sub.copy(alpha = 0.45f))) }) {
+        Column(Modifier.fillMaxWidth().fillMaxHeight(0.9f).verticalScroll(rememberScrollState()).padding(horizontal = 18.dp)) {
+            // title row with the close button top-right
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 4.dp, bottom = 12.dp)) {
+                Column(Modifier.weight(1f)) {
+                    Text(d?.kind?.uppercase() ?: "MEMORY", color = BrandBlue, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.2.sp)
+                    Text(d?.title ?: "What I saw", color = t.text, fontSize = 24.sp, fontWeight = FontWeight.Bold, letterSpacing = (-0.4).sp, maxLines = 2)
+                }
+                Box(Modifier.size(36.dp).clip(CircleShape).background(t.card).clickable(onClick = close), contentAlignment = Alignment.Center) {
+                    Icon(Icons.Rounded.Close, "Close", tint = t.text, modifier = Modifier.size(18.dp))
+                }
+            }
+            // the whole frame (already face-blurred), uncropped
+            Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(24.dp)).background(Ink), contentAlignment = Alignment.Center) {
+                // the same frame, blurred, fills the letterbox (as iOS does) - the real frame sits on top, uncropped
+                Image(shot.image, contentDescription = null, contentScale = ContentScale.Crop,
+                    modifier = Modifier.matchParentSize().blur(28.dp), alpha = 0.55f)
+                Image(shot.full ?: shot.image, contentDescription = "Remembered frame", contentScale = ContentScale.Fit,
+                    modifier = Modifier.fillMaxWidth().heightIn(max = 360.dp))
+                Row(Modifier.align(Alignment.BottomStart).padding(10.dp)) {
+                    GlassCapsule { Text("Faces blurred on the phone", color = Color.White, fontSize = 11.sp) }
+                }
+            }
+            Spacer(Modifier.height(14.dp))
+            // when / where
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                InfoTile(Modifier.weight(1f), t, "When", d?.whenFull ?: shot.whenText)
+                InfoTile(Modifier.weight(1f), t, "Where", shot.place ?: "No location")
+            }
+            // actions
+            val phone = d?.phone
+            val copyText = d?.signText()
+            if (phone != null || shot.mapUri != null || copyText != null) {
+                Spacer(Modifier.height(14.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    if (phone != null) ActionButton(Modifier.weight(1f), "📞", "Call", Color(0xFF34C759)) { act.dial(phone) }
+                    if (shot.mapUri != null) ActionButton(Modifier.weight(1f), "🗺", "Maps", BrandBlue) { act.openMap(shot.mapUri) }
+                    if (copyText != null) ActionButton(Modifier.weight(1f), "📋", "Copy", Violet) { act.copyText(copyText) }
+                }
+                if (phone != null) Text(phone, color = t.sub, fontSize = 13.sp, modifier = Modifier.padding(top = 6.dp, start = 4.dp))
+            }
+            if (d != null) {
+                if (d.signLines.isNotEmpty()) Section(t, "Text on the sign") {
+                    d.signLines.forEach { Text(it, color = t.text, fontSize = 16.sp, fontWeight = FontWeight.Medium, modifier = Modifier.padding(vertical = 2.dp)) }
+                }
+                if (d.rows.isNotEmpty()) Section(t, "Listed here") {
+                    d.rows.forEachIndexed { i, (label, value) ->
+                        if (i > 0) Box(Modifier.fillMaxWidth().height(0.5.dp).background(t.hair))
+                        Row(Modifier.padding(vertical = 9.dp)) {
+                            Text(label, color = BrandBlue, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.width(110.dp))
+                            Text(value, color = t.text, fontSize = 14.sp)
+                        }
+                    }
+                }
+                if (d.hours != null) Section(t, "Opening hours") { Text(d.hours, color = t.text, fontSize = 15.sp) }
+                if (d.caption != null) Section(t, "The scene") { Text(d.caption, color = t.text, fontSize = 15.sp, lineHeight = 21.sp) }
+                if (d.things.isNotEmpty()) Section(t, "Things I noticed") {
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        d.things.forEach {
+                            Text(it, color = t.text, fontSize = 13.sp, modifier = Modifier.clip(CircleShape).background(t.card2)
+                                .padding(horizontal = 12.dp, vertical = 6.dp))
+                        }
+                    }
+                }
+            }
+            Spacer(Modifier.height(28.dp))
+        }
+    }
+}
+
+@Composable
+private fun InfoTile(modifier: Modifier, t: Tones, title: String, value: String) {
+    Column(modifier.clip(RoundedCornerShape(18.dp)).background(t.card).padding(horizontal = 14.dp, vertical = 11.dp)) {
+        Text(title, color = t.sub, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+        Text(value, color = t.text, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, maxLines = 2)
+    }
+}
+
+@Composable
+private fun ActionButton(modifier: Modifier, icon: String, label: String, color: Color, onClick: () -> Unit) {
+    Column(modifier.clip(RoundedCornerShape(18.dp)).background(color.copy(alpha = 0.14f)).clickable(onClick = onClick)
+        .padding(vertical = 12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(icon, fontSize = 22.sp)
+        Spacer(Modifier.height(2.dp))
+        Text(label, color = color, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+    }
+}
+
+@Composable
+private fun Section(t: Tones, title: String, content: @Composable () -> Unit) {
+    Spacer(Modifier.height(18.dp))
+    Text(title.uppercase(), color = t.sub, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+    Spacer(Modifier.height(8.dp))
+    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp)).background(t.card).padding(horizontal = 16.dp, vertical = 12.dp)) { content() }
 }
