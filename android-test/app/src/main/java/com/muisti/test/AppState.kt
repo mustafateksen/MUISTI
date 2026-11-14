@@ -82,6 +82,8 @@ class AppState {
     var privacySettings by mutableStateOf(com.muisti.privacy.PrivacySettings())
     var showPrivacy by mutableStateOf(false)
     var timeline by mutableStateOf<com.muisti.ui.TimelineDay?>(null)   // non-null = timeline open
+    var agentCenter by mutableStateOf<com.muisti.ui.AgentCenterState?>(null)   // non-null = Agent Center open
+    var unreadNotices by mutableIntStateOf(0)
 
     fun toast(text: String) { toastText = text }
 }

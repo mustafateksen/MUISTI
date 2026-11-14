@@ -135,6 +135,7 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         handleImportIntent(intent)
+        if (intent.getBooleanExtra("open_agent", false)) openAgentCenter()
     }
 
     private fun importImage(read: () -> ByteArray?) {
@@ -223,8 +224,9 @@ class MainActivity : ComponentActivity() {
             OldMemoryScanWorker.schedule(applicationContext)
         }.start()
 
-        val need = listOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO,
-            Manifest.permission.READ_CALENDAR, Manifest.permission.WRITE_CALENDAR)
+        val need = (listOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO,
+            Manifest.permission.READ_CALENDAR, Manifest.permission.WRITE_CALENDAR) +
+            (if (android.os.Build.VERSION.SDK_INT >= 33) listOf(Manifest.permission.POST_NOTIFICATIONS) else emptyList()))
             .filter { ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED }
         if (need.isEmpty()) startCamera() else permissions.launch(need.toTypedArray())
         pollStats()
@@ -251,7 +253,15 @@ class MainActivity : ComponentActivity() {
         drainJob = lifecycleScope.launch(Dispatchers.IO) {
             val drainer = com.muisti.capture.Drainer(engine.pending)
             var lastSummary = 0L
+            var lastNoticeCheck = 0L
             while (isActive) {
+                // Agent Center: notice sources once a minute (local only, no model call)
+                if (System.currentTimeMillis() - lastNoticeCheck > 60_000) {
+                    lastNoticeCheck = System.currentTimeMillis()
+                    runCatching { engine.checkNotices(lastNoticeCheck, location.fresh(60_000), upcomingEvents()) }
+                        .onSuccess { it.forEach { n -> deliver(n) } }
+                        .onFailure { android.util.Log.w("MuistiAgent", "notices failed: ${it.message}") }
+                }
                 // closed episodes get their summary in the background (one call each, at most 2 a minute)
                 if (state.network && System.currentTimeMillis() - lastSummary > 60_000) {
                     lastSummary = System.currentTimeMillis()
@@ -548,6 +558,63 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    // ---------------- Agent Center ----------------
+
+    /** Calendar events starting in the next 45 minutes (needs READ_CALENDAR; empty without it). */
+    private fun upcomingEvents(): List<com.muisti.engine.CalEvent> {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_CALENDAR) != PackageManager.PERMISSION_GRANTED) return emptyList()
+        val now = System.currentTimeMillis()
+        val uri = android.provider.CalendarContract.Instances.CONTENT_URI.buildUpon().also {
+            android.content.ContentUris.appendId(it, now); android.content.ContentUris.appendId(it, now + 45 * 60_000L) }.build()
+        val proj = arrayOf(android.provider.CalendarContract.Instances.EVENT_ID, android.provider.CalendarContract.Instances.TITLE,
+            android.provider.CalendarContract.Instances.BEGIN, android.provider.CalendarContract.Instances.EVENT_LOCATION)
+        val out = ArrayList<com.muisti.engine.CalEvent>()
+        runCatching { contentResolver.query(uri, proj, null, null, null)?.use { c ->
+            while (c.moveToNext()) out.add(com.muisti.engine.CalEvent(c.getLong(0), c.getString(1) ?: "", c.getLong(2), c.getString(3)))
+        } }
+        return out
+    }
+
+    /** An alert: Android notification, plus spoken when the voice conversation is open and quiet. */
+    private fun deliver(n: com.muisti.engine.Notice) {
+        android.util.Log.i("MuistiAgent", "notice alert: ${n.type} '${n.title}'")
+        val nm = getSystemService(android.app.NotificationManager::class.java) ?: return
+        nm.createNotificationChannel(android.app.NotificationChannel("notices", "MUISTI notices", android.app.NotificationManager.IMPORTANCE_DEFAULT))
+        val open = android.app.PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java).putExtra("open_agent", true),
+            android.app.PendingIntent.FLAG_IMMUTABLE or android.app.PendingIntent.FLAG_UPDATE_CURRENT)
+        val note = android.app.Notification.Builder(this, "notices").setSmallIcon(android.R.drawable.ic_dialog_info)
+            .setContentTitle(n.title).setContentText(n.body).setStyle(android.app.Notification.BigTextStyle().bigText(n.body))
+            .setContentIntent(open).setAutoCancel(true).build()
+        if (android.os.Build.VERSION.SDK_INT < 33 || ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED)
+            nm.notify(n.id.hashCode(), note)
+        runOnUiThread {
+            state.unreadNotices++
+            if (state.live && ttsReady && state.phase == VoicePhase.Listening) tts?.speak("${n.title}. ${n.body}", TextToSpeech.QUEUE_ADD, null, "notice")
+        }
+    }
+
+    fun openAgentCenter() {
+        state.unreadNotices = 0
+        val labels = com.muisti.engine.Notice.LABELS.filterKeys { it != com.muisti.engine.Notice.SAFETY && it != com.muisti.engine.Notice.PATTERN }
+        state.agentCenter = com.muisti.ui.AgentCenterState(null, engine.mutedNotices, labels)
+        lifecycleScope.launch {
+            val f = java.text.SimpleDateFormat("EEE HH:mm", Locale.US)
+            val rows = withContext(Dispatchers.IO) { engine.notices.all().reversed().take(100).map { (n, d) ->
+                com.muisti.ui.NoticeRow(n.id, n.type, n.title, n.body, f.format(java.util.Date(n.createdAt)),
+                    if (d == com.muisti.engine.Delivery.ALERT) "Alerted" else "Inbox only", n.evidence) } }
+            state.agentCenter?.let { state.agentCenter = it.copy(rows = rows) }
+        }
+    }
+
+    val agentActions = object : com.muisti.ui.AgentCenterActions {
+        override fun mute(type: String, muted: Boolean) {
+            engine.mutedNotices = if (muted) engine.mutedNotices + type else engine.mutedNotices - type
+            state.agentCenter?.let { state.agentCenter = it.copy(muted = engine.mutedNotices) }
+        }
+        override fun openFrame(frame: String) = timelineActions.openFrame(frame)
+        override fun close() { state.agentCenter = null }
     }
 
     // ---------------- timeline (episodes by day) ----------------

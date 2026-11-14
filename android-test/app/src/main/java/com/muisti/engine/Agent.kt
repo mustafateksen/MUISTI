@@ -194,9 +194,10 @@ class Agent(private val llm: Llm, private val prompts: Prompts, private val aske
             .put("attribute", a.str("what")?.takeIf { it in Asker.ATTRIBUTES } ?: "other")
             .put("time", when { minutes <= 0 -> "any"; minutes <= 20 -> "just_now"; minutes <= 60 -> "last_hour"; else -> "today" })
             .put("synonyms", a.arr("synonyms"))
-        val hits = asker.search(parsed, docs, now, qvec = qvec)
+        val cand = asker.search(parsed, docs, now, k = 20, qvec = qvec)
         // same gate as the classic pipeline: nothing relevant enough -> say so, so the model abstains
-        if (hits.isEmpty() || hits[0].first < 0.9) return "No relevant memories found for '${a.str("query")}'."
+        if (cand.isEmpty() || cand[0].first < 0.9) return "No relevant memories found for '${a.str("query")}'."
+        val hits = if (!hybrid) cand.take(5) else fuse(a.str("query") ?: "", parsed, cand, docs, now, qvec)
         val lines = hits.map { ev(it.second) }
         val attr = parsed.optString("attribute")
         val note = when {
@@ -205,6 +206,35 @@ class Agent(private val llm: Llm, private val prompts: Prompts, private val aske
             else -> ""
         }
         return lines.joinToString("\n") + note
+    }
+
+    /** Hybrid retrieval (P2.6): RRF over keyword scoring, text vectors, image vectors and (time questions) recency. */
+    var hybrid = true
+    /** Phone only: frame names ranked by MobileCLIP image similarity to a search text. */
+    var imageRank: ((String) -> List<String>)? = null
+    /** Optional cross-encoder, used only when the two best fused results are tied. */
+    var reranker: Reranker? = null
+    var reranks = 0; private set
+
+    private fun fuse(query: String, parsed: JSONObject, cand: List<Pair<Double, Doc>>, docs: List<Doc>, now: Long, qvec: FloatArray?): List<Pair<Double, Doc>> {
+        val lex = cand.filter { it.first > 0 }.map { it.second }
+        val sem = if (qvec == null) emptyList() else docs.mapNotNull { d -> d.vec?.let { v -> var s = 0.0; for (i in v.indices) s += v[i] * qvec[i]; d to s } }
+            .filter { it.second >= 0.35 }.sortedByDescending { it.second }.take(20).map { it.first }
+        val img = imageRank?.let { r -> runCatching { r(query) }.getOrDefault(emptyList()) }?.mapNotNull { f ->
+            docs.firstOrNull { it.frame == f && (it.type == "object" || it.type == "sighting") } }?.distinct() ?: emptyList()
+        val lists = mutableListOf(lex to 1.0, sem to 1.0, img to 1.0)
+        if (parsed.optString("time") != "any") lists.add(docs.filter { it.seenAt <= now }.sortedByDescending { it.seenAt }.take(20) to 0.5)
+        var fused = Hybrid.rrf(lists).filter { (d, _) -> d in lex || d in sem }     // recency/image alone never brings a memory in
+        val rr = reranker
+        if (rr != null && Hybrid.close(fused)) {
+            val top = fused.take(8)
+            rr.scores(query, top.map { it.first.text })?.let { s ->
+                reranks++
+                fused = top.zip(s).sortedByDescending { it.second }.map { it.first } + fused.drop(8)
+            }
+        }
+        val lexScore = cand.associate { it.second to it.first }
+        return fused.take(5).map { (d, _) -> (lexScore[d] ?: 0.0) to d }
     }
 
     private fun recent(minutes: Double, docs: List<Doc>, now: Long, ev: (Doc) -> String): String {

@@ -52,13 +52,18 @@ class PhoneEngine(ctx: Context) {
 
     /** The on-phone privacy check every outgoing image must pass (see Llm.gate). */
     fun setGate(gate: com.muisti.privacy.PrivacyGate) { llm.gate = gate }
+    private val clip = ClipText(ctx)
     private val prompts = Prompts(ctx.assets.open("prompts.json").bufferedReader().use { it.readText() })
     private val extractor = Extractor(llm, prompts, AndroidImages)
     // v2: vectors from the Verda nemotron-3.5-embed deployment (the old NVIDIA-API cache is dropped, never mixed)
     private val embedder = cfg.embedder(File(ctx.filesDir, "embed_cache_v2.tsv"))
         .also { File(ctx.filesDir, "embed_cache.bin").delete() }
     private val asker = Asker(llm, prompts, AndroidImages, embedder)
-    private val agent = com.muisti.engine.Agent(llm, prompts, asker)
+    private val agent = com.muisti.engine.Agent(llm, prompts, asker).apply {
+        // P2.6: cross-encoder only for ties; image channel = on-phone MobileCLIP text -> stored image vectors
+        reranker = com.muisti.engine.Reranker({ cfg.embedKey }, { cfg.retrievalUrl })
+        imageRank = { q -> clip.embed("a photo of $q")?.let { v -> store.vectors.search(v, 10).filter { it.second >= 0.20 }.map { "${it.first}.jpg" } } ?: emptyList() }
+    }
     val store = MemoryStore(File(ctx.filesDir, "memory"))
     /** "note it": things the user explicitly asked to remember (searchable like memories). */
     val notes = com.muisti.engine.NoteStore(File(ctx.filesDir, "memory"))
@@ -273,7 +278,6 @@ Rules:
             (System.currentTimeMillis() - t0) / 1000.0, org.json.JSONObject())
     }
 
-    private val clip = ClipText(ctx)
 
     /** The memory a stored frame belongs to, as a search doc (for visual-search hits). */
     private fun docForFrame(frame: String): com.muisti.engine.Doc? {
@@ -281,6 +285,22 @@ Rules:
             ?: return null
         val ev = sighting.optString("evidence_frame")
         return docs().firstOrNull { it.type == "sighting" && it.frame == ev }
+    }
+
+    // ---------------- Agent Center (P2.7) ----------------
+    val notices = com.muisti.engine.NoticeStore(File(ctx.filesDir, "memory"))
+    private val agentPrefs = ctx.getSharedPreferences("agent", Context.MODE_PRIVATE)
+    var mutedNotices: Set<String>
+        get() = agentPrefs.getStringSet("muted", emptySet())!!.toSet()
+        set(v) { agentPrefs.edit().putStringSet("muted", v).apply() }
+
+    /** Collects notices from every source and returns the ones to alert now (the rest wait in the inbox or are dropped). */
+    fun checkNotices(now: Long, fix: Fix?, events: List<com.muisti.engine.CalEvent>): List<com.muisti.engine.Notice> {
+        val d = docs()
+        val cand = com.muisti.engine.NoticeSources.calendar(events, d, now) { t -> asker.ago(now, t) } +
+            (fix?.let { com.muisti.engine.NoticeSources.arrival(it.lat, it.lon, notes.all(), now) } ?: emptyList()) +
+            com.muisti.engine.NoticeSources.closingSoon(d, now)
+        return notices.offer(cand, com.muisti.engine.InterventionPolicy(muted = mutedNotices), now)
     }
 
     /** Runs an action the user confirmed (see PendingAction). Returns what to tell the user. */

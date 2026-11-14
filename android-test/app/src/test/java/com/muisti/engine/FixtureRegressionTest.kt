@@ -26,13 +26,17 @@ class FixtureRegressionTest {
         // PC evaluation of stored test frames: no phone privacy model here (the app never uses OPEN)
         val llm = Llm(cfg).apply { gate = com.muisti.privacy.PrivacyGate.OPEN }
         val asker = Asker(llm, prompts, ParityTest.JvmImages, Embedder(cfg.embedKey, File("build/fixture_embed.tsv")))
-        val agent = Agent(llm, prompts, asker)
+        val agent = Agent(llm, prompts, asker).apply {
+            hybrid = System.getProperty("muisti.hybrid") != "0"
+            reranker = Reranker({ key })
+        }
         val docs = Fixture.docs()
         val spec = JSONObject(javaClass.getResource("/fixture_questions.json")!!.readText())
         val now = LocalDateTime.parse(spec.getString("now")).toEpochSecond(ZoneOffset.UTC) * 1000
         RegressionReport.run(spec.arr("questions").objects(), File("build/fixture_agent")) { t ->
             agent.run(t.getString("q"), emptyList(), docs, now)
         }
+        println("hybrid=${agent.hybrid} reranks=${agent.reranks}")
     }
 }
 

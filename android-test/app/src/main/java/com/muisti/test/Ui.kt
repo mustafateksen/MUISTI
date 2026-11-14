@@ -61,6 +61,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.ArrowUpward
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Mic
+import androidx.compose.material.icons.rounded.Notifications
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -154,7 +155,7 @@ fun MuistiApp(act: MainActivity) {
             BoxWithConstraints(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().imePadding()) {
                 val heroMax = maxHeight * 0.46f
                 Column(Modifier.fillMaxSize()) {
-                    Header(s, t) { showSettings = true }
+                    Header(s, t, onAgent = { act.openAgentCenter() }) { showSettings = true }
                     LiveCard(act, s, t, expanded || s.messages.isEmpty(), heroMax) { expanded = !expanded }
                     AnimatedVisibility(expanded || s.messages.isEmpty(), enter = fadeIn() + expandVertically(), exit = fadeOut() + shrinkVertically()) {
                         StatsRow(s, t) { act.openTimeline(0) }
@@ -175,6 +176,10 @@ fun MuistiApp(act: MainActivity) {
             if (showSettings) SettingsDialog(s.serverUrl, onPhoto = { showSettings = false; act.pickPhoto() }, onSave = { act.saveServer(it); showSettings = false },
                 onClear = { act.clearChat(); showSettings = false }, onPrivacy = { showSettings = false; s.showPrivacy = true },
                 pairing = !act.engine.devKeys, onPair = { u, c -> act.pair(u, c); showSettings = false }, onDismiss = { showSettings = false })
+            s.agentCenter?.let { c ->
+                androidx.activity.compose.BackHandler { s.agentCenter = null }
+                com.muisti.ui.AgentCenterScreen(c, act.agentActions)
+            }
             s.timeline?.let { d ->
                 androidx.activity.compose.BackHandler { s.timeline = null }
                 com.muisti.ui.TimelineScreen(d, act.timelineActions)
@@ -212,7 +217,7 @@ private fun greeting(): String {
 // ---------------- header ----------------
 
 @Composable
-private fun Header(s: AppState, t: Tones, onSettings: () -> Unit) {
+private fun Header(s: AppState, t: Tones, onAgent: () -> Unit = {}, onSettings: () -> Unit) {
     Row(Modifier.fillMaxWidth().padding(start = 22.dp, end = 14.dp, top = 10.dp, bottom = 14.dp),
         verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
@@ -232,6 +237,11 @@ private fun Header(s: AppState, t: Tones, onSettings: () -> Unit) {
             if (s.recording) PulsingDot(color) else Box(Modifier.size(8.dp).clip(CircleShape).background(color))
             Spacer(Modifier.width(7.dp))
             Text(label, color = t.text, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+        }
+        Spacer(Modifier.width(8.dp))
+        Box(Modifier.size(40.dp).clip(CircleShape).background(t.card.copy(alpha = 0.85f)).border(0.5.dp, t.hair, CircleShape)
+            .clickable(onClick = onAgent), contentAlignment = Alignment.Center) {
+            Icon(Icons.Rounded.Notifications, contentDescription = "Agent Center", tint = if (s.unreadNotices > 0) BrandBlue else t.text, modifier = Modifier.size(20.dp))
         }
         Spacer(Modifier.width(8.dp))
         Box(Modifier.size(40.dp).clip(CircleShape).background(t.card.copy(alpha = 0.85f)).border(0.5.dp, t.hair, CircleShape)
