@@ -46,5 +46,7 @@
                 <data android:scheme="muisti" />
             </intent-filter>
         </activity>
+        <!-- no-record zones: enter/exit from Play Services geofencing -->
+        <receiver android:name=".ZoneGeofenceReceiver" android:exported="false" />
     </application>
 </manifest>

@@ -41,6 +41,7 @@ class AppState {
     var online by mutableStateOf(false)          // calls can be authorised (dev key or paired proxy)
     var network by mutableStateOf(true)          // the phone has a validated internet connection
     var queued by mutableIntStateOf(0)           // frames waiting for the network
+    var zone by mutableStateOf<String?>(null)            // inside this no-record zone: nothing is captured
     var capturePause by mutableStateOf<String?>(null)   // non-null = capture held by the scheduler ("phone is too hot")
     var captureMode by mutableStateOf("")                // e.g. "still · 3.0 s"
     var memories by mutableIntStateOf(0)

@@ -175,7 +175,7 @@ fun MuistiApp(act: MainActivity) {
                 pairing = !act.engine.devKeys, onPair = { u, c -> act.pair(u, c); showSettings = false }, onDismiss = { showSettings = false })
             if (s.showPrivacy) {
                 androidx.activity.compose.BackHandler { s.showPrivacy = false }
-                com.muisti.ui.PrivacyScreen(s.privacySettings, null, act.privacyActions)
+                com.muisti.ui.PrivacyScreen(s.privacySettings, s.zone, act.privacyActions)
             }
         }
     }
@@ -214,6 +214,7 @@ private fun Header(s: AppState, t: Tones, onSettings: () -> Unit) {
             Text(greeting(), color = t.text, fontSize = 30.sp, fontWeight = FontWeight.Bold, letterSpacing = (-0.6).sp)
         }
         val (label, color) = when {
+            s.zone != null -> "No-record zone" to Amber
             !s.network -> (if (s.queued > 0) "Offline · ${s.queued} queued" else "Offline") to Amber
             s.recording && s.capturePause != null -> "Paused · ${s.capturePause}" to Amber
             s.recording -> "Remembering" to Rose

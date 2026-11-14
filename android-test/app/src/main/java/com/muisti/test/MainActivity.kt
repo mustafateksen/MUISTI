@@ -163,6 +163,8 @@ class MainActivity : ComponentActivity() {
                     val taken = exif?.getAttribute(android.media.ExifInterface.TAG_DATETIME_ORIGINAL)?.let {
                         runCatching { java.text.SimpleDateFormat("yyyy:MM:dd HH:mm:ss", java.util.Locale.US).parse(it)?.time }.getOrNull()
                     }
+                    if (ll != null) com.muisti.privacy.Zones.inside(ll[0], ll[1], 0f, privacySettings.current.zones)?.let {
+                        return@withContext "Not saved: taken in the no-record zone \"${it.name}\"." }
                     val hasPerm = ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
                     val fix = when {
                         ll != null -> Fix(ll[0], ll[1], 0f, taken ?: System.currentTimeMillis(), location.streetAt(ll[0], ll[1]))
@@ -185,6 +187,8 @@ class MainActivity : ComponentActivity() {
         setContent { MuistiApp(this) }
         state.privacySettings = privacySettings.current
         privacySettings.listen { s -> runOnUiThread { state.privacySettings = s } }
+        privacySettings.listen { s -> ZoneGeofences.sync(applicationContext, s.zones) }
+        ZoneGeofences.sync(applicationContext, privacySettings.current.zones)
         handleImportIntent(intent)
 
         tts = TextToSpeech(this) { status ->
@@ -333,6 +337,23 @@ class MainActivity : ComponentActivity() {
             if (on) OldMemoryScanWorker.schedule(applicationContext)
         }
         override fun setPlateBlur(on: Boolean) { privacySettings.update { it.copy(plateBlur = on) } }
+        override fun addZoneHere() {
+            lifecycleScope.launch {
+                val fix = withContext(Dispatchers.IO) { location.fresh(30_000) ?: if (ContextCompat.checkSelfPermission(this@MainActivity,
+                    Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) location.currentFix() else null }
+                if (fix == null) { state.toast("No location yet: allow location and try again"); return@launch }
+                val z = com.muisti.privacy.Zones.newZone(fix.street?.let { "Near $it" } ?: "Zone", fix.lat, fix.lon)
+                privacySettings.update { it.copy(zones = it.zones + z) }
+                state.toast("No-record zone added (${z.radiusM.toInt()} m)")
+            }
+        }
+        override fun removeZone(id: String) { privacySettings.update { s -> s.copy(zones = s.zones.filter { it.id != id }) } }
+        override val canSimulate = BuildConfig.DEBUG
+        override fun simulateAt(z: com.muisti.privacy.Zone?) {
+            if (!BuildConfig.DEBUG) return
+            location.simulated = z?.let { Fix(it.lat, it.lon, 5f, System.currentTimeMillis(), "simulated: ${it.name}") }
+            state.toast(if (z == null) "Location simulation off" else "Simulating a position inside \"${z.name}\"")
+        }
         override fun scanNow() { OldMemoryScanWorker.now(applicationContext); state.toast("Checking older memories…") }
         override fun setSensitiveOcr(on: Boolean) { privacySettings.update { it.copy(sensitiveOcr = on) } }
         override fun close() { state.showPrivacy = false }
@@ -575,8 +596,36 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /**
+     * No-record zones, checked FIRST for every frame (before OCR, the privacy model and the network):
+     * the latest fix inside a zone, or the geofence saying so, means nothing is captured.
+     */
+    private fun zoneNow(): com.muisti.privacy.Zone? {
+        val zones = privacySettings.current.zones
+        if (zones.isEmpty()) return null
+        val fix = location.fresh(60_000)
+        return fix?.let { com.muisti.privacy.Zones.inside(it.lat, it.lon, it.accuracyM, zones) }
+            ?: ZoneGeofences.insideId?.let { id -> zones.firstOrNull { it.id == id } }
+    }
+    private var lastZoneCheck = 0L
+    @Volatile private var inZone: com.muisti.privacy.Zone? = null
+
     /** Same for every source: live frame ~2x/s, and while recording the sharpest frame of each window. */
     private fun considerFrame(now: Long, score: () -> Double, bitmap: () -> Bitmap) {
+        if (now - lastZoneCheck >= 500) {
+            lastZoneCheck = now
+            val z = zoneNow()
+            if (z?.id != inZone?.id) {
+                android.util.Log.i("MuistiPrivacy", if (z != null) "no-record zone: entered ${z.name}" else "no-record zone: left")
+                runOnUiThread { state.zone = z?.name; if (z != null) state.lastFrame = "No-record zone · ${z.name}" else if (state.recording) state.lastFrame = "Left the no-record zone" }
+            }
+            inZone = z
+        }
+        if (inZone != null) {                    // nothing from here on: no live frame, no window, no queue
+            liveJpeg = null; windowBest = null; windowBestScore = -1.0; windowStart = 0L
+            synchronized(held) { held.clear() }
+            return
+        }
         if (now - lastLiveAt >= 500) {
             lastLiveAt = now
             val b = bitmap()

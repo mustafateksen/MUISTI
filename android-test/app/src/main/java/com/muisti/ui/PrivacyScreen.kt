@@ -35,6 +35,11 @@ interface PrivacyActions {
     fun setClass(cls: String, on: Boolean)
     fun setSensitiveOcr(on: Boolean)
     fun setPlateBlur(on: Boolean)
+    fun addZoneHere()
+    fun removeZone(id: String)
+    /** Debug builds: pretend to stand in a zone (or stop pretending with null) to test enforcement. */
+    val canSimulate: Boolean
+    fun simulateAt(z: Zone?)
     fun scanNow()
     fun close()
 }
@@ -65,6 +70,13 @@ fun PrivacyScreen(s: PrivacySettings, insideZone: String?, a: PrivacyActions) {
             ToggleRow("Block frames with card numbers / IBAN / ID numbers / PINs",
                 "Checked on the phone's OCR (Luhn, IBAN, Finnish ID). Off by team decision.", s.sensitiveOcr) { a.setSensitiveOcr(it) }
             ToggleRow("Blur licence plates", "Plates are blurred before a frame is stored or sent.", s.plateBlur) { a.setPlateBlur(it) }
+
+            Section("No-record zones")
+            if (insideZone != null) Text("You are inside \"$insideZone\": nothing is recorded here.", color = Color(0xFFF25C75), fontSize = 14.sp)
+            if (s.zones.isEmpty()) Text("No zones yet. Nothing is recorded inside a zone.", color = sub, fontSize = 14.sp)
+            for (z in s.zones) ZoneRow(z, if (a.canSimulate) ({ a.simulateAt(z) }) else null) { a.removeZone(z.id) }
+            TextButton(onClick = a::addZoneHere) { Text("Add current place (150 m)") }
+            if (a.canSimulate && s.zones.isNotEmpty()) TextButton(onClick = { a.simulateAt(null) }) { Text("Stop simulating location (debug)") }
 
             Section("Older memories")
             val sc = s.scan
@@ -103,13 +115,14 @@ private fun ToggleRow(title: String, sub: String, on: Boolean, enabled: Boolean 
 }
 
 @Composable
-private fun ZoneRow(z: Zone, onRemove: () -> Unit) {
+private fun ZoneRow(z: Zone, onSimulate: (() -> Unit)?, onRemove: () -> Unit) {
     Row(Modifier.fillMaxWidth().background(Color(0x14000000), RoundedCornerShape(12.dp)).padding(12.dp),
         verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
             Text(z.name, fontSize = 16.sp)
             Text("%.5f, %.5f · %d m".format(z.lat, z.lon, z.radiusM.toInt()), fontSize = 12.sp, color = Color(0xFF8E8E93))
         }
+        if (onSimulate != null) TextButton(onClick = onSimulate) { Text("Simulate here") }
         TextButton(onClick = onRemove) { Text("Remove", color = Color(0xFFF25C75)) }
     }
     Spacer(Modifier.height(6.dp))

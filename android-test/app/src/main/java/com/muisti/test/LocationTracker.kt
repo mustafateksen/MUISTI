@@ -25,6 +25,8 @@ class LocationTracker(private val ctx: Context) {
     private val client = LocationServices.getFusedLocationProviderClient(ctx)
     private val geocoder = if (Geocoder.isPresent()) Geocoder(ctx, Locale.US) else null
     @Volatile private var latest: Location? = null
+    /** Debug builds only: a fixed position (Privacy settings -> "Simulate being here") to test no-record zones. */
+    @Volatile var simulated: Fix? = null
     @Volatile private var street: String? = null
     private var lastGeocoded: Location? = null
     private var geocoding = false
@@ -54,6 +56,7 @@ class LocationTracker(private val ctx: Context) {
 
     /** GPS speed (m/s) and accuracy (m) of the latest fresh fix, for the capture scheduler. */
     fun speed(): Pair<Float?, Float?> {
+        simulated?.let { return 0f to it.accuracyM }
         val l = latest ?: return null to null
         if (System.currentTimeMillis() - l.time > 10_000) return null to null
         return (if (l.hasSpeed()) l.speed else null) to l.accuracy
@@ -61,6 +64,7 @@ class LocationTracker(private val ctx: Context) {
 
     /** Latest fix if younger than [maxAgeMs] (iOS brief: no location older than 10 s). */
     fun fresh(maxAgeMs: Long = 10_000): Fix? {
+        simulated?.let { return it.copy(timeMs = System.currentTimeMillis()) }
         val l = latest ?: return null
         if (System.currentTimeMillis() - l.time > maxAgeMs) return null
         return Fix(l.latitude, l.longitude, l.accuracy, l.time, street)
@@ -68,7 +72,7 @@ class LocationTracker(private val ctx: Context) {
 
     /** One fix right now (for a photo added while not recording); null without permission or signal. */
     @SuppressLint("MissingPermission")
-    fun currentFix(): Fix? = runCatching {
+    fun currentFix(): Fix? = simulated ?: runCatching {
         val loc = com.google.android.gms.tasks.Tasks.await(
             client.getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY, null), 8, java.util.concurrent.TimeUnit.SECONDS) ?: return null
         Fix(loc.latitude, loc.longitude, loc.accuracy, loc.time, streetAt(loc.latitude, loc.longitude))
