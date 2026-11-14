@@ -69,7 +69,7 @@ fun TimelineScreen(d: TimelineDay, a: TimelineActions) {
                 TextButton(onClick = a::close) { Text("Done", fontWeight = FontWeight.SemiBold) }
             }
             when {
-                d.error != null -> Text(d.error, color = Color(0xFFF25C75), modifier = Modifier.padding(20.dp))
+                d.error != null -> Text(d.error, color = Color(0xFFE8EAED), modifier = Modifier.padding(20.dp))
                 d.cards == null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
                 d.cards.isEmpty() -> Text("No memories on this day.", color = sub, modifier = Modifier.padding(20.dp))
                 else -> LazyColumn(contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {

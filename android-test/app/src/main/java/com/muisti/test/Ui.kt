@@ -121,13 +121,14 @@ import kotlin.math.cos
 import kotlin.math.sin
 
 // ---- palette: same values as the iOS app (ios/Muisti/UI/Design/Palette.swift) ----
-private val Brand = Color(0xFF0064E0)
-private val BrandBlue = Color(0xFF0081FB)
-private val BrandSky = Color(0xFF1ABCFE)
+// black & white theme: every former colour accent is the one purple (text highlights) or white/grey
+private val Brand = Color(0xFFE8EAED)
+private val BrandBlue = Color(0xFFE8EAED)
+private val BrandSky = Color(0xFFE8EAED)
 private val Ink = Color(0xFF1C2B33)
-private val Amber = Color(0xFFFAA342)
-private val Rose = Color(0xFFF25C75)
-private val Violet = Color(0xFF7B61FF)
+private val Amber = Color(0xFFBDBDBD)
+private val Rose = Color(0xFFF1F3F4)
+private val Violet = Color(0xFFE8EAED)
 
 private data class Tones(
     val bg: Color, val card: Color, val card2: Color, val text: Color, val sub: Color, val hair: Color,
@@ -147,7 +148,7 @@ private val Suggestions = listOf(
 fun MuistiApp(act: MainActivity) {
     val dark = true                                   // the Aura design is a dark app
     val t = DarkTones
-    val scheme = darkColorScheme(primary = Aura.Lilac, background = Aura.Bg, surface = Aura.Card)
+    val scheme = darkColorScheme(primary = Aura.Lilac, onPrimary = Color.Black, background = Aura.Bg, surface = Aura.Card)
     val s = act.state
     var showSettings by remember { mutableStateOf(false) }
     var expanded by remember { mutableStateOf(true) }
@@ -216,13 +217,14 @@ private fun Aura(dark: Boolean) {
     val drift by rememberInfiniteTransition(label = "aura").animateFloat(0f, 1f,
         infiniteRepeatable(tween(9000, easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "d")
     val a = if (dark) 1f else 0.55f
+    // black & white version of the drifting light: white and silver glows that slowly move
     Canvas(Modifier.fillMaxWidth().height(460.dp)) {
         val w = size.width; val h = size.height
-        drawRect(Brush.radialGradient(listOf(Aura.Lilac.copy(alpha = 0.30f * a), Color.Transparent),
+        drawRect(Brush.radialGradient(listOf(Color.White.copy(alpha = 0.20f * a), Color.Transparent),
             center = Offset(w * (0.15f + 0.15f * drift), h * 0.05f), radius = w * 0.85f))
-        drawRect(Brush.radialGradient(listOf(Aura.Blurple.copy(alpha = 0.22f * a), Color.Transparent),
+        drawRect(Brush.radialGradient(listOf(Color(0xFFBDC1C6).copy(alpha = 0.16f * a), Color.Transparent),
             center = Offset(w * (0.95f - 0.2f * drift), h * (0.18f + 0.1f * drift)), radius = w * 0.75f))
-        drawRect(Brush.radialGradient(listOf(BrandSky.copy(alpha = 0.18f * a), Color.Transparent),
+        drawRect(Brush.radialGradient(listOf(Color.White.copy(alpha = 0.08f * a), Color.Transparent),
             center = Offset(w * 0.5f, h * (0.55f - 0.15f * drift)), radius = w * 0.6f))
     }
 }
@@ -239,7 +241,7 @@ private fun Header(s: AppState, t: Tones, onAgent: () -> Unit = {}, onSettings: 
     Row(Modifier.fillMaxWidth().padding(start = 22.dp, end = 14.dp, top = 10.dp, bottom = 14.dp),
         verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
-            Text("MUISTI", color = t.sub, fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 3.sp)
+            Text("MUISTI", color = Aura.Lilac, fontSize = 13.sp, fontWeight = FontWeight.Bold, letterSpacing = 3.sp)
             Text(greeting(), color = t.text, fontSize = 30.sp, fontWeight = FontWeight.Bold, letterSpacing = (-0.6).sp)
         }
         val (label, color) = when {
@@ -248,7 +250,7 @@ private fun Header(s: AppState, t: Tones, onAgent: () -> Unit = {}, onSettings: 
             s.recording && s.capturePause != null -> "Paused · ${s.capturePause}" to Amber
             s.recording -> "Remembering" to Rose
             !s.online -> "Not connected to Nemotron" to Amber
-            else -> "Ready" to Color(0xFF34C759)
+            else -> "Ready" to Aura.Lilac
         }
         Row(Modifier.clip(CircleShape).background(t.card.copy(alpha = 0.85f)).border(0.5.dp, t.hair, CircleShape)
             .padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -334,7 +336,7 @@ private fun LiveCard(act: MainActivity, s: AppState, t: Tones, expanded: Boolean
             FocusRing(s)
             Row(Modifier.align(Alignment.TopStart).padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
                 GlassCapsule {
-                    if (s.privacy != null) Box(Modifier.size(7.dp).clip(CircleShape).background(Color(0xFF34C759)))
+                    if (s.privacy != null) Box(Modifier.size(7.dp).clip(CircleShape).background(Aura.Lilac))
                     else if (s.recording) PulsingDot(Rose) else Box(Modifier.size(7.dp).clip(CircleShape).background(Color.White.copy(alpha = 0.7f)))
                     Spacer(Modifier.width(7.dp))
                     Text(if (s.privacy != null) "PRIVATE" else if (s.recording) "LIVE" else "PAUSED", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.2.sp)
@@ -400,7 +402,7 @@ private fun StatsRow(s: AppState, t: Tones, onMemories: () -> Unit) {
             s.privacyDropped > 0 -> "${s.privacyDropped} kept private"
             s.facesBlurred > 0 -> "${s.facesBlurred} blurred"
             else -> "Guard on"
-        }, Color(0xFF34C759))
+        }, Aura.Lilac)
         StatTile(Modifier.weight(1f), t, "Place", s.street ?: (if (s.hasLocation) "Locating…" else "—"), Violet)
     }
 }
@@ -531,7 +533,7 @@ private fun Transcript(act: MainActivity, s: AppState, t: Tones) {
 private fun QuestionBubble(text: String) {
     Box(Modifier.fillMaxWidth().padding(start = 56.dp), contentAlignment = Alignment.CenterEnd) {
         Text(text, color = Color(0xFF15153A), fontSize = 16.sp, lineHeight = 21.sp, fontWeight = FontWeight.Medium,
-            modifier = Modifier.shadow(16.dp, RoundedCornerShape(22.dp, 22.dp, 6.dp, 22.dp), ambientColor = Aura.Lilac, spotColor = Aura.Lilac)
+            modifier = Modifier.shadow(10.dp, RoundedCornerShape(22.dp, 22.dp, 6.dp, 22.dp), ambientColor = Color.White, spotColor = Color.White)
                 .clip(RoundedCornerShape(22.dp, 22.dp, 6.dp, 22.dp))
                 .background(Aura.LilacSoft)
                 .padding(horizontal = 16.dp, vertical = 11.dp))
@@ -581,7 +583,7 @@ private fun ConfirmRow(c: ConfirmCard, t: Tones, onAnswer: (Boolean) -> Unit) {
             Spacer(Modifier.width(10.dp))
             TextButton(onClick = { onAnswer(false) }) { Text("Cancel", color = t.sub) }
         }
-        "done" -> Text("Done", color = Color(0xFF34C759), fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+        "done" -> Text("Done", color = Aura.Lilac, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
         "cancelled" -> Text("Cancelled", color = t.sub, fontSize = 13.sp)
         else -> Text("Not confirmed", color = t.sub, fontSize = 13.sp)
     }
@@ -729,7 +731,7 @@ private fun VoiceOverlay(s: AppState, t: Tones, onClose: () -> Unit, onOrb: () -
                     VoicePhase.Thinking -> "THINKING"
                     VoicePhase.Speaking -> "SPEAKING · TAP TO INTERRUPT"
                     VoicePhase.Idle -> "CONNECTING"
-                }, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
+                }, color = Aura.Lilac, fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
                 Spacer(Modifier.height(14.dp))
                 val lastQ = s.messages.filterIsInstance<Msg.Question>().lastOrNull()?.text
                 val answer = (s.messages.lastOrNull() as? Msg.Answer)?.takeIf { !it.pending }?.text
@@ -748,9 +750,9 @@ private fun VoiceOverlay(s: AppState, t: Tones, onClose: () -> Unit, onOrb: () -
                 }
                 Spacer(Modifier.weight(1f))
                 // the only way out of the live conversation
-                Box(Modifier.fillMaxWidth().height(56.dp).shadow(18.dp, CircleShape, ambientColor = Aura.End, spotColor = Aura.End)
-                    .clip(CircleShape).background(Aura.End).clickable(onClick = onClose), contentAlignment = Alignment.Center) {
-                    Text("End", color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+                Box(Modifier.fillMaxWidth().height(56.dp)
+                    .clip(CircleShape).background(Aura.End).border(0.5.dp, t.hair, CircleShape).clickable(onClick = onClose), contentAlignment = Alignment.Center) {
+                    Text("End", color = Aura.Lilac, fontSize = 17.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.5.sp)
                 }
             }
         }

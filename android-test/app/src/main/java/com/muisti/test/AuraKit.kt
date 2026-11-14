@@ -61,14 +61,14 @@ object Aura {
     val Hair = Color(0x1FFFFFFF)
     val Text = Color(0xFFF1F3F4)
     val Sub = Color(0xFF9AA0A6)
-    val Lilac = Color(0xFF989AFF)        // accent
-    val LilacSoft = Color(0xFFD3D4FF)    // user bubble
-    val Blurple = Color(0xFF6056F0)
-    val Blue = Color(0xFF2F6BFF)         // orb core
-    val Violet = Color(0xFF8A2BE2)       // orb core
+    val Lilac = Color(0xFFE8EAED)        // the one accent: near-white (black & white theme, no colour)
+    val LilacSoft = Color(0xFFF1F3F4)    // user bubble: white (black & white theme)
+    val Blurple = Color(0xFF3C4043)
+    val Blue = Color(0xFFBDC1C6)
+    val Violet = Color(0xFF9AA0A6)
     val Cyan = Color(0xFF5EE7FF)
     val Pink = Color(0xFFFF6AD5)
-    val End = Color(0xFFF25C75)
+    val End = Color(0xFF1E1E21)          // End button: graphite, purple text
 }
 
 /**
@@ -84,7 +84,7 @@ fun WaveOrb(phase: VoicePhase, level: Float, modifier: Modifier, halo: Boolean =
     val lvl by animateFloatAsState(level.coerceIn(0f, 1f), spring(stiffness = 700f), label = "lvl")
     val energy = when (phase) {
         VoicePhase.Listening -> 0.12f + 1.7f * lvl
-        VoicePhase.Speaking -> 0.45f + 0.45f * ((sin(t * 7) + 1) / 2)
+        VoicePhase.Speaking -> 0.15f + 1.5f * lvl + 0.08f * sin(t * 5)   // pulses on every spoken word
         VoicePhase.Thinking -> 0.3f
         VoicePhase.Idle -> 0.12f
     }

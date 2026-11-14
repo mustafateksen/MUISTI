@@ -67,7 +67,7 @@ fun AgentCenterScreen(s: AgentCenterState, a: AgentCenterActions) {
                         Spacer(Modifier.height(4.dp))
                         Row {
                             Text(r.how, color = sub, fontSize = 12.sp, modifier = Modifier.weight(1f))
-                            r.evidence.firstOrNull()?.let { f -> Text("Show memory", color = Color(0xFF0081FB), fontSize = 12.sp,
+                            r.evidence.firstOrNull()?.let { f -> Text("Show memory", color = Color(0xFFE8EAED), fontSize = 12.sp,
                                 modifier = Modifier.clickable { a.openFrame(f) }) }
                         }
                     }

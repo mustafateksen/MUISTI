@@ -204,12 +204,19 @@ class MainActivity : ComponentActivity() {
                             .thenByDescending { it.quality }.thenBy { it.latency })
                         ?.firstOrNull()?.let { tts?.voice = it }
                 }
-                tts?.setSpeechRate(1.05f)
+                tts?.setSpeechRate(1.0f)
                 ttsReady = true
             }
         }
         tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-            override fun onStart(id: String?) { if (id == "answer") runOnUiThread { state.phase = VoicePhase.Speaking } }
+            override fun onStart(id: String?) { if (id?.startsWith("answer") == true) runOnUiThread { state.phase = VoicePhase.Speaking } }
+            // every spoken word gives the orb a pulse, so it moves with MUISTI's real speech
+            override fun onRangeStart(id: String?, start: Int, end: Int, frame: Int) {
+                if (id?.startsWith("answer") != true) return
+                val peak = 0.55f + java.util.Random().nextFloat() * 0.45f * minOf(1f, (end - start) / 6f + 0.3f)
+                runOnUiThread { state.level = peak }
+                mainHandler.postDelayed({ if (state.phase == VoicePhase.Speaking) state.level = 0.08f }, 120)
+            }
             // a filler ("One sec.") is not the end of the turn: only the answer hands the mic back
             override fun onDone(id: String?) { if (id == "answer") runOnUiThread { afterTurn() } }
             @Deprecated("Deprecated in Java")
@@ -1081,7 +1088,7 @@ class MainActivity : ComponentActivity() {
                 .getOrElse { "That didn't work: ${it.message?.take(60)}" }
             state.memories = withContext(Dispatchers.IO) { engine.store.sightings().size }
             state.messages.add(Msg.Answer(label = if (yes) "CHAT" else "CHAT", text = say))
-            if (spoken && ttsReady && state.live) tts?.speak(say, TextToSpeech.QUEUE_FLUSH, null, "answer") else if (spoken) afterTurn()
+            if (spoken && ttsReady && state.live) speakHuman(say, TextToSpeech.QUEUE_FLUSH) else if (spoken) afterTurn()
         }
     }
 
@@ -1144,7 +1151,7 @@ class MainActivity : ComponentActivity() {
             if (i >= 0) state.messages[i] = answer else state.messages.add(answer)
             if (spoken && ttsReady && state.live) {
                 // QUEUE_ADD: if the filler is mid-sentence, the answer follows it instead of cutting it off
-                tts?.speak(answer.text, TextToSpeech.QUEUE_ADD, null, "answer")
+                speakHuman(answer.text, TextToSpeech.QUEUE_ADD)
             } else if (spoken) afterTurn()
         }
     }
@@ -1251,6 +1258,34 @@ class MainActivity : ComponentActivity() {
         }
         override fun onEvent(t: Int, b: Bundle?) {}
     }
+
+    private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
+
+    /**
+     * Speaks like a person, not a reader: sentence by sentence with short, slightly varied pauses
+     * between them, and a little natural variation in tempo and pitch. Same voice, more human feel.
+     * Only the last sentence is "answer", so the mic opens again only after the whole reply.
+     */
+    private fun speakHuman(text: String, queueMode: Int) {
+        val parts = spokenText(text).split(Regex("""(?<=[.!?…])\s+""")).map { it.trim() }.filter { it.isNotEmpty() }
+        if (parts.isEmpty()) { tts?.speak(" ", queueMode, null, "answer"); return }
+        val rnd = java.util.Random()
+        parts.forEachIndexed { i, sentence ->
+            tts?.setSpeechRate(0.97f + rnd.nextFloat() * 0.08f)        // 0.97 .. 1.05
+            tts?.setPitch(0.98f + rnd.nextFloat() * 0.05f)             // 0.98 .. 1.03
+            tts?.speak(sentence, if (i == 0) queueMode else TextToSpeech.QUEUE_ADD, null,
+                if (i == parts.lastIndex) "answer" else "answer_$i")
+            if (i < parts.lastIndex) tts?.playSilentUtterance(170L + rnd.nextInt(170), TextToSpeech.QUEUE_ADD, "answer_gap_$i")
+        }
+        tts?.setSpeechRate(1.0f); tts?.setPitch(1.0f)
+    }
+
+    /** Text as a person would say it: "8-20" -> "8 to 20", no quote marks, separators become pauses. */
+    private fun spokenText(t: String): String = t
+        .replace(Regex("""\b(\d{1,2}(?::\d{2})?)\s*[-–]\s*(\d{1,2}(?::\d{2})?)\b"""), "\$1 to \$2")   // hours only, not phone numbers
+        .replace(Regex("""["“”*_#]"""), "")
+        .replace(" · ", ", ").replace(" / ", " or ")
+        .replace(Regex("""\s+"""), " ").trim()
 
     /** Ends the live conversation (the only way out: the End button). */
     fun stopVoice() {
