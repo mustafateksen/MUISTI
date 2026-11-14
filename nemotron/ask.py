@@ -342,6 +342,62 @@ def _ago(now: dt.datetime, t: dt.datetime) -> str:
     return "just now" if m < 2 else f"{m} minutes ago" if m < 90 else t.strftime("at %H:%M")
 
 
+
+# --- summaries and "which names did I see" -------------------------------------
+
+_SUMMARY_Q = re.compile(r"\b(summar\w*|recap|overview|what (have|did) i (just )?(see|seen|look at)\b(?!.*\b(on|at|near|next to|inside|under)\b)"
+                        r"|what happened|what was around me|describe (my|the) (day|walk|last))", re.I)
+_LAST_MIN = re.compile(r"\blast\s+(\d+|few|couple of)\s*(minutes?|mins?|hours?)\b", re.I)
+_NAMEISH = {"brand", "brands", "logo", "logos", "company", "companies", "name", "names", "sign", "signs",
+            "text", "store", "stores", "shop", "shops", "sponsor", "sponsors", "product", "products"}
+
+SUMMARY_PROMPT = """You summarise what a person saw, for a memory assistant on smart glasses.
+You get time-ordered evidence (E1, E2, ...) from their camera. Write 2-4 short spoken sentences, oldest
+to newest: the places, the most noticeable things, and any names or text that were read.
+Use ONLY the evidence. Do not guess brands or text that is not written in it. Do not mention frames or evidence ids.
+Return JSON {"answer": "...", "used": ["E1", ...]}."""
+SUMMARY_SCHEMA = {"type": "object", "properties": {"answer": {"type": "string"},
+                  "used": {"type": "array", "items": {"type": "string"}}}, "required": ["answer", "used"]}
+
+
+def _summary_window(question: str, parsed: dict) -> float:
+    m = _LAST_MIN.search(question)
+    if m:
+        n = {"few": 5, "couple of": 3}.get(m.group(1).lower(), None) or int(m.group(1))
+        return n * (60 if m.group(2).lower().startswith("hour") else 1)
+    return {"just_now": 15, "last_hour": 60, "today": 24 * 60, "any": 10 ** 6}[parsed["time"]]
+
+
+def _names_seen(docs: list[dict]) -> list[tuple[str, dict]]:
+    """Names READ on signs (OCR-verified fields only), most trustworthy first:
+    1. a sign's own name (the extractor picked it as the name), oldest first;
+    2. other text on signs only if it was read in 2+ separate memories (one-off reads are mostly garbled).
+    Word-like only: 3+ letters, mostly letters."""
+    def ok(c):
+        letters = sum(ch.isalpha() for ch in c)
+        return len(c) >= 3 and letters >= 3 and letters / len(c) >= 0.6
+
+    def key(c):
+        return re.sub(r"[^a-z0-9]", "", c.lower())
+
+    sights = sorted((d for d in docs if d["type"] == "sighting" and not d.get("weak")), key=lambda d: d["seen_at"])
+    out, seen = [], set()
+    for d in sights:
+        c = (d.get("name") or "").split(" / ")[0].strip(" .,:;")
+        if ok(c) and key(c) not in seen:
+            seen.add(key(c)); out.append((c, d))
+    counts, first = {}, {}
+    for d in sights:
+        m = re.search(r"Other text on sign: (.*?)(?:\. [A-Z][a-z]+:|$)", d["text"])
+        for c in (m.group(1).split(" / ") if m else []):
+            c = c.strip(" .,:;")
+            if ok(c) and key(c) not in seen:
+                counts[key(c)] = counts.get(key(c), 0) + 1
+                first.setdefault(key(c), (c, d))
+    out += [first[k] for k, n in counts.items() if n >= 2]
+    return out
+
+
 # --- main entry ----------------------------------------------------------------
 
 def ask(question: str, docs: list[dict], now: dt.datetime, min_score: float = 0.9) -> dict:
@@ -368,8 +424,26 @@ def ask(question: str, docs: list[dict], now: dt.datetime, min_score: float = 0.
                 "evidence_used": list(used), "evidence": ev, "why": why,
                 "calls": calls, "latency_s": round(time.time() - t0, 2)}
 
-    # Gate: nothing relevant enough -> abstain without asking the model.
-    if not hits or (parsed["attribute"] != "current_location" and hits[0][0] < min_score):
+    # "Summarise what I saw (in the last N minutes)": no single thing to search for, so take the
+    # time window, spread the evidence over it and let the model write a short recap from it.
+    if _SUMMARY_Q.search(question) and not parsed.get("target"):
+        win = _summary_window(question, parsed)
+        pool = sorted((d for d in docs if d["type"] == "sighting" and d["seen_at"] <= now
+                       and (now - d["seen_at"]).total_seconds() <= win * 60), key=lambda d: d["seen_at"])
+        if not pool:
+            return result("DONT_KNOW", "I haven't seen anything in that time.", why="summary: nothing in window")
+        step = max(1, len(pool) // 12)
+        hits[:] = [(1.0, d) for d in pool[::step][-12:]]
+        ev_block = "\n".join(f"E{i + 1} ({_ago(now, d['seen_at'])}): {d['text']}" for i, (sc, d) in enumerate(hits))
+        r = _json_call(SUMMARY_PROMPT, ev_block, SUMMARY_SCHEMA, "summary"); calls += 1
+        return result("SEEN", r.get("answer") or "I saw several places but can't summarise them.",
+                      used=[u for u in r.get("used") or [] if re.fullmatch(r"E\d+", u)], why=f"summary of last {win:g} min")
+
+    # Gate: nothing relevant enough -> abstain without asking the model. Questions with a target
+    # ("where was the ashtray?") need a real match; open questions ("what was on the table?") only a
+    # plausible one - the answer step still has to quote evidence or abstain.
+    gate = min_score if parsed.get("target") else min(min_score, 0.5)
+    if not hits or (parsed["attribute"] != "current_location" and hits[0][0] < gate):
         return result("DONT_KNOW", "I don't remember seeing that.", why="no relevant memory (gate)")
 
     # Gate: the asked attribute is never stored for the matched thing.
@@ -383,6 +457,18 @@ def ask(question: str, docs: list[dict], now: dt.datetime, min_score: float = 0.
     # List questions ("which gaming booths did I see?") are answered in code, not by the model:
     # a sighting counts only if the category appears in ITS OWN type/name/text. This makes
     # "these are all gaming booths because one sign said GAMERGY" impossible.
+    if parsed["attribute"] == "list" and (parsed.get("category") or "").lower() in _NAMEISH:
+        # "Which brands / names / signs did I see?" -> words that were READ, not a place category
+        names = _names_seen([d for d in docs if d["seen_at"] <= now and
+                             (now - d["seen_at"]).total_seconds() <= _summary_window(question, parsed) * 60])
+        if not names:
+            return result("DONT_KNOW", "I didn't read any names or brands.", why="list: no OCR names")
+        hits[:] = [(1.0, d) for _, d in names[:5]]
+        shown = [n for n, _ in names[:10]]
+        more = f" and {len(names) - 10} more" if len(names) > 10 else ""
+        return result("SEEN", f"I read these names: {', '.join(shown)}{more}.",
+                      used=[f"E{i + 1}" for i in range(len(hits))], why="list: names read on signs (code)")
+
     if parsed["attribute"] == "list" and parsed.get("category"):
         cat = parsed["category"]
         matches = [(s, d) for d in docs if d["type"] == "sighting" and not d.get("weak")
@@ -499,6 +585,18 @@ def _printed_by_nature(name: str) -> bool:
     return any(n == p or n.endswith(" " + p) for p in _PRINTED_NATURE)
 
 
+# Second-look questions (templates, so docs/prompts.json and the Android app use the same text).
+LOOK_REAL = ('Look carefully. Is there a real "{name}" physically present in this photo '
+             '(not just shown in a picture on a banner or screen)? Do not guess. If yes, say briefly where it is '
+             'relative to other things. Return JSON {{"present": true/false, "where": "..."}}.')
+LOOK_PRINTED = ('Look carefully. Is there a "{name}" visible in this photo (printed on a banner, '
+                'sign, wall, paper or shown on a screen all count)? Do not guess. If yes, say briefly where it is. '
+                'Return JSON {{"present": true/false, "where": "..."}}.')
+LOOK_PICTURE = ('Look carefully. Is there a {medium} in this photo that shows a picture of: '
+                '"{content}"? Do not guess. If yes, say briefly where that picture is. '
+                'Return JSON {{"present": true/false, "where": "..."}}.')
+
+
 def look_again(doc: dict, question: str) -> tuple[bool, str]:
     """Second look at the stored frame: is the object really there? Returns (present, where)."""
     path = os.path.join(doc.get("frame_dir") or "", doc.get("frame") or "")
@@ -506,19 +604,13 @@ def look_again(doc: dict, question: str) -> tuple[bool, str]:
         return True, "frame not available, trusted memory"
     jpeg = open(path, "rb").read()
     if doc["type"] == "depiction":
-        ask_txt = (f'Look carefully. Is there a {doc.get("medium") or "banner or screen"} in this photo that shows a picture of: '
-                   f'"{doc.get("content")}"? Do not guess. If yes, say briefly where that picture is. '
-                   f'Return JSON {{"present": true/false, "where": "..."}}.')
+        ask_txt = LOOK_PICTURE.format(medium=doc.get("medium") or "banner or screen", content=doc.get("content"))
     elif _printed_by_nature(doc.get("name") or ""):
         # QR codes, logos, signs ARE printed things: "not a picture on a banner" made the
         # re-check reject every real QR code on the Cloudinary banner.
-        ask_txt = (f'Look carefully. Is there a "{doc["name"]}" visible in this photo (printed on a banner, '
-                   f'sign, wall, paper or shown on a screen all count)? Do not guess. If yes, say briefly where it is. '
-                   f'Return JSON {{"present": true/false, "where": "..."}}.')
+        ask_txt = LOOK_PRINTED.format(name=doc["name"])
     else:
-        ask_txt = (f'Look carefully. Is there a real "{doc["name"]}" physically present in this photo '
-                   f'(not just shown in a picture on a banner or screen)? Do not guess. If yes, say briefly where it is '
-                   f'relative to other things. Return JSON {{"present": true/false, "where": "..."}}.')
+        ask_txt = LOOK_REAL.format(name=doc["name"])
     msgs = [{"role": "user", "content": [E._image_part(E.downscale(jpeg)), {"type": "text", "text": ask_txt}]}]
     try:
         r = E._parse_json(E._call(msgs, {"type": "json_schema", "json_schema": {"name": "look", "schema": LOOK_SCHEMA}},

@@ -389,5 +389,27 @@
    "present",
    "where"
   ]
+ },
+ "LOOK_REAL": "Look carefully. Is there a real \"{name}\" physically present in this photo (not just shown in a picture on a banner or screen)? Do not guess. If yes, say briefly where it is relative to other things. Return JSON {{\"present\": true/false, \"where\": \"...\"}}.",
+ "LOOK_PRINTED": "Look carefully. Is there a \"{name}\" visible in this photo (printed on a banner, sign, wall, paper or shown on a screen all count)? Do not guess. If yes, say briefly where it is. Return JSON {{\"present\": true/false, \"where\": \"...\"}}.",
+ "LOOK_PICTURE": "Look carefully. Is there a {medium} in this photo that shows a picture of: \"{content}\"? Do not guess. If yes, say briefly where that picture is. Return JSON {{\"present\": true/false, \"where\": \"...\"}}.",
+ "SUMMARY_PROMPT": "You summarise what a person saw, for a memory assistant on smart glasses.\nYou get time-ordered evidence (E1, E2, ...) from their camera. Write 2-4 short spoken sentences, oldest\nto newest: the places, the most noticeable things, and any names or text that were read.\nUse ONLY the evidence. Do not guess brands or text that is not written in it. Do not mention frames or evidence ids.\nReturn JSON {\"answer\": \"...\", \"used\": [\"E1\", ...]}.",
+ "SUMMARY_SCHEMA": {
+  "type": "object",
+  "properties": {
+   "answer": {
+    "type": "string"
+   },
+   "used": {
+    "type": "array",
+    "items": {
+     "type": "string"
+    }
+   }
+  },
+  "required": [
+   "answer",
+   "used"
+  ]
  }
 }
