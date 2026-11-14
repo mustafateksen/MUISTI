@@ -58,6 +58,7 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.ArrowUpward
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Mic
@@ -129,7 +130,7 @@ private data class Tones(
 )
 
 private val LightTones = Tones(Color(0xFFF2F2F7), Color.White, Color(0xFFE9E9EF), Color(0xFF0B0B0F), Color(0xFF8E8E93), Color(0x14000000))
-private val DarkTones = Tones(Color.Black, Color(0xFF1C1C1E), Color(0xFF2C2C2E), Color.White, Color(0xFF8E8E93), Color(0x1FFFFFFF))
+private val DarkTones = Tones(Aura.Bg, Aura.Card, Aura.Card2, Aura.Text, Aura.Sub, Aura.Hair)
 
 private val Suggestions = listOf(
     "What did the last sign say?",
@@ -140,9 +141,9 @@ private val Suggestions = listOf(
 
 @Composable
 fun MuistiApp(act: MainActivity) {
-    val dark = isSystemInDarkTheme()
-    val t = if (dark) DarkTones else LightTones
-    val scheme = if (dark) darkColorScheme(primary = BrandBlue) else lightColorScheme(primary = Brand)
+    val dark = true                                   // the Aura design is a dark app
+    val t = DarkTones
+    val scheme = darkColorScheme(primary = Aura.Lilac, background = Aura.Bg, surface = Aura.Card)
     val s = act.state
     var showSettings by remember { mutableStateOf(false) }
     var expanded by remember { mutableStateOf(true) }
@@ -164,13 +165,13 @@ fun MuistiApp(act: MainActivity) {
                         if (s.messages.isEmpty()) Welcome(t) { act.ask(it, spoken = false) }
                         else Transcript(act, s, t)
                     }
-                    Composer(t, onSend = { act.ask(it, spoken = false) }, onMic = { act.startListening() })
+                    Composer(t, s, onSend = { act.ask(it, spoken = false) }, onMic = { act.startListening() }, onAdd = { act.pickPhoto() })
+                    Spacer(Modifier.height(TabBarSpace))
                 }
             }
 
             if (s.showGallery) GallerySheet(s, t, onOpen = { sh -> s.showGallery = false; s.openShot = sh }) { s.showGallery = false }
             s.openShot?.let { shot -> ShotSheet(shot, t, act) { s.openShot = null } }
-            VoiceOverlay(s, t, onClose = { act.stopVoice() }, onOrb = { act.interrupt() })
             Toast(s, t)
 
             if (showSettings) SettingsDialog(s.serverUrl, onPhoto = { showSettings = false; act.pickPhoto() }, onSave = { act.saveServer(it); showSettings = false },
@@ -188,6 +189,19 @@ fun MuistiApp(act: MainActivity) {
                 androidx.activity.compose.BackHandler { s.showPrivacy = false }
                 com.muisti.ui.PrivacyScreen(s.privacySettings, s.zone, act.privacyActions)
             }
+            // floating tab bar over every screen (Aura design); the live voice view covers it
+            val tab = when { s.timeline != null -> Tab.Timeline; s.agentCenter != null -> Tab.Agent; s.showPrivacy -> Tab.Settings; else -> Tab.Home }
+            AuraTabBar(tab, s.unreadNotices, Modifier.align(Alignment.BottomCenter)) { pick ->
+                if (pick == tab) return@AuraTabBar
+                s.timeline = null; s.agentCenter = null; s.showPrivacy = false
+                when (pick) {
+                    Tab.Home -> {}
+                    Tab.Timeline -> act.openTimeline(0)
+                    Tab.Agent -> act.openAgentCenter()
+                    Tab.Settings -> s.showPrivacy = true
+                }
+            }
+            VoiceOverlay(s, t, onClose = { act.stopVoice() }, onOrb = { act.interrupt() })
         }
     }
 }
@@ -200,9 +214,9 @@ private fun Aura(dark: Boolean) {
     val a = if (dark) 1f else 0.55f
     Canvas(Modifier.fillMaxWidth().height(460.dp)) {
         val w = size.width; val h = size.height
-        drawRect(Brush.radialGradient(listOf(BrandBlue.copy(alpha = 0.42f * a), Color.Transparent),
+        drawRect(Brush.radialGradient(listOf(Aura.Lilac.copy(alpha = 0.30f * a), Color.Transparent),
             center = Offset(w * (0.15f + 0.15f * drift), h * 0.05f), radius = w * 0.85f))
-        drawRect(Brush.radialGradient(listOf(Violet.copy(alpha = 0.34f * a), Color.Transparent),
+        drawRect(Brush.radialGradient(listOf(Aura.Blurple.copy(alpha = 0.22f * a), Color.Transparent),
             center = Offset(w * (0.95f - 0.2f * drift), h * (0.18f + 0.1f * drift)), radius = w * 0.75f))
         drawRect(Brush.radialGradient(listOf(BrandSky.copy(alpha = 0.18f * a), Color.Transparent),
             center = Offset(w * 0.5f, h * (0.55f - 0.15f * drift)), radius = w * 0.6f))
@@ -512,24 +526,24 @@ private fun Transcript(act: MainActivity, s: AppState, t: Tones) {
 @Composable
 private fun QuestionBubble(text: String) {
     Box(Modifier.fillMaxWidth().padding(start = 56.dp), contentAlignment = Alignment.CenterEnd) {
-        Text(text, color = Color.White, fontSize = 16.sp, lineHeight = 21.sp,
-            modifier = Modifier.clip(RoundedCornerShape(22.dp, 22.dp, 6.dp, 22.dp))
-                .background(Brush.linearGradient(listOf(BrandBlue, Brand)))
-                .padding(horizontal = 15.dp, vertical = 11.dp))
+        Text(text, color = Color(0xFF15153A), fontSize = 16.sp, lineHeight = 21.sp, fontWeight = FontWeight.Medium,
+            modifier = Modifier.shadow(16.dp, RoundedCornerShape(22.dp, 22.dp, 6.dp, 22.dp), ambientColor = Aura.Lilac, spotColor = Aura.Lilac)
+                .clip(RoundedCornerShape(22.dp, 22.dp, 6.dp, 22.dp))
+                .background(Aura.LilacSoft)
+                .padding(horizontal = 16.dp, vertical = 11.dp))
     }
 }
 
 /** Assistant turn: small orb, a "seen / not sure" badge, the answer, and the frames that prove it. */
 @Composable
 private fun AnswerBlock(m: Msg.Answer, t: Tones, onOpen: (Shot) -> Unit, onConfirm: (String, Boolean) -> Unit = { _, _ -> }, onMap: (String) -> Unit) {
-    Row(Modifier.fillMaxWidth()) {
-        AvatarOrb(thinking = m.pending)
-        Spacer(Modifier.width(10.dp))
-        Column(Modifier.weight(1f).padding(top = 2.dp)) {
+    Row(Modifier.fillMaxWidth().padding(end = 28.dp)) {
+        Column(Modifier.clip(RoundedCornerShape(22.dp, 22.dp, 22.dp, 6.dp)).background(t.card)
+            .border(0.5.dp, t.hair, RoundedCornerShape(22.dp, 22.dp, 22.dp, 6.dp)).padding(horizontal = 16.dp, vertical = 12.dp)) {
             if (m.pending) { ThinkingDots(); return@Column }
             LabelPill(m.label)
             Spacer(Modifier.height(7.dp))
-            Text(m.text, color = t.text, fontSize = 17.sp, lineHeight = 24.sp)
+            Text(m.text, color = t.text, fontSize = 16.sp, lineHeight = 23.sp)
             m.confirm?.let { c -> ConfirmRow(c, t) { yes -> onConfirm(c.id, yes) } }
             if (m.shots.isNotEmpty()) {
                 Spacer(Modifier.height(12.dp))
@@ -613,7 +627,7 @@ private fun AvatarOrb(thinking: Boolean) {
 @Composable
 private fun LabelPill(label: String) {
     val (text, color) = when (label) {
-        "SEEN" -> "Seen" to BrandSky
+        "SEEN" -> "Seen" to Aura.Lilac
         "UNSURE" -> "Not sure" to Amber
         "DONT_KNOW" -> "Didn't see it" to Color(0xFF8E8E93)
         "FORGOT" -> "Forgotten" to Violet
@@ -632,51 +646,51 @@ private fun ThinkingDots() {
     Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.padding(vertical = 9.dp)) {
         repeat(3) { i ->
             val a by tr.animateFloat(0.25f, 1f, infiniteRepeatable(tween(500, delayMillis = i * 150), RepeatMode.Reverse), label = "d$i")
-            Box(Modifier.size(8.dp).clip(CircleShape).background(BrandBlue.copy(alpha = a)))
+            Box(Modifier.size(8.dp).clip(CircleShape).background(Aura.Lilac.copy(alpha = a)))
         }
     }
 }
 
 // ---------------- composer ----------------
 
-/** Floating glass capsule: the text field and ONE round button - the orb (talk) or send once text is typed. */
+/** Space kept free at the bottom of a screen for the floating tab bar. */
+private val TabBarSpace = 86.dp
+
+/** Aura composer: + (add a photo) · text · the wave orb (talk), which turns into a lilac send button once text is typed. */
 @Composable
-private fun Composer(t: Tones, onSend: (String) -> Unit, onMic: () -> Unit) {
+private fun Composer(t: Tones, s: AppState, onSend: (String) -> Unit, onMic: () -> Unit, onAdd: () -> Unit) {
     var text by remember { mutableStateOf("") }
     val haptics = LocalHapticFeedback.current
     val send = { if (text.isNotBlank()) { onSend(text); text = "" } }
-    Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp)
+    Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 8.dp)
         .shadow(14.dp, CircleShape, clip = false)
         .clip(CircleShape).background(t.card).border(0.5.dp, t.hair, CircleShape)
-        .padding(start = 20.dp, end = 6.dp, top = 6.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+        .padding(start = 6.dp, end = 6.dp, top = 6.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.size(40.dp).clip(CircleShape).background(t.card2).clickable(onClick = onAdd), contentAlignment = Alignment.Center) {
+            Icon(Icons.Rounded.Add, "Add a photo", tint = t.text, modifier = Modifier.size(22.dp))
+        }
+        Spacer(Modifier.width(12.dp))
         BasicTextField(
             value = text, onValueChange = { text = it }, singleLine = true,
-            textStyle = TextStyle(color = t.text, fontSize = 17.sp),
-            cursorBrush = SolidColor(BrandBlue),
+            textStyle = TextStyle(color = t.text, fontSize = 16.sp),
+            cursorBrush = SolidColor(Aura.Lilac),
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
             keyboardActions = KeyboardActions(onSend = { send() }),
             modifier = Modifier.weight(1f),
             decorationBox = { inner ->
-                if (text.isEmpty()) Text("Ask Muisti…", color = t.sub, fontSize = 17.sp)
+                if (text.isEmpty()) Text("Ask MUISTI…", color = t.sub, fontSize = 16.sp)
                 inner()
             })
         Spacer(Modifier.width(8.dp))
         val typing = text.isNotBlank()
-        val spin by rememberInfiniteTransition(label = "spin").animateFloat(0f, 360f,
-            infiniteRepeatable(tween(6000, easing = LinearEasing)), label = "deg")
-        Box(Modifier.size(48.dp).clip(CircleShape)
-            .background(if (typing) Brush.linearGradient(listOf(BrandBlue, Brand)) else Brush.sweepGradient(listOf(BrandSky, BrandBlue, Brand, Violet, BrandSky)))
+        Box(Modifier.size(46.dp).clip(CircleShape)
             .clickable { haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove); if (typing) send() else onMic() },
             contentAlignment = Alignment.Center) {
-            if (!typing) Canvas(Modifier.fillMaxSize()) {
-                val r = size.minDimension / 2
-                val rad = Math.toRadians(spin.toDouble())
-                drawCircle(Brush.radialGradient(listOf(Color.White.copy(alpha = 0.45f), Color.Transparent),
-                    center = Offset(center.x + r * 0.45f * cos(rad).toFloat(), center.y + r * 0.45f * sin(rad).toFloat()),
-                    radius = r * 0.9f), radius = r)
-            }
-            Icon(if (typing) Icons.Rounded.ArrowUpward else Icons.Rounded.Mic, if (typing) "Send" else "Talk",
-                tint = Color.White, modifier = Modifier.size(22.dp))
+            if (typing) {
+                Box(Modifier.size(40.dp).clip(CircleShape).background(Aura.LilacSoft), contentAlignment = Alignment.Center) {
+                    Icon(Icons.Rounded.ArrowUpward, "Send", tint = Color(0xFF15153A), modifier = Modifier.size(22.dp))
+                }
+            } else WaveOrb(VoicePhase.Idle, 0f, Modifier.size(46.dp), halo = false)
         }
     }
 }
@@ -686,52 +700,52 @@ private fun Composer(t: Tones, onSend: (String) -> Unit, onMic: () -> Unit) {
 @Composable
 private fun VoiceOverlay(s: AppState, t: Tones, onClose: () -> Unit, onOrb: () -> Unit) {
     AnimatedVisibility(s.live, enter = fadeIn(tween(250)), exit = fadeOut(tween(300))) {
-        // swallow touches so the screen below does not react; only the orb and End do something
-        Box(Modifier.fillMaxSize().background(t.bg.copy(alpha = 0.97f))
+        // swallow touches so the screen below does not react; only the orb, X and End do something
+        Box(Modifier.fillMaxSize().background(Aura.Bg)
             .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {}) {
-            Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().padding(24.dp),
+            Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().padding(horizontal = 22.dp, vertical = 14.dp),
                 horizontalAlignment = Alignment.CenterHorizontally) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    PulsingDot(Color(0xFF34C759))
-                    Spacer(Modifier.width(8.dp))
-                    Text("Live with MUISTI", color = t.text, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
-                }
-                // the previous exchange, small, so the conversation has context
-                val lastQ = s.messages.filterIsInstance<Msg.Question>().lastOrNull()?.text
-                val lastA = (s.messages.lastOrNull() as? Msg.Answer)?.takeIf { !it.pending }?.text
-                if (s.phase == VoicePhase.Listening && lastQ != null && lastA != null) {
-                    Spacer(Modifier.height(18.dp))
-                    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(t.card).padding(14.dp)) {
-                        Text(lastQ, color = t.sub, fontSize = 13.sp)
-                        Spacer(Modifier.height(4.dp))
-                        Text(lastA, color = t.text, fontSize = 14.sp, maxLines = 3)
+                    Box(Modifier.size(40.dp).clip(RoundedCornerShape(12.dp)).background(t.card).border(0.5.dp, t.hair, RoundedCornerShape(12.dp))
+                        .clickable(onClick = onClose), contentAlignment = Alignment.Center) {
+                        Icon(Icons.Rounded.Close, "Close", tint = t.text, modifier = Modifier.size(20.dp))
                     }
+                    Spacer(Modifier.width(12.dp))
+                    Text("Live with MUISTI", color = t.text, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
                 }
-                Spacer(Modifier.weight(0.6f))
+                Spacer(Modifier.weight(0.45f))
                 Box(Modifier.clip(CircleShape).clickable(interactionSource = remember { MutableInteractionSource() },
                     indication = null, onClick = onOrb)) {
-                    Orb(s.phase, s.level, Modifier.size(240.dp))
+                    WaveOrb(s.phase, s.level, Modifier.size(280.dp))
                 }
-                Spacer(Modifier.height(36.dp))
+                Spacer(Modifier.height(18.dp))
                 Text(when (s.phase) {
-                    VoicePhase.Listening -> "Listening…"
-                    VoicePhase.Thinking -> "Searching your memories…"
-                    VoicePhase.Speaking -> "Speaking · tap the orb to interrupt"
-                    VoicePhase.Idle -> "Connecting…"
-                }, color = t.sub, fontSize = 15.sp, fontWeight = FontWeight.Medium)
-                Spacer(Modifier.height(12.dp))
-                val shown = if (s.phase == VoicePhase.Speaking)
-                    (s.messages.lastOrNull() as? Msg.Answer)?.text.orEmpty() else s.partial
-                Text(shown.ifEmpty { "Ask about anything you've seen" }, color = if (shown.isEmpty()) t.sub else t.text,
-                    fontSize = if (s.phase == VoicePhase.Speaking) 20.sp else 26.sp, fontWeight = FontWeight.SemiBold,
-                    textAlign = TextAlign.Center, lineHeight = 32.sp, maxLines = 6)
+                    VoicePhase.Listening -> "LISTENING"
+                    VoicePhase.Thinking -> "THINKING"
+                    VoicePhase.Speaking -> "SPEAKING · TAP TO INTERRUPT"
+                    VoicePhase.Idle -> "CONNECTING"
+                }, color = Aura.Lilac, fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
+                Spacer(Modifier.height(14.dp))
+                val lastQ = s.messages.filterIsInstance<Msg.Question>().lastOrNull()?.text
+                val answer = (s.messages.lastOrNull() as? Msg.Answer)?.takeIf { !it.pending }?.text
+                val big = when (s.phase) {
+                    VoicePhase.Listening -> s.partial.ifEmpty { "Ask about anything you've seen" }
+                    VoicePhase.Thinking -> lastQ?.let { "“$it”" } ?: ""
+                    VoicePhase.Speaking -> answer.orEmpty()
+                    VoicePhase.Idle -> ""
+                }
+                Text(big, color = if (s.phase == VoicePhase.Listening && s.partial.isEmpty()) t.sub else t.text,
+                    fontSize = if (s.phase == VoicePhase.Speaking) 21.sp else 27.sp, fontWeight = FontWeight.Bold,
+                    textAlign = TextAlign.Center, lineHeight = 33.sp, maxLines = 6)
+                if (s.phase == VoicePhase.Thinking) {
+                    Spacer(Modifier.height(10.dp))
+                    Text("Thinking…", color = t.sub, fontSize = 16.sp)
+                }
                 Spacer(Modifier.weight(1f))
-                // FaceTime-style end button: the only way out of the live conversation
-                Row(Modifier.clip(CircleShape).background(Rose).clickable(onClick = onClose)
-                    .padding(horizontal = 28.dp, vertical = 14.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Rounded.Close, null, tint = Color.White, modifier = Modifier.size(20.dp))
-                    Spacer(Modifier.width(8.dp))
-                    Text("End", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                // the only way out of the live conversation
+                Box(Modifier.fillMaxWidth().height(56.dp).shadow(18.dp, CircleShape, ambientColor = Aura.End, spotColor = Aura.End)
+                    .clip(CircleShape).background(Aura.End).clickable(onClick = onClose), contentAlignment = Alignment.Center) {
+                    Text("End", color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
                 }
             }
         }
