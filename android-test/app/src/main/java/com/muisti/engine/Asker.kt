@@ -236,7 +236,8 @@ class Asker(private val llm: Llm, private val prompts: Prompts, private val imag
         val msgs = JSONArray().put(JSONObject().put("role", "user").put("content", JSONArray()
             .put(llm.imagePart(images.downscale(frame)))
             .put(llm.textPart("This photo is what the user's camera sees right now. Answer their question about it in one or two " +
-                "short spoken sentences. If there is readable text that matters, read it exactly. Do not guess what you cannot see. " +
+                "short spoken sentences. If there is readable text that matters, read it exactly; if it is not in the language of " +
+                "the question, also say what it means in that language. Do not guess what you cannot see. " +
                 "Question: $question"))))
         return llm.call(msgs, RawJson.TEXT, 300, 0.0).trim()
     }

@@ -62,6 +62,7 @@ class AppState {
     var toastText by mutableStateOf<String?>(null)
     val messages = mutableStateListOf<Msg>()
     var openShot by mutableStateOf<Shot?>(null)   // detail sheet
+    val translations = androidx.compose.runtime.mutableStateMapOf<String, String>()   // sign text -> English
     var showGallery by mutableStateOf(false)
     var gallery by mutableStateOf<List<Shot>?>(null)   // null = loading
 

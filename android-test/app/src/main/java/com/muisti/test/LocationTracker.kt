@@ -59,6 +59,20 @@ class LocationTracker(private val ctx: Context) {
         return Fix(l.latitude, l.longitude, l.accuracy, l.time, street)
     }
 
+    /** One fix right now (for a photo added while not recording); null without permission or signal. */
+    @SuppressLint("MissingPermission")
+    fun currentFix(): Fix? = runCatching {
+        val loc = com.google.android.gms.tasks.Tasks.await(
+            client.getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY, null), 8, java.util.concurrent.TimeUnit.SECONDS) ?: return null
+        Fix(loc.latitude, loc.longitude, loc.accuracy, loc.time, streetAt(loc.latitude, loc.longitude))
+    }.getOrNull()
+
+    /** Street name for a coordinate (blocking, call off the main thread). */
+    fun streetAt(lat: Double, lon: Double): String? = runCatching {
+        @Suppress("DEPRECATION")
+        geocoder?.getFromLocation(lat, lon, 1)?.firstOrNull()?.streetName()
+    }.getOrNull()
+
     private fun maybeGeocode(loc: Location) {
         val g = geocoder ?: return
         val last = lastGeocoded

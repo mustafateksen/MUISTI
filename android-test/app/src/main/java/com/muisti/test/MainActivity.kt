@@ -142,7 +142,18 @@ class MainActivity : ComponentActivity() {
                     val obs = withContext(Dispatchers.Main) { readText(bmp) }
                     val safe = blurrer.process(bmp) ?: return@withContext "Skipped: privacy check failed."
                     val jpeg = ByteArrayOutputStream().also { safe.image.compress(Bitmap.CompressFormat.JPEG, 85, it) }.toByteArray()
-                    val ok = engine.ingest(jpeg, obs, System.currentTimeMillis(), dHash(bmp), location.fresh(60_000))
+                    // where and when: the photo's own EXIF (a camera photo knows both), else right now
+                    val exif = runCatching { android.media.ExifInterface(java.io.ByteArrayInputStream(bytes)) }.getOrNull()
+                    val ll = FloatArray(2).takeIf { exif?.getLatLong(it) == true }?.map { it.toDouble() }
+                    val taken = exif?.getAttribute(android.media.ExifInterface.TAG_DATETIME_ORIGINAL)?.let {
+                        runCatching { java.text.SimpleDateFormat("yyyy:MM:dd HH:mm:ss", java.util.Locale.US).parse(it)?.time }.getOrNull()
+                    }
+                    val hasPerm = ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+                    val fix = when {
+                        ll != null -> Fix(ll[0], ll[1], 0f, taken ?: System.currentTimeMillis(), location.streetAt(ll[0], ll[1]))
+                        else -> location.fresh(60_000) ?: if (hasPerm) location.currentFix() else null
+                    }
+                    val ok = engine.ingest(jpeg, obs, taken ?: System.currentTimeMillis(), dHash(bmp), fix)
                     if (ok) { state.memories = engine.store.sightings().size; "Remembered · ${obs.size} text lines" } else "Nothing worth keeping in that photo."
                 }
             }.getOrElse { "Couldn't add the photo: ${it.message?.take(60)}" }
@@ -340,6 +351,15 @@ class MainActivity : ComponentActivity() {
         state.showGallery = false
         val name = shot.detail?.title ?: "this"
         ask("Tell me more about what I saw at $name", spoken = false)
+    }
+
+    fun translate(text: String) {
+        if (state.translations.containsKey(text)) return
+        state.translations[text] = "…"
+        lifecycleScope.launch {
+            state.translations[text] = runCatching { withContext(Dispatchers.IO) { engine.translate(text) } }
+                .getOrElse { "Couldn't translate right now." }
+        }
     }
 
     fun openMap(uri: String) {

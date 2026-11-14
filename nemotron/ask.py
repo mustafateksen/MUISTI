@@ -127,6 +127,9 @@ Evidence rules for answer:
 - label DONT_KNOW if the tools found nothing that answers it: say so briefly and mention the closest thing you did see.
 - support "inferred" if you had to interpret (e.g. guessing a floor from an elevator number), else "stated".
 - Evidence marked PICTURE is an image on a banner/poster/screen, not a real thing: say so if you use it.
+- Signs are often in another language (Finnish, Swedish, ...). Quote the original words exactly (that is the quote
+  for the evidence check) and then say what they mean in the user's language, e.g.
+  It said "Avoinna ma-pe 8-20": open Monday to Friday from 8 to 20. Never present a translation as the sign's own words.
 - For where-questions describe the place like a person: which booth, sign or landmark, what it was next to, when.
   Never say "left of view" or "frame".
 - label CHAT for small talk, the time or date, or general questions that are not about what the user saw.
@@ -176,7 +179,7 @@ AGENT_TOOLS = [
         "description": "The final spoken reply.",
         "parameters": {"type": "object", "properties": {
             "label": {"type": "string", "enum": ["SEEN", "DONT_KNOW", "CHAT"]},
-            "text": {"type": "string", "description": "one to three short spoken sentences"},
+            "text": {"type": "string", "description": "one to three short spoken sentences; when you quote sign text that is not in the user's language, add what it means"},
             "evidence": {"type": "array", "items": {"type": "string"}, "description": "ids like E2 you used"},
             "quotes": {"type": "array", "items": {"type": "string"}, "description": "one short exact span from EACH id"},
             "support": {"type": "string", "enum": ["stated", "inferred"]},

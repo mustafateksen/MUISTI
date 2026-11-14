@@ -164,4 +164,14 @@ Rules:
     }
 
     fun frameFile(name: String) = File(store.frameDir, name)
+
+    /** Translate sign text to English (detail sheet). Names stay as they are. */
+    fun translate(text: String): String {
+        val msgs = org.json.JSONArray()
+            .put(org.json.JSONObject().put("role", "system").put("content",
+                "Translate the text of a sign into natural English, line by line. Keep names, brands and numbers as they are. " +
+                    "If a line is already English, repeat it. Output only the translation."))
+            .put(org.json.JSONObject().put("role", "user").put("content", text))
+        return llm.call(msgs, com.muisti.engine.RawJson.TEXT, 300, 0.0).trim()
+    }
 }

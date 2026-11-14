@@ -132,4 +132,26 @@ class ParityTest {
         println(summary)
         File(if (useAgent) "build/parity_agent.txt" else "build/parity_ask.txt").writeText(out.append(summary).toString())
     }
+
+    /**
+     * Replays a question on a memory pulled from the phone (-Dmuisti.phonemem=<dir with frames.jsonl>),
+     * with the previous turn as history (-Dmuisti.hist="question|||answer"), and prints tools + cited evidence.
+     */
+    @Test
+    fun phoneMemoryDebug() {
+        val dir = System.getProperty("muisti.phonemem") ?: return
+        val q = System.getProperty("muisti.q") ?: return
+        setup()
+        val store = MemoryStore(File(dir))
+        val sightings = store.sightings()
+        val docs = Asker.docsFromSightings(sightings)
+        val now = sightings.maxOf { it.optLong("seen_at") } + 60_000
+        val hist = System.getProperty("muisti.hist")?.split("|||")?.let { listOf(it[0] to it[1]) } ?: emptyList()
+        repeat((System.getProperty("muisti.n") ?: "1").toInt()) {
+            val r = agent!!.run(q, hist, docs, now)
+            println("ANSWER [${r.label}] ${r.answer}")
+            println("  why: ${r.why}")
+            for (e in r.evidence.filter { it.id in r.used }) println("  USED ${e.id}: ${e.text.take(300)}")
+        }
+    }
 }

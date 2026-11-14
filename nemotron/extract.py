@@ -587,7 +587,7 @@ def verify(record: dict, lines: dict[str, str]) -> dict:
 
     check("name", fuzzy_in, multiline=True)  # names may wrap; items/phones may not
     check("phone", phone_supported)
-    check("hours", fuzzy_in)
+    check("hours", fuzzy_in, multiline=True)  # opening hours are usually one row per day ("MA-PE 8-20" / "LA 9-16")
 
     # other_text may span many lines: each ' / ' part must appear somewhere in the OCR text.
     if record.get("other_text"):

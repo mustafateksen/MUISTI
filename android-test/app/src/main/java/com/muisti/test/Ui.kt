@@ -794,6 +794,19 @@ private fun ShotSheet(shot: Shot, t: Tones, act: MainActivity, onClose: () -> Un
             if (d != null) {
                 if (d.signLines.isNotEmpty()) Section(t, "Text on the sign") {
                     d.signLines.forEach { Text(it, color = t.text, fontSize = 16.sp, fontWeight = FontWeight.Medium, modifier = Modifier.padding(vertical = 2.dp)) }
+                    val key = d.signText() ?: ""
+                    val tr = act.state.translations[key]
+                    Spacer(Modifier.height(8.dp))
+                    if (tr == null) {
+                        Text("🌐  Translate", color = BrandBlue, fontSize = 14.sp, fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.clip(CircleShape).background(BrandBlue.copy(alpha = 0.12f))
+                                .clickable { act.translate(key) }.padding(horizontal = 12.dp, vertical = 7.dp))
+                    } else {
+                        Box(Modifier.fillMaxWidth().height(0.5.dp).background(t.hair))
+                        Spacer(Modifier.height(8.dp))
+                        Text("IN ENGLISH", color = t.sub, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+                        Text(tr, color = t.text, fontSize = 15.sp, lineHeight = 21.sp, modifier = Modifier.padding(top = 4.dp))
+                    }
                 }
                 if (d.rows.isNotEmpty()) Section(t, "Listed here") {
                     d.rows.forEachIndexed { i, (label, value) ->

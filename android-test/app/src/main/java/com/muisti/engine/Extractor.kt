@@ -123,7 +123,7 @@ object Verify {
         }
         check("name", true) { v, t -> fuzzyIn(v, t) }       // names may wrap; items/phones may not
         check("phone", false) { v, t -> phoneSupported(v, t) }
-        check("hours", false) { v, t -> fuzzyIn(v, t) }
+        check("hours", true) { v, t -> fuzzyIn(v, t) }      // opening hours are usually one row per day
 
         // other_text may span many lines: each ' / ' part must appear somewhere in the OCR text
         record.str("other_text")?.let { ot ->

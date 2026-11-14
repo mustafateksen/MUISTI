@@ -54,7 +54,7 @@ tasks.withType<Test>().configureEach {
     systemProperty("muisti.repo", rootProject.file("..").absolutePath)
     System.getProperty("muisti.mem")?.let { systemProperty("muisti.mem", it) }
     System.getProperty("muisti.q")?.let { systemProperty("muisti.q", it) }
-    System.getProperty("muisti.agent")?.let { systemProperty("muisti.agent", it) }
+    for (k in listOf("muisti.agent", "muisti.phonemem", "muisti.hist", "muisti.n")) System.getProperty(k)?.let { systemProperty(k, it) }
     testLogging { showStandardStreams = true; events("failed") }
     outputs.upToDateWhen { false }
 }

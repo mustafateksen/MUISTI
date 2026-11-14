@@ -210,11 +210,18 @@ class Agent(private val llm: Llm, private val prompts: Prompts, private val aske
             return Verdict("DONT_KNOW", "I'm not sure. I can show you the closest thing I saw.", emptyList(),
                 "verifier rejected quotes ${badQ.ifEmpty { quotes }}",
                 retry = "every quote must be copied exactly from the evidence item it cites (bad: ${badQ.ifEmpty { quotes }}).")
-        val numsEv = Regex("\\d+").findAll(cited.joinToString(" ")).map { it.value }.toSet()
-        val bad = Regex("\\d+").findAll(text).map { it.value }.filter { it !in numsEv }.toList()
-        if (bad.isNotEmpty())
-            return Verdict("DONT_KNOW", "I'm not sure about the exact number. I can show you the frame.", emptyList(),
-                "verifier: numbers $bad not in evidence", retry = "the numbers $bad are not in the cited evidence; use only numbers it states.")
+        // Numbers: every sentence's numbers must appear TOGETHER in one cited item. Checking them against all
+        // cited items at once let the model glue "18" from one poster and "12" from another into fake hours.
+        val num = Regex("\\d+")
+        val perItem = cited.map { c -> num.findAll(c).map { it.value }.toSet() }
+        val badSentence = text.split(Regex("(?<=[.!?])\\s+")).firstOrNull { sentence ->
+            val ns = num.findAll(sentence).map { it.value }.toSet()
+            ns.isNotEmpty() && perItem.none { it.containsAll(ns) }
+        }
+        if (badSentence != null)
+            return Verdict("DONT_KNOW", "I'm not sure about the exact numbers. I can show you the frame.", emptyList(),
+                "verifier: numbers of '$badSentence' are not together in one cited item",
+                retry = "the numbers in '$badSentence' do not all come from the same evidence item; never combine numbers from different signs.")
         // visual facts only (no OCR text, no live view): look again at the stored frame
         // re-check the thing the user asked about first (as Asker does), then the most-seen one
         val objDocs = used.filter { it.type == "object" || it.type == "depiction" }
