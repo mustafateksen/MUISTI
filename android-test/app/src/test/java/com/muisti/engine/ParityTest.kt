@@ -61,6 +61,8 @@ class ParityTest {
         }
     }
 
+    private var agent: Agent? = null
+
     private fun setup(): Triple<Asker, List<Doc>, Long> {
         TimeZone.setDefault(TimeZone.getTimeZone("UTC"))   // Python uses naive local clock values
         val cfg = LlmConfig(System.getProperty("muisti.llmBaseUrl")!!, System.getProperty("muisti.llmModel")!!,
@@ -68,6 +70,7 @@ class ParityTest {
         val prompts = Prompts(File(nem, "docs/prompts.json").readText())
         val llm = Llm(cfg)
         val asker = Asker(llm, prompts, JvmImages, Embedder(cfg.embedKey, File("build/embed_cache.tsv")))
+        agent = Agent(llm, prompts, asker)
 
         val sightings = memFiles().flatMap { f ->
             val start = videoStart(f.path)
@@ -93,16 +96,22 @@ class ParityTest {
             println("KT %.3f %s %s %s".format(sc, d.type, d.frame, d.text.take(160)))
     }
 
+    /** -Dmuisti.agent=1: the same 31 questions through the tool-calling Agent (Nemotron native tools). */
     @Test
     fun askTestsLikePython() {
         if (System.getProperty("muisti.q") != null) return
-        val (asker, docs, now) = setup()
+        val (asker0, docs, now) = setup()
+        val useAgent = System.getProperty("muisti.agent") == "1"
+        val asker = object { fun ask(q: String, d: List<Doc>, n: Long) =
+            if (useAgent) agent!!.run(q, emptyList(), d, n) else asker0.ask(q, d, n) }
         val spec = JSONObject(File(nem, "eval/ask_tests.json").readText())
+        var latency = 0.0; var callsTotal = 0
         var ok = 0; var seenOk = 0; var trapOk = 0; var halluc = 0; var wrong = 0
         val qs = spec.arr("questions").objects()
         val out = StringBuilder()
         for (t in qs) {
             val r = asker.ask(t.getString("q"), docs, t.str("now")?.let { parseNow(it) } ?: now)
+            latency += r.latencyS; callsTotal += r.calls
             val expect = t.getString("expect_label")
             val accept = t.arr("accept_labels").strings().ifEmpty { listOf(expect) }
             fun has(s: String) = s.lowercase().split("|").any { r.answer.lowercase().contains(it) }
@@ -119,8 +128,8 @@ class ParityTest {
         }
         val nSeen = qs.count { it.getString("expect_label") == "SEEN" }
         val nTrap = qs.count { it.getString("expect_label") == "DONT_KNOW" }
-        val summary = "accuracy $ok/${qs.size} | answerable $seenOk/$nSeen | traps abstained $trapOk/$nTrap | hallucinated on traps $halluc | answered but wrong $wrong"
+        val summary = "accuracy $ok/${qs.size} | answerable $seenOk/$nSeen | traps abstained $trapOk/$nTrap | hallucinated on traps $halluc | answered but wrong $wrong | avg ${"%.1f".format(latency / qs.size)} s, ${"%.1f".format(callsTotal.toDouble() / qs.size)} calls"
         println(summary)
-        File("build/parity_ask.txt").writeText(out.append(summary).toString())
+        File(if (useAgent) "build/parity_agent.txt" else "build/parity_ask.txt").writeText(out.append(summary).toString())
     }
 }

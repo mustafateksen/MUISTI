@@ -1,0 +1,198 @@
+package com.muisti.engine
+
+import org.json.JSONArray
+import org.json.JSONObject
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+
+/**
+ * The assistant as a tool-calling agent (Nemotron native tool calling).
+ *
+ * The model reads the conversation, calls tools (search_memory, recent, list_names, look_now,
+ * forget) as many times as it needs, and must finish with `answer`. Everything a tool returns is
+ * registered as evidence E1, E2, ... and the final answer is checked by code exactly like the
+ * classic pipeline: quotes must appear in the cited evidence, numbers must match, object-only
+ * answers get a second look at the stored frame. A failed check is sent back to the model once
+ * ("your quote was not found"); if it fails again the reply is an honest "not sure".
+ */
+class Agent(private val llm: Llm, private val prompts: Prompts, private val asker: Asker) {
+
+    var maxRounds = 4   // the last round must be `answer`
+
+    fun run(question: String, history: List<Pair<String, String>>, docs: List<Doc>, now: Long,
+            liveFrame: ByteArray? = null, onForget: (Int) -> Int = { 0 }): Answer {
+        val t0 = System.currentTimeMillis()
+        var calls = 0
+        val evidence = ArrayList<Doc>()                  // E1 = evidence[0]
+        val trace = ArrayList<String>()
+        var retried = false
+
+        fun ev(d: Doc): String {
+            val i = evidence.indexOf(d).let { if (it >= 0) it else { evidence.add(d); evidence.size - 1 } }
+            val where = d.street?.let { ", on $it" } ?: ""
+            return "E${i + 1} (seen ${asker.ago(now, d.seenAt)}$where): ${d.text}"
+        }
+        fun result(label: String, text: String, used: List<String> = emptyList(), why: String = "", extra: JSONObject = JSONObject()): Answer {
+            val evs = evidence.mapIndexed { i, d -> Evidence("E${i + 1}", d.text, d.frame, d.seenAt, 1.0, d.lat, d.lon, d.street) }
+            return Answer(question, label, text, used, evs, (why + " | tools: " + trace.joinToString(", ")).trim(), calls,
+                (System.currentTimeMillis() - t0) / 1000.0, extra)
+        }
+
+        val clock = SimpleDateFormat("EEEE d MMMM yyyy, HH:mm", Locale.US).format(Date(now))
+        val msgs = JSONArray().put(JSONObject().put("role", "system").put("content",
+            prompts.agentPrompt + "\nCurrent local date and time: $clock. Memories stored: ${docs.count { it.type == "sighting" }}."))
+        for ((q, a) in history) {
+            msgs.put(JSONObject().put("role", "user").put("content", q))
+            msgs.put(JSONObject().put("role", "assistant").put("content", a))
+        }
+        msgs.put(JSONObject().put("role", "user").put("content", question))
+        val qvec by lazy { asker.semanticSetup(question, docs) }
+
+        for (round in 0 until maxRounds) {
+            // last round: the model must answer with what it has (it used to keep searching on follow-ups)
+            val last = round == maxRounds - 1
+            if (last) msgs.put(JSONObject().put("role", "user").put("content",
+                "Answer now with the evidence you have (or say you don't know)."))
+            val msg = llm.chatTools(msgs, prompts.agentTools,
+                if (last) RawJson("{\"type\": \"function\", \"function\": {\"name\": \"answer\"}}") else RawJson("\"required\"")); calls++
+            val toolCalls = msg.optJSONArray("tool_calls") ?: JSONArray()
+            if (toolCalls.length() == 0) {
+                // no tool call: treat plain text as a chat reply (it must not claim sightings: no evidence)
+                return result("CHAT", msg.str("content") ?: "Sorry, could you say that again?", why = "no tool call")
+            }
+            msgs.put(JSONObject().put("role", "assistant").put("content", msg.str("content") ?: "").put("tool_calls", toolCalls))
+            for (tc in toolCalls.objects()) {
+                val fn = tc.obj("function")
+                val name = fn.str("name") ?: ""
+                val args = runCatching { JSONObject(fn.str("arguments") ?: "{}") }.getOrElse { JSONObject() }
+                trace.add(name)
+                if (name == "answer") {
+                    val verdict = verify(question, args, evidence, ::lookAgainCounted)
+                    calls += lookCalls; lookCalls = 0
+                    if (verdict.retry != null && !retried) {
+                        retried = true
+                        msgs.put(tool(tc, "Not accepted: ${verdict.retry} Fix it and call answer again."))
+                        continue
+                    }
+                    return result(verdict.label, verdict.text, verdict.used, verdict.why)
+                }
+                val out = when (name) {
+                    "search_memory" -> searchMemory(args, docs, now, qvec, ::ev)
+                    "recent" -> recent(args.num("minutes", 10.0), docs, now, ::ev)
+                    "list_names" -> listNames(args.num("minutes", 0.0), docs, now, ::ev)
+                    "look_now" -> if (liveFrame == null) "The camera has no live view right now." else {
+                        val seen = asker.liveLook(args.str("question") ?: question, liveFrame); calls++
+                        val d = Doc("live", now, null, null, "live", false, "live view", "live", text = "LIVE VIEW right now: $seen")
+                        ev(d)
+                    }
+                    "forget" -> {
+                        val m = args.num("minutes", 10.0).toInt().coerceAtLeast(1)
+                        val n = onForget(m)
+                        return result("FORGOT", "Okay, I forgot everything from the last $m minutes.", why = "forgot $m min ($n frames)",
+                            extra = JSONObject().put("minutes", m))
+                    }
+                    else -> "Unknown tool $name."
+                }
+                msgs.put(tool(tc, out))
+            }
+        }
+        return result("DONT_KNOW", "Sorry, I couldn't work that out.", why = "no answer after $maxRounds rounds")
+    }
+
+    private fun tool(tc: JSONObject, content: String) = JSONObject().put("role", "tool")
+        .put("tool_call_id", tc.optString("id")).put("name", tc.obj("function").optString("name")).put("content", content)
+
+    // --- tools ----------------------------------------------------------------------
+
+    private fun searchMemory(a: JSONObject, docs: List<Doc>, now: Long, qvec: FloatArray?, ev: (Doc) -> String): String {
+        val minutes = a.num("minutes", 0.0)
+        val parsed = JSONObject()
+            .put("target", a.str("query") ?: "").put("category", JSONObject.NULL)
+            .put("attribute", a.str("what")?.takeIf { it in Asker.ATTRIBUTES } ?: "other")
+            .put("time", when { minutes <= 0 -> "any"; minutes <= 20 -> "just_now"; minutes <= 60 -> "last_hour"; else -> "today" })
+            .put("synonyms", a.arr("synonyms"))
+        val hits = asker.search(parsed, docs, now, qvec = qvec)
+        // same gate as the classic pipeline: nothing relevant enough -> say so, so the model abstains
+        if (hits.isEmpty() || hits[0].first < 0.9) return "No relevant memories found for '${a.str("query")}'."
+        val lines = hits.map { ev(it.second) }
+        val attr = parsed.optString("attribute")
+        val note = when {
+            attr == "phone" && hits.none { it.second.phone != null } -> "\nNote: none of these shows a phone number."
+            attr == "hours" && hits.none { it.second.hours != null } -> "\nNote: none of these shows opening hours."
+            else -> ""
+        }
+        return lines.joinToString("\n") + note
+    }
+
+    private fun recent(minutes: Double, docs: List<Doc>, now: Long, ev: (Doc) -> String): String {
+        val pool = docs.filter { it.type == "sighting" && it.seenAt <= now && (now - it.seenAt) / 60000.0 <= minutes }.sortedBy { it.seenAt }
+        if (pool.isEmpty()) return "Nothing was seen in the last ${minutes.toInt()} minutes."
+        val step = maxOf(1, pool.size / 12)
+        return pool.filterIndexed { i, _ -> i % step == 0 }.takeLast(12).joinToString("\n") { ev(it) }
+    }
+
+    private fun listNames(minutes: Double, docs: List<Doc>, now: Long, ev: (Doc) -> String): String {
+        val pool = if (minutes > 0) docs.filter { it.seenAt <= now && (now - it.seenAt) / 60000.0 <= minutes } else docs
+        val names = asker.namesSeen(pool)
+        if (names.isEmpty()) return "No names or signs were read."
+        return names.take(15).joinToString("\n") { (n, d) -> "\"$n\" -> " + ev(d) }
+    }
+
+    // --- verification (same rules as Asker.ask) -----------------------------------------
+
+    private var lookCalls = 0
+    private fun lookAgainCounted(d: Doc): Pair<Boolean, String> { lookCalls++; return asker.lookAgain(d) }
+
+    private class Verdict(val label: String, val text: String, val used: List<String>, val why: String, val retry: String? = null)
+
+    private fun verify(question: String, a: JSONObject, evidence: List<Doc>, look: (Doc) -> Pair<Boolean, String>): Verdict {
+        val label = a.str("label") ?: "DONT_KNOW"
+        val text = a.str("text") ?: ""
+        if (label == "CHAT") {
+            // a chat reply must not lean on memories
+            return if (a.arr("evidence").length() == 0) Verdict("CHAT", text, emptyList(), "small talk")
+            else Verdict("CHAT", text, emptyList(), "chat (evidence ignored)")
+        }
+        if (label != "SEEN") return Verdict("DONT_KNOW", text.ifEmpty { "I don't remember seeing that." }, emptyList(), "model abstained")
+        val ids = a.arr("evidence").strings()
+        if (a.str("support") != "stated" && a.str("observations") != null)
+            return Verdict("UNSURE", "I'm not sure. ${a.str("observations")}", ids, "answer was inferred, not stated in evidence")
+        val eid = Regex("E\\d+")
+        val used = ids.filter { eid.matches(it) && it.substring(1).toInt() in 1..evidence.size }.map { evidence[it.substring(1).toInt() - 1] }
+        val cited = used.map { it.text }
+        val quotes = a.arr("quotes").strings().filter { it.isNotBlank() }
+        val badQ = quotes.filter { q -> cited.none { Verify.fuzzyIn(q, it) } }
+        if (cited.isEmpty() || quotes.isEmpty() || badQ.isNotEmpty())
+            return Verdict("DONT_KNOW", "I'm not sure. I can show you the closest thing I saw.", emptyList(),
+                "verifier rejected quotes ${badQ.ifEmpty { quotes }}",
+                retry = "every quote must be copied exactly from the evidence item it cites (bad: ${badQ.ifEmpty { quotes }}).")
+        val numsEv = Regex("\\d+").findAll(cited.joinToString(" ")).map { it.value }.toSet()
+        val bad = Regex("\\d+").findAll(text).map { it.value }.filter { it !in numsEv }.toList()
+        if (bad.isNotEmpty())
+            return Verdict("DONT_KNOW", "I'm not sure about the exact number. I can show you the frame.", emptyList(),
+                "verifier: numbers $bad not in evidence", retry = "the numbers $bad are not in the cited evidence; use only numbers it states.")
+        // visual facts only (no OCR text, no live view): look again at the stored frame
+        // re-check the thing the user asked about first (as Asker does), then the most-seen one
+        val objDocs = used.filter { it.type == "object" || it.type == "depiction" }
+            .sortedWith(compareBy<Doc>({ -asker.tokMatch(question, it.name) }, { -it.support }))
+        val textBacked = used.any { it.type != "object" && it.type != "depiction" }
+        if (objDocs.isNotEmpty() && !textBacked) {
+            val notes = ArrayList<String>()
+            for (d in objDocs.take(3)) {
+                val (ok, note) = look(d)
+                notes.add("${d.name}@${d.frame}: ${if (ok) "yes" else "no"}")
+                if (ok) {
+                    asker.mediumGuard(question, used)?.let { return Verdict("DONT_KNOW", it, ids, "medium mismatch (code)") }
+                    return Verdict("SEEN", text, ids, "verified ${quotes.size} quote(s) + visual re-check (${d.name}): $note")
+                }
+            }
+            val d = objDocs[0]
+            val what = if (d.type == "depiction") "a picture (${d.content}) on a ${d.medium}" else "a ${d.name}"
+            return Verdict("DONT_KNOW", "I noted $what earlier, but looking at the photos again I'm not sure. I can show you the frames.",
+                emptyList(), "visual re-check failed: ${notes.joinToString("; ")}")
+        }
+        asker.mediumGuard(question, used)?.let { return Verdict("DONT_KNOW", it, ids, "medium mismatch (code)") }
+        return Verdict("SEEN", text, ids, "verified ${quotes.size} quote(s)")
+    }
+}

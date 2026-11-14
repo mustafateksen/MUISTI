@@ -22,6 +22,7 @@ P = {
     # templates: {name} / {medium} / {content} are filled in by the caller; {{ }} are literal braces
     "LOOK_REAL": ask.LOOK_REAL, "LOOK_PRINTED": ask.LOOK_PRINTED, "LOOK_PICTURE": ask.LOOK_PICTURE,
     "SUMMARY_PROMPT": ask.SUMMARY_PROMPT, "SUMMARY_SCHEMA": ask.SUMMARY_SCHEMA,
+    "AGENT_PROMPT": ask.AGENT_PROMPT, "AGENT_TOOLS": ask.AGENT_TOOLS,
 }
 json.dump(P, open(os.path.join(ROOT, "docs", "prompts.json"), "w", encoding="utf-8"), indent=1, ensure_ascii=False)
 

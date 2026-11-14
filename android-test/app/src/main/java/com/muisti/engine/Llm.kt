@@ -60,6 +60,8 @@ class Prompts(private val json: String) {
     val lookPicture: String = p.getString("LOOK_PICTURE")
     val summaryPrompt: String = p.getString("SUMMARY_PROMPT")
     val summarySchema = RawJson.extract(json, "SUMMARY_SCHEMA")
+    val agentPrompt: String = p.getString("AGENT_PROMPT")
+    val agentTools = RawJson.extract(json, "AGENT_TOOLS")
 
     /** Python str.format for our templates: {name} etc., with {{ }} as literal braces. */
     fun fill(template: String, vararg kv: Pair<String, String?>): String {
@@ -121,6 +123,35 @@ class Llm(private val cfg: LlmConfig) {
                 lastErr = e
             }
             Thread.sleep((minOf(30.0, Math.pow(2.0, attempt.toDouble())) * 1000 + Math.random() * 1000).toLong())
+        }
+        throw RuntimeException("Nemotron unavailable after retries: ${lastErr?.message}")
+    }
+
+    /**
+     * One tool-calling turn (OpenAI format, vLLM tool parser on Verda). Returns the assistant message:
+     * {content, tool_calls:[{id, function:{name, arguments}}]}. tool_choice "required" = it must call a tool.
+     */
+    fun chatTools(messages: JSONArray, tools: RawJson, toolChoice: RawJson = RawJson("\"required\""), maxTokens: Int = 600,
+                  temperature: Double = 0.0): JSONObject {
+        val body = JSONObject().put("model", cfg.model).put("messages", messages).put("temperature", temperature)
+            .put("top_p", 0.95).put("max_tokens", maxTokens)
+            .put("chat_template_kwargs", JSONObject().put("enable_thinking", false))
+        val text = body.toString().let {
+            it.substring(0, it.length - 1) + ", \"tools\": " + tools.text + ", \"tool_choice\": " + toolChoice.text + "}"
+        }
+        var lastErr: Exception? = null
+        for (attempt in 0 until 4) {
+            try {
+                val req = Request.Builder().url(cfg.baseUrl.trimEnd('/') + "/chat/completions")
+                    .header("Authorization", "Bearer " + cfg.key).post(text.toRequestBody(jsonType)).build()
+                http.newCall(req).execute().use { resp ->
+                    val out = resp.body?.string().orEmpty()
+                    if (resp.code == 429 || resp.code >= 500) throw RetryableHttp("HTTP ${resp.code}")
+                    if (!resp.isSuccessful) throw RuntimeException("HTTP ${resp.code}: ${out.take(300)}")
+                    return JSONObject(out).getJSONArray("choices").getJSONObject(0).getJSONObject("message")
+                }
+            } catch (e: RetryableHttp) { lastErr = e } catch (e: java.io.IOException) { lastErr = e }
+            Thread.sleep((minOf(20.0, Math.pow(2.0, attempt.toDouble())) * 1000 + Math.random() * 500).toLong())
         }
         throw RuntimeException("Nemotron unavailable after retries: ${lastErr?.message}")
     }

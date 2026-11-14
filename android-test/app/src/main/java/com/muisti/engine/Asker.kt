@@ -193,7 +193,7 @@ class Asker(private val llm: Llm, private val prompts: Prompts, private val imag
         return p
     }
 
-    private fun ago(now: Long, t: Long): String {
+    internal fun ago(now: Long, t: Long): String {
         val m = ((now - t) / 60000).toInt()
         return if (m < 2) "just now" else if (m < 90) "$m minutes ago" else "at " + SimpleDateFormat("HH:mm", Locale.US).format(Date(t))
     }
@@ -210,7 +210,7 @@ class Asker(private val llm: Llm, private val prompts: Prompts, private val imag
         return when (parsed.optString("time")) { "just_now" -> 15.0; "last_hour" -> 60.0; "today" -> 24 * 60.0; else -> 1e6 }
     }
 
-    private fun namesSeen(docs: List<Doc>): List<Pair<String, Doc>> {
+    internal fun namesSeen(docs: List<Doc>): List<Pair<String, Doc>> {
         fun ok(c: String): Boolean { val l = c.count { it.isLetter() }; return c.length >= 3 && l >= 3 && l.toDouble() / c.length >= 0.6 }
         fun key(c: String) = c.lowercase().replace(Regex("[^a-z0-9]"), "")
         val sights = docs.filter { it.type == "sighting" && !it.weak }.sortedBy { it.seenAt }
@@ -232,7 +232,7 @@ class Asker(private val llm: Llm, private val prompts: Prompts, private val imag
         return out
     }
 
-    private fun liveLook(question: String, frame: ByteArray): String {
+    internal fun liveLook(question: String, frame: ByteArray): String {
         val msgs = JSONArray().put(JSONObject().put("role", "user").put("content", JSONArray()
             .put(llm.imagePart(images.downscale(frame)))
             .put(llm.textPart("This photo is what the user's camera sees right now. Answer their question about it in one or two " +
@@ -377,7 +377,7 @@ class Asker(private val llm: Llm, private val prompts: Prompts, private val imag
     }
 
     private val MEDIA = listOf("poster", "banner", "billboard", "screen", "sign", "painting")
-    private fun mediumGuard(question: String, used: List<Doc>): String? {
+    internal fun mediumGuard(question: String, used: List<Doc>): String? {
         val asked = MEDIA.filter { Regex("\\b${it}s?\\b", RegexOption.IGNORE_CASE).containsMatchIn(question) }
         val deps = used.filter { it.type == "depiction" }
         fun group(m: String) = if (m == "screen") "screen" else "printed"
@@ -391,7 +391,7 @@ class Asker(private val llm: Llm, private val prompts: Prompts, private val imag
         "map", "flyer", "leaflet", "brochure", "price tag", "text", "signage", "notice", "board")
     private fun printedByNature(name: String): Boolean { val n = name.lowercase().trim(); return PRINTED_NATURE.any { n == it || n.endsWith(" $it") } }
 
-    private fun lookAgain(doc: Doc): Pair<Boolean, String> {
+    internal fun lookAgain(doc: Doc): Pair<Boolean, String> {
         val f = File(doc.frameDir ?: "", doc.frame ?: "")
         if (doc.frameDir == null || !f.exists()) return true to "frame not available, trusted memory"
         val txt = when {

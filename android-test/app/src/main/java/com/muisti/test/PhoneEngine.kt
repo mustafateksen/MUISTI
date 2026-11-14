@@ -44,6 +44,7 @@ class PhoneEngine(ctx: Context) {
     private val extractor = Extractor(llm, prompts, AndroidImages)
     private val embedder = Embedder(cfg.embedKey, File(ctx.filesDir, "embed_cache.tsv"))
     private val asker = Asker(llm, prompts, AndroidImages, embedder)
+    private val agent = com.muisti.engine.Agent(llm, prompts, asker)
     val store = MemoryStore(File(ctx.filesDir, "memory"))
     private val recentWords = HashMap<String, Int>()   // like the server's _RECENT_WORDS, for ocr_repair
 
@@ -62,12 +63,27 @@ class PhoneEngine(ctx: Context) {
         return true
     }
 
-    /** /ask on the phone. Nemotron reads the request (memory / live / summary / forget / chat) in its parse call. */
+    /**
+     * /ask on the phone: the tool-calling Agent (Nemotron decides which tools to use, sees the
+     * conversation so follow-ups work, and its final answer is verified by code). If the agent
+     * fails (network, malformed tool call) the classic pipeline answers instead.
+     */
     fun ask(question: String, liveFrame: ByteArray?): Answer {
         val now = System.currentTimeMillis()
         val docs = Asker.docsFromSightings(store.sightings())
+        val hist = synchronized(history) { history.toList() }
+        val answer = try {
+            agent.run(question, hist, docs, now, liveFrame, onForget = { m -> store.forget(now - m * 60_000L) })
+        } catch (e: Exception) {
+            classic(question, docs, now, liveFrame)
+        }
+        remember(question, answer.answer)
+        return answer
+    }
+
+    private fun classic(question: String, docs: List<com.muisti.engine.Doc>, now: Long, liveFrame: ByteArray?): Answer {
         val r = asker.ask(question, docs, now, liveFrame)
-        val answer = when (r.label) {
+        return when (r.label) {
             "FORGET" -> {
                 val minutes = (r.parsed.num("minutes").takeIf { it > 0 } ?: 10.0).toInt()
                 store.forget(now - minutes * 60_000L)
@@ -75,11 +91,8 @@ class PhoneEngine(ctx: Context) {
                     "forget $minutes min", r.calls, r.latencyS, r.parsed)
             }
             "ROUTE_CHAT" -> chat(question, now)
-            else -> if (docs.isEmpty() && r.label == "DONT_KNOW") Answer(question, "DONT_KNOW", "I haven't seen anything yet.",
-                emptyList(), emptyList(), "empty memory", r.calls, r.latencyS, r.parsed) else r
+            else -> r
         }
-        remember(question, answer.answer)
-        return answer
     }
 
     // --- small talk -------------------------------------------------------------------
