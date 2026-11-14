@@ -144,6 +144,14 @@ class MainActivity : ComponentActivity() {
                     val l = maxOf(bmp.width, bmp.height)
                     if (l > 1536) bmp = Bitmap.createScaledBitmap(bmp, bmp.width * 1536 / l, bmp.height * 1536 / l, true)
                     val obs = withContext(Dispatchers.Main) { readText(bmp) }
+                    // the same privacy gate as the live stream (one photo: judged on its own)
+                    val sc = if (privacy.available) privacy.score(bmp) else null
+                    if (sc != null) {
+                        android.util.Log.i("MuistiPrivacy", "import: stop %.2f (%s) pin %.2f text %.2f, %d ms".format(sc.stop, sc.stopClass, sc.pin, sc.textual, sc.ms))
+                        if (sc.stop >= 0.6f) return@withContext "Not saved: this looks like a private place (privacy)."
+                        if (sc.pin >= 0.7f) return@withContext "Not saved: a PIN pad or card terminal (privacy)."
+                    }
+                    PrivacyText.check(obs.map { it.text }, sc?.textual ?: 0f)?.let { return@withContext "Not saved: it shows $it (privacy)." }
                     val safe = blurrer.process(bmp) ?: return@withContext "Skipped: privacy check failed."
                     val jpeg = ByteArrayOutputStream().also { safe.image.compress(Bitmap.CompressFormat.JPEG, 85, it) }.toByteArray()
                     // where and when: the photo's own EXIF (a camera photo knows both), else right now
@@ -196,6 +204,7 @@ class MainActivity : ComponentActivity() {
             override fun onError(id: String?) { if (id == "answer") runOnUiThread { afterTurn() } }
         })
         engine.warm()
+        Thread { privacy.loadError?.let { e -> runOnUiThread { state.toast("Privacy check off: $e") } } }.start()   // loads the model early
 
         val need = listOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO,
             Manifest.permission.READ_CALENDAR, Manifest.permission.WRITE_CALENDAR)
@@ -236,6 +245,61 @@ class MainActivity : ComponentActivity() {
     private var lastSentHash = -1L
     private var framesThisSecond = 0
     private var secondStart = 0L
+
+    // ---------------- privacy gate (see PrivacyGuard) ----------------
+    private val privacy by lazy { PrivacyGuard(applicationContext) }
+    private val DELAY_MS = 3000L                       // frames wait this long on the phone before they may leave it
+    private class Held(val bmp: Bitmap, val hash: Long, val at: Long)
+    private val held = ArrayDeque<Held>()
+
+    /** Local scene check on a frame (~2/s). Nothing here leaves the phone. */
+    private fun privacyCheck(bmp: Bitmap, now: Long) {
+        if (!privacy.available) return
+        val s = runCatching { privacy.score(bmp) }.getOrNull() ?: return
+        state.privacyScore = s.priv
+        when (privacy.update(s, now)) {
+            PrivacyGuard.Event.ENTER, PrivacyGuard.Event.UPGRADE -> onPrivacyEnter()
+            PrivacyGuard.Event.EXIT -> onPrivacyExit()
+            null -> {}
+        }
+    }
+
+    private fun onPrivacyEnter() {
+        // the frames from just before the moment it was recognised are thrown away too
+        val dropped = synchronized(held) { held.size.also { held.clear() } }
+        liveJpeg = null
+        val why = privacy.reason ?: "something private"
+        val room = privacy.kind == PrivacyGuard.Kind.STOP
+        runOnUiThread {
+            state.privacy = why
+            state.privacyPauses++
+            state.privacyDropped += dropped
+            state.lastFrame = if (room) "Paused · privacy ($why)" else "Not saving · $why"
+            if (room && state.recording && ttsReady && state.phase != VoicePhase.Speaking)
+                tts?.speak("Privacy mode. I've stopped remembering.", TextToSpeech.QUEUE_ADD, null, "privacy")
+        }
+    }
+
+    private fun onPrivacyExit() {
+        runOnUiThread {
+            val wasRoom = state.privacy != null
+            state.privacy = null
+            state.lastFrame = "Privacy mode off · remembering again"
+            if (wasRoom && state.recording && ttsReady && state.phase != VoicePhase.Speaking)
+                tts?.speak("I'm remembering again.", TextToSpeech.QUEUE_ADD, null, "privacy")
+        }
+    }
+
+    /** Frames whose wait is over leave the phone (OCR, blur, Nemotron) - only if no privacy pause started meanwhile. */
+    private fun releaseHeld(now: Long) {
+        while (true) {
+            val h = synchronized(held) {
+                if (privacy.paused) { state.privacyDropped += held.size; held.clear(); null }
+                else held.firstOrNull()?.takeIf { now - it.at >= DELAY_MS }?.also { held.removeFirst() }
+            } ?: return
+            uploads.trySend(h.bmp to h.hash)
+        }
+    }
 
     private fun startCamera() {
         val future = ProcessCameraProvider.getInstance(this)
@@ -417,8 +481,12 @@ class MainActivity : ComponentActivity() {
         if (now - lastLiveAt >= 500) {
             lastLiveAt = now
             val b = bitmap()
-            liveJpeg = ByteArrayOutputStream().also { b.compress(Bitmap.CompressFormat.JPEG, 85, it) }.toByteArray()
+            privacyCheck(b, now)
+            // while private, the assistant can't look either ("what am I seeing?" gets nothing)
+            liveJpeg = if (privacy.paused) null
+                else ByteArrayOutputStream().also { b.compress(Bitmap.CompressFormat.JPEG, 85, it) }.toByteArray()
         }
+        releaseHeld(now)
         if (!state.recording) return
         if (windowStart == 0L) windowStart = now
         val sc = score()
@@ -501,13 +569,14 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun offerFrame(bmp: Bitmap, score: Double) {
+        if (privacy.paused) { state.privacyDropped++; return }   // private: not kept, not sent
         if (isBlurry(score)) { state.blurrySkipped++; state.lastFrame = "Skipped · blurry"; return }
         val h = dHash(bmp)
         if (lastSentHash != -1L && java.lang.Long.bitCount(h xor lastSentHash) <= 6) {
             state.sameSkipped++; return                     // same view as the last frame sent
         }
         lastSentHash = h
-        uploads.trySend(bmp to h)
+        synchronized(held) { held.addLast(Held(bmp, h, System.currentTimeMillis())); while (held.size > 12) held.removeFirst() }
     }
 
     /** Variance of a 4-neighbour Laplacian on the Y (grey) plane, sampled on a sparse grid. ~1 ms per frame. */
@@ -583,6 +652,13 @@ class MainActivity : ComponentActivity() {
         val seenAt = System.currentTimeMillis()
         val fix = location.fresh()
         val obs = readText(bmp)                  // text is read from the raw frame, on the phone
+        if (privacy.paused) { state.privacyDropped++; return }
+        // privacy: card numbers, IBAN, ID numbers, PIN/password screens never leave the phone
+        PrivacyText.check(obs.map { it.text }, privacy.lastTextual)?.let { why ->
+            state.privacyDropped++
+            if (privacy.textHit(why, System.currentTimeMillis()) != null) onPrivacyEnter()
+            return
+        }
         // privacy: heads are masked BEFORE the frame goes to Nemotron or into memory; on failure drop it
         val safe = withContext(Dispatchers.Default) { blurrer.process(bmp) }
         if (safe == null) { state.lastFrame = "Skipped · privacy check failed"; return }

@@ -44,6 +44,10 @@ class AppState {
     var lastFrame by mutableStateOf("")
     var blurrySkipped by mutableIntStateOf(0)
     var facesBlurred by mutableIntStateOf(0)
+    var privacy by mutableStateOf<String?>(null)        // non-null = privacy pause, with the reason ("a bathroom")
+    var privacyScore by mutableFloatStateOf(0f)
+    var privacyPauses by mutableIntStateOf(0)
+    var privacyDropped by mutableIntStateOf(0)         // frames that never left the phone because of privacy
     var hasLocation by mutableStateOf(false)
     var street by mutableStateOf<String?>(null)
     var sameSkipped by mutableIntStateOf(0)

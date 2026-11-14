@@ -270,13 +270,32 @@ private fun LiveCard(act: MainActivity, s: AppState, t: Tones, expanded: Boolean
             0f to Color.Black.copy(alpha = 0.45f), 0.28f to Color.Transparent,
             0.62f to Color.Transparent, 1f to Color.Black.copy(alpha = 0.6f))))
 
+        // privacy pause: the view is covered; nothing is being remembered or sent
+        androidx.compose.animation.AnimatedVisibility(s.privacy != null, enter = androidx.compose.animation.fadeIn(),
+            exit = androidx.compose.animation.fadeOut(), modifier = Modifier.fillMaxSize()) {
+            Box(Modifier.fillMaxSize().background(Brush.linearGradient(listOf(Color(0xF20B1E3A), Color(0xF2102A22)))),
+                contentAlignment = Alignment.Center) {
+                if (expanded) Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(24.dp)) {
+                    Text("🔒", fontSize = 40.sp)
+                    Spacer(Modifier.height(10.dp))
+                    Text("Privacy mode", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                    Text("Looks like ${s.privacy ?: "a private place"}. Nothing is being remembered or sent.",
+                        color = Color.White.copy(alpha = 0.85f), fontSize = 14.sp, textAlign = TextAlign.Center,
+                        modifier = Modifier.padding(top = 6.dp))
+                    Text("Resumes by itself when you leave", color = Color(0xFF7CE0A0), fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 10.dp))
+                }
+            }
+        }
+
         if (expanded) {
             FocusRing(s)
             Row(Modifier.align(Alignment.TopStart).padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
                 GlassCapsule {
-                    if (s.recording) PulsingDot(Rose) else Box(Modifier.size(7.dp).clip(CircleShape).background(Color.White.copy(alpha = 0.7f)))
+                    if (s.privacy != null) Box(Modifier.size(7.dp).clip(CircleShape).background(Color(0xFF34C759)))
+                    else if (s.recording) PulsingDot(Rose) else Box(Modifier.size(7.dp).clip(CircleShape).background(Color.White.copy(alpha = 0.7f)))
                     Spacer(Modifier.width(7.dp))
-                    Text(if (s.recording) "LIVE" else "PAUSED", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.2.sp)
+                    Text(if (s.privacy != null) "PRIVATE" else if (s.recording) "LIVE" else "PAUSED", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.2.sp)
                     if (s.recording && s.fps > 0) Text("  ${s.fps} fps", color = Color.White.copy(alpha = 0.7f), fontSize = 11.sp)
                 }
             }
@@ -302,7 +321,7 @@ private fun LiveCard(act: MainActivity, s: AppState, t: Tones, expanded: Boolean
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         if (s.recording) PulsingDot(Rose) else Box(Modifier.size(7.dp).clip(CircleShape).background(Color.White.copy(alpha = 0.7f)))
                         Spacer(Modifier.width(7.dp))
-                        Text(if (s.recording) "Remembering" else "Paused", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                        Text(if (s.privacy != null) "Privacy pause" else if (s.recording) "Remembering" else "Paused", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
                     }
                     Text("${if (s.useGlasses) "Glasses" else "Phone"} · ${s.memories} memories · tap to expand",
                         color = Color.White.copy(alpha = 0.72f), fontSize = 12.sp, maxLines = 1)
@@ -334,7 +353,12 @@ private fun MiniRecord(recording: Boolean, onClick: () -> Unit) {
 private fun StatsRow(s: AppState, t: Tones, onMemories: () -> Unit) {
     Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
         StatTile(Modifier.weight(1f).clip(RoundedCornerShape(20.dp)).clickable { onMemories() }, t, "Memories", "${s.memories}  ›", BrandBlue)
-        StatTile(Modifier.weight(1f), t, "Privacy", if (s.facesBlurred > 0) "${s.facesBlurred} blurred" else "Blur on", Color(0xFF34C759))
+        StatTile(Modifier.weight(1f), t, "Privacy", when {
+            s.privacy != null -> "Paused now"
+            s.privacyDropped > 0 -> "${s.privacyDropped} kept private"
+            s.facesBlurred > 0 -> "${s.facesBlurred} blurred"
+            else -> "Guard on"
+        }, Color(0xFF34C759))
         StatTile(Modifier.weight(1f), t, "Place", s.street ?: (if (s.hasLocation) "Locating…" else "—"), Violet)
     }
 }

@@ -46,7 +46,19 @@ val copyPrompts by tasks.registering(Copy::class) {
     from(rootProject.file("../nemotron/docs/prompts.json"))
     into(layout.projectDirectory.dir("src/main/assets"))
 }
-tasks.named("preBuild") { dependsOn(copyPrompts) }
+// Privacy gate model (MobileCLIP-S0 image encoder, ONNX, 45 MB, Apple research licence): downloaded once, not in git.
+val fetchPrivacyModel by tasks.registering {
+    val out = layout.projectDirectory.file("src/main/assets/mobileclip_s0_vision.onnx").asFile
+    outputs.file(out)
+    onlyIf { !out.exists() }
+    doLast {
+        val tmp = File(out.path + ".part")
+        uri("https://huggingface.co/Xenova/mobileclip_s0/resolve/main/onnx/vision_model.onnx").toURL()
+            .openStream().use { ins -> tmp.outputStream().use { out -> ins.copyTo(out) } }
+        tmp.renameTo(out)
+    }
+}
+tasks.named("preBuild") { dependsOn(copyPrompts, fetchPrivacyModel) }
 
 // Parity tests talk to the real model with the same keys (eval against the Python pipeline).
 tasks.withType<Test>().configureEach {
@@ -82,6 +94,7 @@ dependencies {
     // where each memory was made (Mustafa's LocationProvider, ported)
     implementation("com.google.android.gms:play-services-location:21.3.0")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.20.0")   // on-device privacy gate (MobileCLIP)
     // Ray-Ban Meta glasses camera (Wearables Device Access Toolkit)
     implementation("com.meta.wearable:mwdat-core:1.0.1")
     implementation("com.meta.wearable:mwdat-camera:1.0.1")
