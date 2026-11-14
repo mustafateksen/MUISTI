@@ -88,7 +88,7 @@ struct PhotoViewer: View {
     private var bottomBar: some View {
         HStack(spacing: Theme.Spacing.m) {
             Button(action: save) {
-                Label(saved ? "Saved" : "Save to Photos",
+                Label(saved ? String(localized: "Saved") : String(localized: "Save to Photos"),
                       systemImage: saved ? "checkmark" : "square.and.arrow.down")
                     .contentTransition(.symbolEffect(.replace))
                     .frame(maxWidth: .infinity, minHeight: 44)
@@ -97,7 +97,7 @@ struct PhotoViewer: View {
 
             if let image {
                 let preview = Image(uiImage: image)
-                ShareLink(item: preview, preview: SharePreview(title ?? "Muisti memory", image: preview)) {
+                ShareLink(item: preview, preview: SharePreview(title ?? String(localized: "Muisti memory"), image: preview)) {
                     Label("Share", systemImage: "square.and.arrow.up")
                         .labelStyle(.iconOnly)
                         .frame(width: 44, height: 44)

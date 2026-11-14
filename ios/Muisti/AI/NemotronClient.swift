@@ -269,6 +269,70 @@ actor NemotronClient {
         return text
     }
 
+    // MARK: Tools
+
+    /// One function call the model asked for (`arguments` is its JSON object as text).
+    struct ToolCall: Sendable {
+        let name: String
+        let arguments: String
+
+        func decode<T: Decodable>(_ type: T.Type) -> T? {
+            try? JSONDecoder().decode(T.self, from: Data(arguments.utf8))
+        }
+    }
+
+    /// The model's turn: words for the user, or the tools it wants run (native tool calling,
+    /// supported by both hosts: probe 14 Nov).
+    struct ToolReply: Sendable {
+        var text: String
+        var calls: [ToolCall]
+    }
+
+    /// `tools` is the OpenAI `tools` array as JSON text. The model must call one of them
+    /// (`required`): with `auto` it answered memory questions out of its head ("I don't have
+    /// that in your memory") instead of searching — 9 of 29 eval turns, 14 Nov.
+    func chatTools(system: String, user: String, tools: String, maxTokens: Int = 400, temperature: Double = 0,
+                   route requested: Route? = nil) async throws -> ToolReply {
+        let route = requested ?? preferredRoute()
+        let baseURL = route == .primary ? settings.baseURL : Provider.nvidia.baseURL
+        guard let toolList = try? JSONSerialization.jsonObject(with: Data(tools.utf8)) else {
+            throw NemotronError.badResponse("tools are not JSON")
+        }
+        let body: [String: Any] = [
+            "model": route == .primary ? settings.chatModel : Provider.nvidia.chatModel,
+            "messages": [["role": "system", "content": system], ["role": "user", "content": user]],
+            "tools": toolList,
+            "tool_choice": "required",
+            "max_tokens": maxTokens,
+            "temperature": temperature,
+            "top_p": 0.95,
+            "stream": false,
+            "chat_template_kwargs": ["enable_thinking": false],
+        ]
+        let sent = ContinuousClock.now
+        var completed = false
+        defer { noteLatency(route, seconds: (ContinuousClock.now - sent).seconds, completed: completed) }
+        let data = try await post(baseURL.appendingPathComponent("chat/completions"), json: body,
+                                  key: route == .primary ? settings.apiKey : settings.effectiveRerankKey)
+        completed = true
+        guard
+            let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let choices = root["choices"] as? [[String: Any]],
+            let message = choices.first?["message"] as? [String: Any]
+        else { throw NemotronError.badResponse("missing choices[0].message") }
+        let calls = (message["tool_calls"] as? [[String: Any]] ?? []).compactMap { call -> ToolCall? in
+            guard let function = call["function"] as? [String: Any], let name = function["name"] as? String else { return nil }
+            if let text = function["arguments"] as? String { return ToolCall(name: name, arguments: text.isEmpty ? "{}" : text) }
+            if let object = function["arguments"], let json = try? JSONSerialization.data(withJSONObject: object) {
+                return ToolCall(name: name, arguments: String(decoding: json, as: UTF8.self))
+            }
+            return ToolCall(name: name, arguments: "{}")
+        }
+        let text = (message["content"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !calls.isEmpty || !text.isEmpty else { throw NemotronError.badResponse("empty turn") }
+        return ToolReply(text: text, calls: calls)
+    }
+
     /// Chat whose answer must be a JSON object; tolerant of code fences / prose around it.
     func chatJSON<T: Decodable>(_ type: T.Type, system: String, user: String, image: ImagePart? = nil,
                                 examples: [(user: String, assistant: String)] = [], jsonSchema: String? = nil,

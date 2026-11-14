@@ -4,9 +4,9 @@ enum PhotoToast: Equatable {
 
     var text: String {
         switch self {
-        case .saved: "Saved to Photos"
-        case .denied: "No access to Photos.\nSettings > Muisti > Photos"
-        case .failed: "Couldn't save. Try again."
+        case .saved: String(localized: "Saved to Photos")
+        case .denied: String(localized: "No access to Photos.\nSettings > Muisti > Photos")
+        case .failed: String(localized: "Couldn't save. Try again.")
         }
     }
 

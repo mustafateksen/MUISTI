@@ -9,9 +9,9 @@ struct VoiceControls: View {
         HStack {
             switch phase {
             case .listening:
-                control("Cancel", systemImage: "xmark")
+                control(String(localized: "Cancel"), systemImage: "xmark")
             case .speaking:
-                control("Stop", systemImage: "speaker.slash.fill")
+                control(String(localized: "Stop"), systemImage: "speaker.slash.fill")
             default:
                 ProgressView()
                     .frame(height: 56)

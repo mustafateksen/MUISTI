@@ -32,40 +32,40 @@ struct IslandStatus: Equatable {
         switch controller.state {
         case _ where usesGlasses && !wearables.isRegistered:
             (symbol, tint, title, message, action, persistent) =
-                ("eyeglasses", .attention, "Glasses not connected", "Just approve Muisti once in the Meta AI app.", .register, true)
+                ("eyeglasses", .attention, String(localized: "Glasses not connected"), String(localized: "Just approve Muisti once in the Meta AI app."), .register, true)
         case .needsRegistration:
             (symbol, tint, title, message, action, persistent) =
-                ("link", .attention, "Connect your glasses", "Approve Muisti in the Meta AI app.", .register, true)
+                ("link", .attention, String(localized: "Connect your glasses"), String(localized: "Approve Muisti in the Meta AI app."), .register, true)
         case .needsPermission:
             (symbol, tint, title, message, action, persistent) =
-                ("camera.badge.ellipsis", .attention, "Camera access needed", "Allow glasses camera access in Meta AI.", .permission, true)
+                ("camera.badge.ellipsis", .attention, String(localized: "Camera access needed"), String(localized: "Allow glasses camera access in Meta AI."), .permission, true)
         case .failed(let error):
             (symbol, tint, title, message, action, persistent) =
-                ("exclamationmark.triangle.fill", .danger, "Something went wrong", error, .retry, true)
+                ("exclamationmark.triangle.fill", .danger, String(localized: "Something went wrong"), error, .retry, true)
         case .waitingForDevice:
             (symbol, tint, title, message, action, persistent) =
-                ("antenna.radiowaves.left.and.right", .attention, "Waiting for glasses",
-                 controller.isRunning ? glasses.waitingHint : "Make sure your glasses are on, unfolded, and near your phone.", nil, true)
+                ("antenna.radiowaves.left.and.right", .attention, String(localized: "Waiting for glasses"),
+                 controller.isRunning ? glasses.waitingHint : String(localized: "Make sure your glasses are on, unfolded, and near your phone."), nil, true)
         case .paused(let reason):
             (symbol, tint, title, message, action, persistent) =
-                ("pause.circle.fill", .attention, "Paused", reason, controller.isRunning ? .resume : .start, true)
+                ("pause.circle.fill", .attention, String(localized: "Paused"), reason, controller.isRunning ? .resume : .start, true)
         case .starting:
             (symbol, tint, title, message, action, persistent) =
-                ("hourglass", .attention, "Connecting", usesGlasses ? "Connecting to your glasses' camera…" : "Opening the iPhone camera…", nil, false)
+                ("hourglass", .attention, String(localized: "Connecting"), usesGlasses ? String(localized: "Connecting to your glasses' camera…") : String(localized: "Opening the iPhone camera…"), nil, false)
         case .running:
             if let warning {
                 (symbol, tint, title, message, action, persistent) =
-                    ("exclamationmark.triangle.fill", .attention, "Recording, with a warning", warning, nil, true)
+                    ("exclamationmark.triangle.fill", .attention, String(localized: "Recording, with a warning"), warning, nil, true)
             } else if let battery, battery < 15, !charging {
                 (symbol, tint, title, message, action, persistent) =
-                    ("battery.25percent", .attention, "Glasses battery low", "Battery at \(battery)%. You'll need to charge soon.", nil, false)
+                    ("battery.25percent", .attention, String(localized: "Glasses battery low"), String(localized: "Battery at \(battery)%. You'll need to charge soon."), nil, false)
             } else {
                 (symbol, tint, title, message, action, persistent) =
-                    (sourceSymbol, .success, "Remembering", "Saving the signs and text you see.", .stop, false)
+                    (sourceSymbol, .success, String(localized: "Remembering"), String(localized: "Saving the signs and text you see."), .stop, false)
             }
         case .idle:
             (symbol, tint, title, message, action, persistent) =
-                (sourceSymbol, .secondary, "Recording off", "Start recording and I'll remember the signs, numbers, and times you see.", .start, false)
+                (sourceSymbol, .secondary, String(localized: "Recording off"), String(localized: "Start recording and I'll remember the signs, numbers, and times you see."), .start, false)
         }
         key = "\(title)|\(message)"
     }

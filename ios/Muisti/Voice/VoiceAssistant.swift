@@ -47,6 +47,24 @@ final class VoiceAssistant {
     @ObservationIgnored private var speechDelegate: SpeechFinishDelegate?
     @ObservationIgnored private var silenceTask: Task<Void, Never>?
     @ObservationIgnored private var maxTask: Task<Void, Never>?
+    /// Starts the search on what was heard so far, shortly into a pause (see `QueryEngine.prepare`).
+    @ObservationIgnored private var prepareTask: Task<Void, Never>?
+    /// The question being answered (cancelled when the user taps to say something else).
+    @ObservationIgnored private var queryTask: Task<AskResult, Never>?
+    /// The user tapped while Muisti was thinking or speaking: drop that turn and listen.
+    @ObservationIgnored private var interrupted = false
+    /// Warnings that arrived while a question was being heard or answered: said right after it.
+    @ObservationIgnored private var waitingAnnouncements: [(text: String, language: String?, expectsReply: Bool)] = []
+    @ObservationIgnored private var recognizers: [String: SFSpeechRecognizer] = [:]
+    @ObservationIgnored private var knownNames: [String] = []
+    @ObservationIgnored private var knownNamesAt = Date.distantPast
+    /// Times of one spoken turn, written to the trace file when it ends.
+    @ObservationIgnored private var turn = TurnTimeline()
+
+    /// End of a question = this long without a new word. The search already starts
+    /// `prepareAfter` into the pause, so the wait is not lost time.
+    static let endOfQuestionSilence = 1.2
+    static let prepareAfter = 0.45
 
     init(engine: QueryEngine, location: LocationProvider) {
         self.engine = engine
@@ -75,19 +93,20 @@ final class VoiceAssistant {
             phase = .failed("No access to the microphone. Settings > Muisti > Microphone.")
             return
         }
-        guard let recognizer = SFSpeechRecognizer(locale: Locale(identifier: localeIdentifier)), recognizer.isAvailable else {
+        guard let recognizer = recognizer(), recognizer.isAvailable else {
             phase = .failed("Speech recognition isn't available for this language right now (\(localeIdentifier)).")
             return
         }
         do {
             let levels = levels
             let session: ListeningSession
+            let names = await names()
             if let tap = glassesMic, tap.isFlowing {
                 Log.pipeline.info("listening on the glasses mic (camera stream audio)")
-                session = TapSpeechSession(recognizer: recognizer, contextualStrings: await vocabulary(), tap: tap)
+                session = TapSpeechSession(recognizer: recognizer, contextualStrings: names, tap: tap)
             } else {
                 try Self.activateAudioSession(glassesMic: prefersGlassesMic())
-                session = SpeechSession(recognizer: recognizer, contextualStrings: await vocabulary())
+                session = SpeechSession(recognizer: recognizer, contextualStrings: names)
             }
             try session.start { [weak self] text, isFinal in
                 Task { @MainActor in self?.handlePartial(text, isFinal: isFinal) }
@@ -98,6 +117,7 @@ final class VoiceAssistant {
             }
             self.session = session
             phase = .listening
+            turn.mark("mic open")
             armSilenceTimer(after: 6)   // nothing said within 6 s → give up quietly
             maxTask = Task { [weak self] in
                 try? await Task.sleep(for: .seconds(15))
@@ -117,6 +137,8 @@ final class VoiceAssistant {
         guard phase == .listening else { return }
         silenceTask?.cancel()
         maxTask?.cancel()
+        prepareTask?.cancel()
+        turn.mark("end of question")
         session?.stop()
         session = nil
         levels.reset()
@@ -124,8 +146,10 @@ final class VoiceAssistant {
         guard !question.isEmpty else {
             phase = .idle
             playEndTone()   // listening is over (nothing said)
+            await engine.dropPrepared()
             try? await Task.sleep(for: .milliseconds(700))
             Self.deactivateAudioSession()
+            await sayWaitingAnnouncements()
             return
         }
         // Leave .listening now, before any suspension: the recogniser's final result and the
@@ -144,12 +168,18 @@ final class VoiceAssistant {
         case .listening:
             silenceTask?.cancel()
             maxTask?.cancel()
+            prepareTask?.cancel()
+            Task { await engine.dropPrepared() }
             session?.stop()
             session = nil
             levels.reset()
             transcript = ""
             phase = .idle
             Self.deactivateAudioSession()
+        case .thinking:
+            // The question is dropped: its answer is neither shown nor spoken.
+            interrupted = true
+            queryTask?.cancel()
         case .speaking:
             player.stop()
             synthesizer.stopSpeaking(at: .immediate)
@@ -180,7 +210,23 @@ final class VoiceAssistant {
     func ask(_ question: String, byVoice: Bool = false) async {
         transcript = question
         phase = .thinking
-        var result = await engine.ask(question, location: location.freshFix(maxAge: 120))
+        interrupted = false
+        turn.mark("asking")
+        let engine = engine, fix = location.freshFix(maxAge: 120)
+        let query = Task { await engine.ask(question, location: fix) }
+        queryTask = query
+        let waiting = byVoice ? waitingTones() : nil
+        var result = await query.value
+        waiting?.cancel()
+        queryTask = nil
+        if interrupted {
+            // The user tapped to say something else: this answer is not shown or spoken.
+            Log.pipeline.info("ask “\(question, privacy: .public)” dropped (the user interrupted)")
+            interrupted = false
+            phase = .idle
+            return
+        }
+        turn.mark("answer ready")
         if let command = result.safety, let reply = await safetyHandler(command) {
             result.answer = reply
             await engine.noteExchange(question: question, answer: reply)
@@ -193,8 +239,16 @@ final class VoiceAssistant {
             phase = .speaking
             await speak(result.answer, language: result.language ?? localeIdentifier)
         }
+        turn.mark("spoken")
+        Trace.note("turn “\(question.prefix(60))” · \(turn.summary) · engine \(result.latencyMs) ms · \(result.trace ?? "")")
         phase = .idle
+        if interrupted {
+            // Stopped by a tap: the microphone opens next (`pushToTalk`), nothing else happens.
+            interrupted = false
+            return
+        }
         Self.deactivateAudioSession()
+        if await sayWaitingAnnouncements() { return }
         // Spoken conversation: the mic opens again (earcon first) only when Muisti asked
         // something back (`expects_reply`); after "thanks" or a plain answer it stays closed,
         // and a double tap asks the next question.
@@ -213,24 +267,96 @@ final class VoiceAssistant {
         history.insert(note, at: 0)
         if history.count > 20 { history.removeLast() }
         await engine.noteMuistiSaid(text)
-        // Never talk over the user or over an answer being read.
-        guard phase == .idle || phase.isFailed else { return }
+        // Never talk over the user or over an answer being read: it is said right after.
+        // (Before, a warning that arrived during a question was only written to the history.)
+        guard phase == .idle || phase.isFailed else {
+            waitingAnnouncements.append((text, language, expectsReply))
+            if waitingAnnouncements.count > 3 { waitingAnnouncements.removeFirst() }
+            Trace.note("warning held until the turn ends: \(text.prefix(60))")
+            return
+        }
+        await say(text, language: language, expectsReply: expectsReply)
+    }
+
+    private func say(_ text: String, language: String?, expectsReply: Bool) async {
         phase = .speaking
         await speak(text, language: language ?? localeIdentifier)
         phase = .idle
         Self.deactivateAudioSession()
+        if interrupted {
+            interrupted = false
+            return
+        }
         if expectsReply {
             if glassesListening() { expectGlassesReply() } else { await startListening() }
         }
     }
 
+    /// Says the warnings held back during the last turn. Returns whether anything was said.
+    @discardableResult
+    private func sayWaitingAnnouncements() async -> Bool {
+        guard !waitingAnnouncements.isEmpty else { return false }
+        while phase == .idle || phase.isFailed, !waitingAnnouncements.isEmpty {
+            let next = waitingAnnouncements.removeFirst()
+            await say(next.text, language: next.language, expectsReply: next.expectsReply)
+        }
+        return true
+    }
+
+    /// A quiet tick while the answer is being worked out, so a slow reply is not dead air.
+    private func waitingTones() -> Task<Void, Never> {
+        Task { [weak self] in
+            try? await Task.sleep(for: .seconds(1.6))
+            while !Task.isCancelled, let self, self.phase == .thinking {
+                self.playWaitingTone()
+                try? await Task.sleep(for: .seconds(2.4))
+            }
+        }
+    }
+
+    private func recognizer() -> SFSpeechRecognizer? {
+        if let known = recognizers[localeIdentifier] { return known }
+        let made = SFSpeechRecognizer(locale: Locale(identifier: localeIdentifier))
+        recognizers[localeIdentifier] = made
+        return made
+    }
+
+    /// Names for the recogniser. Read from memory at most once a minute (a scan of the newest
+    /// records): a stale list is used at once and refreshed behind it.
+    private func names() async -> [String] {
+        if knownNames.isEmpty {
+            knownNames = await vocabulary()
+            knownNamesAt = Date()
+        } else if Date().timeIntervalSince(knownNamesAt) > 60 {
+            knownNamesAt = Date()
+            Task { self.knownNames = await self.vocabulary() }
+        }
+        return knownNames
+    }
+
+    /// Before the first question: the recogniser and the name list are ready when the tap comes.
+    func warmUp() {
+        _ = recognizer()
+        Task { _ = await self.names() }
+    }
+
     private func handlePartial(_ text: String, isFinal: Bool) {
         guard phase == .listening else { return }
+        let changed = text != transcript
         transcript = text
         if isFinal {
             Task { await finishListening() }
         } else {
-            armSilenceTimer(after: 1.6)   // end of question = 1.6 s without new words
+            if changed { turn.mark("last word") }
+            armSilenceTimer(after: Self.endOfQuestionSilence)
+            // A short pause: start searching on these words. If the user goes on, the next
+            // partial replaces it; if not, the answer is that much closer when listening ends.
+            prepareTask?.cancel()
+            prepareTask = Task { [weak self] in
+                try? await Task.sleep(for: .seconds(Self.prepareAfter))
+                guard !Task.isCancelled, let self, self.phase == .listening else { return }
+                await self.engine.prepare(text, location: self.location.freshFix(maxAge: 120))
+            }
         }
     }
 
@@ -241,6 +367,7 @@ final class VoiceAssistant {
             Log.pipeline.info("listening ended without speech: \(message, privacy: .public)")
             silenceTask?.cancel()
             maxTask?.cancel()
+            prepareTask?.cancel()
             session?.stop()
             session = nil
             levels.reset()
@@ -248,7 +375,10 @@ final class VoiceAssistant {
             playEndTone()
             Task {
                 try? await Task.sleep(for: .milliseconds(700))
-                if self.phase == .idle { Self.deactivateAudioSession() }
+                if self.phase == .idle {
+                    Self.deactivateAudioSession()
+                    await self.sayWaitingAnnouncements()
+                }
             }
         } else {
             Task { await finishListening() }
@@ -301,7 +431,10 @@ final class VoiceAssistant {
         // Settings.) The orb pulses on words instead.
         await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in
             let delegate = SpeechFinishDelegate {
-                Task { @MainActor in levels.wordSpoken() }
+                Task { @MainActor in
+                    levels.wordSpoken()
+                    self.turn.markOnce("first sound")
+                }
             } done: { @Sendable in
                 done.resume()
             }
@@ -356,17 +489,30 @@ final class VoiceAssistant {
     /// already listening, or stop an answer being read.
     func pushToTalk() async {
         // One double tap reaches the app as two taps up to ~2 s apart: the late one must not
-        // stop the answer it just asked for.
-        guard Date().timeIntervalSince(lastPush) > 2.5 else { return }
-        lastPush = Date()
+        // end the listening the first one started. Interrupting an answer needs no such wait
+        // (an answer never starts within 2.5 s of the tap that asked for it).
+        let sinceLast = Date().timeIntervalSince(lastPush)
         switch phase {
         case .listening:
+            guard sinceLast > 2.5 else { return }
+            lastPush = Date()
             await finishListening()
-        case .speaking:
+        case .speaking, .thinking:
+            // The user has something else to say: stop and listen right away (before: a tap
+            // while thinking did nothing, one while speaking only stopped the voice).
+            guard sinceLast > 0.7 else { return }
+            lastPush = Date()
+            interrupted = true
             cancel()
-        case .thinking:
-            break
+            let waitStart = Date()
+            while phase == .speaking || phase == .thinking, Date().timeIntervalSince(waitStart) < 1.5 {
+                try? await Task.sleep(for: .milliseconds(20))
+            }
+            guard phase == .idle || phase.isFailed else { return }
+            await listenWithEarcon()
         default:
+            guard sinceLast > 2.5 else { return }
+            lastPush = Date()
             await listenWithEarcon()
         }
     }
@@ -374,15 +520,20 @@ final class VoiceAssistant {
     /// Soft rising two-note bell, then the microphone opens (the bell is over by then, so
     /// the recogniser does not hear it).
     func listenWithEarcon() async {
+        turn = TurnTimeline()
         if glassesMic?.isFlowing == true {
-            playEarcon()   // the glasses mic is in the camera stream: nothing to switch
+            // The glasses mic is in the camera stream: nothing to switch, and words said during
+            // the tone are heard (before: the first half second after the tap was not recorded).
+            playEarcon()
+            try? await Task.sleep(for: .milliseconds(120))
         } else if prefersGlassesMic(), await Self.prepareGlassesMic() {
             // The tone goes through the glasses on the mic profile: when it plays, they listen.
             playEarcon(keepRoute: true)
+            try? await Task.sleep(for: .milliseconds(560))
         } else {
             playEarcon()
+            try? await Task.sleep(for: .milliseconds(560))
         }
-        try? await Task.sleep(for: .milliseconds(560))
         await startListening()
     }
 
@@ -429,6 +580,35 @@ final class VoiceAssistant {
     }
 
     @ObservationIgnored private var earconPlayer: AVAudioPlayer?
+    @ObservationIgnored private var waitingPlayer: AVAudioPlayer?
+
+    private func playWaitingTone() {
+        if waitingPlayer == nil { waitingPlayer = try? AVAudioPlayer(data: Self.waitingWAV) }
+        waitingPlayer?.volume = 0.35
+        waitingPlayer?.currentTime = 0
+        waitingPlayer?.play()
+    }
+
+    /// One soft low note (G4 with a quick fade), 0.18 s: "still working on it".
+    static let waitingWAV: Data = {
+        let rate = 44_100.0
+        let total = Int(rate * 0.18)
+        let samples = (0..<total).map { i -> Int16 in
+            let t = Double(i) / rate
+            let envelope = min(1, t / 0.008) * exp(-t / 0.05)
+            return Int16(sin(2 * .pi * 392 * t) * envelope * 0.5 * Double(Int16.max))
+        }
+        var data = Data()
+        func put<T: FixedWidthInteger>(_ v: T) { withUnsafeBytes(of: v.littleEndian) { data.append(contentsOf: $0) } }
+        let bytes = samples.count * 2
+        data.append(contentsOf: Array("RIFF".utf8)); put(UInt32(36 + bytes))
+        data.append(contentsOf: Array("WAVE".utf8)); data.append(contentsOf: Array("fmt ".utf8))
+        put(UInt32(16)); put(UInt16(1)); put(UInt16(1)); put(UInt32(44_100)); put(UInt32(88_200))
+        put(UInt16(2)); put(UInt16(16))
+        data.append(contentsOf: Array("data".utf8)); put(UInt32(bytes))
+        samples.forEach { put($0) }
+        return data
+    }()
 
     /// Original earcon in the style of smart-glasses "listening" tones: two warm notes a fifth
     /// apart (C5 → G5), each with octave and twelfth partials that fade faster than the
@@ -554,6 +734,31 @@ final class VoiceAssistant {
             }
         default: return false
         }
+    }
+}
+
+/// When each step of a spoken turn happened, as seconds from the tap ("mic open 0.3 · last
+/// word 2.1 · end of question 3.3 · answer ready 4.2 · first sound 4.4").
+struct TurnTimeline {
+    private let start = ContinuousClock.now
+    private var marks: [(name: String, at: Double)] = []
+
+    mutating func mark(_ name: String) {
+        let at = (ContinuousClock.now - start).seconds
+        if let i = marks.firstIndex(where: { $0.name == name }) { marks[i].at = at } else { marks.append((name, at)) }
+    }
+
+    mutating func markOnce(_ name: String) {
+        if !marks.contains(where: { $0.name == name }) { mark(name) }
+    }
+
+    var summary: String {
+        var parts = marks.map { "\($0.name) \(String(format: "%.1f", $0.at))" }
+        if let heard = marks.first(where: { $0.name == "last word" })?.at,
+           let sound = marks.first(where: { $0.name == "first sound" })?.at {
+            parts.append("silence→sound \(String(format: "%.1f", sound - heard)) s")
+        }
+        return parts.joined(separator: " · ")
     }
 }
 

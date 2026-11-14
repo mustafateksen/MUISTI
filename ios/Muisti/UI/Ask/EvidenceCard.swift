@@ -33,7 +33,7 @@ struct EvidenceCard: View {
             if let lat = record.latitude, let lon = record.longitude {
                 let coordinate = CLLocationCoordinate2D(latitude: lat, longitude: lon)
                 Map(initialPosition: .region(MKCoordinateRegion(center: coordinate, latitudinalMeters: 400, longitudinalMeters: 400))) {
-                    Marker(record.name ?? record.kind ?? "Seen", coordinate: coordinate)
+                    Marker(record.name ?? record.kind ?? String(localized: "Seen"), coordinate: coordinate)
                 }
                 .frame(height: 130)
                 .clipShape(.rect(cornerRadius: Theme.Radius.inner))

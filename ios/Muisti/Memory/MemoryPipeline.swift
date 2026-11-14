@@ -47,7 +47,10 @@ actor MemoryPipeline {
             streamCounter += 1
             guard streamCounter % streamEveryN == 0 else { return nil }
         }
-        switch await perception.process(frame, street: street) {
+        let began = ContinuousClock.now
+        let outcome = await perception.process(frame, street: street)
+        let perceptionMs = (ContinuousClock.now - began).milliseconds
+        switch outcome {
         case .drop(let reason):
             stats.dropped[reason, default: 0] += 1
             return nil
@@ -64,6 +67,7 @@ actor MemoryPipeline {
                 stats.kept += 1
             }
             await worker.signal()
+            Trace.note("frame #\(id) kept: perception \(perceptionMs) ms, stored \(String(format: "%.1f", Date().timeIntervalSince(frame.capturedAt))) s after capture, \(memory.ocrText.count) chars read")
             if let onTextStored, memory.ocrText.contains(where: \.isLetter) {
                 let text = memory.ocrText, jpeg = memory.frameJPEG
                 Task { await onTextStored(id, text, jpeg) }

@@ -4,9 +4,9 @@ import SwiftUI
 extension SafetyRule.Severity {
     var title: String {
         switch self {
-        case .high: "Urgent"
-        case .medium: "Warning"
-        case .low: "Reminder"
+        case .high: String(localized: "Urgent")
+        case .medium: String(localized: "Warning")
+        case .low: String(localized: "Reminder")
         }
     }
 

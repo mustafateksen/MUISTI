@@ -1,84 +1,118 @@
 import SwiftUI
 
-/// Muisti Safety: open warnings as large photo cards (the frame is the evidence, so it leads),
-/// what Muisti last saw of each watched object as a strip of photo tiles, the user's rules,
-/// and home. Rules are created by voice ("warn me if I leave the stove on").
+/// Muisti Safety as a plain list of small cards, top to bottom: open warnings, what Muisti last
+/// saw of each watched object, the rules, home. Photos are thumbnails that open full screen.
+/// "+" adds a rule in the user's own words (the AI writes it up); rules can also be spoken.
 struct SafetyView: View {
     let safety: SafetyMonitor
+    let ai: NemotronClient
+    @State private var addingRule = false
     @AppStorage(DeveloperMode.storageKey) private var developerMode = false
 
-    /// The system's list margin on iPhone, so cards line up with the large title.
-    static let margin: CGFloat = 16
-
     private var openAlerts: [SafetyAlert] { safety.alerts.filter { $0.response == nil } }
-    private var earlierAlerts: [SafetyAlert] { safety.alerts.filter { $0.response != nil } }
+    private var earlierAlerts: [SafetyAlert] { Array(safety.alerts.filter { $0.response != nil }.prefix(5)) }
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: Theme.Spacing.xl) {
-                    if let pending = safety.pending {
-                        SafetyPendingCard(pending: pending, frameURL: frameURL(of: pending)) { yes in
+            List {
+                if let pending = safety.pending {
+                    Section {
+                        SafetyPendingRow(pending: pending, frameURL: frameURL(of: pending)) { yes in
                             Task { _ = await safety.handle(yes ? .confirm : .cancel) }
                         }
                     }
+                }
 
-                    SafetySection("Warnings") {
-                        if openAlerts.isEmpty {
-                            SafetyAllClearCard(hasRules: !safety.rules.isEmpty)
-                        }
-                        ForEach(openAlerts) { alert in
-                            SafetyAlertCard(alert: alert, frameURL: alert.evidenceFrame.map(safety.store.frameURL)) { response in
-                                Task { await safety.respond(alert, response) }
+                Section("Warnings") {
+                    if openAlerts.isEmpty {
+                        Label("All clear", systemImage: "checkmark.shield.fill")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.success)
+                    }
+                    ForEach(openAlerts) { alert in
+                        SafetyAlertRow(alert: alert, url: url(alert.evidenceFrame)) { respond(alert, .dismissed) }
+                            .swipeActions {
+                                Button("Got it", systemImage: "checkmark") { respond(alert, .dismissed) }
+                                    .tint(.brand)
+                                Button("Later", systemImage: "clock") { respond(alert, .snoozed) }
+                                    .tint(.attention)
                             }
+                    }
+                }
+
+                if !safety.states.isEmpty {
+                    Section("Last seen") {
+                        ForEach(safety.states, id: \.object) { state in
+                            SafetyStateRow(state: state, url: url(state.evidenceFrame))
                         }
                     }
+                }
 
-                    if !safety.states.isEmpty {
-                        SafetySection("Last seen", footer: "What Muisti saw, not what is true now. “You said” means you told Muisti; it didn't see it.") {
-                            SafetyStateStrip(states: safety.states, frameURL: safety.store.frameURL)
+                Section("Rules") {
+                    if safety.rules.isEmpty {
+                        Button("Add your first rule", systemImage: "plus") { addingRule = true }
+                            .font(.subheadline.weight(.semibold))
+                    }
+                    ForEach(safety.rules) { rule in
+                        SafetyRuleRow(rule: rule) { on in Task { await safety.setEnabled(rule, on) } }
+                            .swipeActions {
+                                Button("Delete", systemImage: "trash", role: .destructive) { Task { await safety.delete(rule) } }
+                            }
+                    }
+                }
+
+                if !earlierAlerts.isEmpty {
+                    Section("Earlier") {
+                        ForEach(earlierAlerts) { alert in
+                            SafetyAlertRow(alert: alert, url: url(alert.evidenceFrame))
                         }
                     }
+                }
 
-                    SafetySection("Your rules") {
-                        SafetyRulesCard(rules: safety.rules) { rule, on in
-                            Task { await safety.setEnabled(rule, on) }
-                        } delete: { rule in
-                            Task { await safety.delete(rule) }
-                        }
-                    }
+                Section {
+                    SafetyHomeRow(hasHome: safety.home != nil, setHomeHere: safety.setHomeHere)
+                } footer: {
+                    Text("Muisti complements a stove guard and smoke alarm; it never replaces them.")
+                }
 
-                    if !earlierAlerts.isEmpty {
-                        SafetySection("Earlier") {
-                            SafetyHistoryCard(alerts: earlierAlerts, frameURL: safety.store.frameURL)
-                        }
-                    }
-
-                    SafetySection("Home") {
-                        SafetyHomeCard(hasHome: safety.home != nil, setHomeHere: safety.setHomeHere)
-                    }
-
-                    Label("Muisti complements a stove guard and smoke alarm; it does not replace them. It only knows what the glasses saw, and it gives no medical advice.", systemImage: "info.circle")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-
-                    if developerMode {
+                if developerMode {
+                    Section("Last observation") {
                         Text(safety.lastObservationText)
                             .font(.caption.monospaced())
-                            .foregroundStyle(.tertiary)
+                            .foregroundStyle(.secondary)
                             .textSelection(.enabled)
                     }
                 }
-                .padding(.horizontal, Self.margin)
-                .padding(.top, Theme.Spacing.s)
-                .padding(.bottom, Theme.Spacing.xl)
-                .animation(Theme.Motion.standard, value: safety.alerts)
-                .animation(Theme.Motion.standard, value: safety.pending)
             }
+            .listRowSpacing(Theme.Spacing.xs)
             .navigationTitle("Safety")
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Add rule", systemImage: "plus") { addingRule = true }
+                }
+            }
+            .sheet(isPresented: $addingRule) {
+                SafetyAddRuleSheet(safety: safety, ai: ai)
+            }
+            .animation(Theme.Motion.standard, value: safety.alerts)
+            .animation(Theme.Motion.standard, value: safety.rules)
             .refreshable { await safety.reload() }
-            .task { await safety.reload() }
+            .task {
+                #if DEBUG
+                // `--safety-add`: open the add-rule sheet on launch (screenshots).
+                if ProcessInfo.processInfo.arguments.contains("--safety-add") { addingRule = true }
+                #endif
+                await safety.reload()
+            }
         }
+    }
+
+    private func url(_ frame: String?) -> URL? {
+        frame.map(safety.store.frameURL)
+    }
+
+    private func respond(_ alert: SafetyAlert, _ response: SafetyAlert.Response) {
+        Task { await safety.respond(alert, response) }
     }
 
     private func frameURL(of pending: SafetyPending) -> URL? {

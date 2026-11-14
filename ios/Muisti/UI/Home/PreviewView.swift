@@ -71,7 +71,7 @@ struct PreviewView: View {
                 // backdrop's own accessibility frame overflowed the card).
                 .accessibilityElement(children: .ignore)
                 .accessibilityAddTraits(image == nil ? [] : .isImage)
-                .accessibilityLabel(image == nil ? placeholder : "Last captured frame")
+                .accessibilityLabel(image == nil ? placeholder : String(localized: "Last captured frame"))
                 .accessibilityValue(lastFrame.map(caption) ?? "")
                 .accessibilityIdentifier("previewBox")
                 .animation(Theme.Motion.standard, value: image == nil)
@@ -91,14 +91,14 @@ struct PreviewView: View {
         switch state {
         case .running:
             return mode.usesScheduler
-                ? "The first frame will arrive shortly.\nTo save battery there's no live video; frames are captured only when needed."
-                : "Waiting for video…"
+                ? String(localized: "The first frame will arrive shortly.\nTo save battery there's no live video; frames are captured only when needed.")
+                : String(localized: "Waiting for video…")
         case .starting:
-            return "Preparing…"
+            return String(localized: "Preparing…")
         case .waitingForDevice:
-            return "Waiting for glasses"
+            return String(localized: "Waiting for glasses")
         default:
-            return "Once recording starts, the last frame you saw appears here."
+            return String(localized: "Once recording starts, the last frame you saw appears here.")
         }
     }
 

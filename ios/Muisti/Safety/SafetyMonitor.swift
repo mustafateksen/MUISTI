@@ -149,6 +149,9 @@ final class SafetyMonitor {
 
     // MARK: Frames
 
+    /// Set when a first "on" reading waits for its confirming frame.
+    @ObservationIgnored private var confirmSoon: Date?
+
     /// Called for every captured frame. Cheap gates first; at most one model call at a time.
     func consider(_ frame: CapturedFrame) {
         let watched = self.watched
@@ -158,7 +161,13 @@ final class SafetyMonitor {
         sentTimes.removeAll { now.timeIntervalSince($0) > 60 }
         guard sentTimes.count < tuning.maxPerMinute else { return }
         let home = atHome
-        let since = lastSent.map { now.timeIntervalSince($0) } ?? .infinity
+        var since = lastSent.map { now.timeIntervalSince($0) } ?? .infinity
+        // Something was just read as "on" for the first time: look again at once to confirm it
+        // (at least 1 s later, so it is another frame), instead of waiting for the usual slot.
+        if let asked = confirmSoon, now.timeIntervalSince(asked) < 20, since >= 1 {
+            confirmSoon = nil
+            since = .infinity
+        }
         // Allergen and "when you see X" rules are checked on enriched memory records (no frame
         // is sent for them); only rules about an object's state need frames of their own.
         let hasAllergenRules = false
@@ -191,10 +200,15 @@ final class SafetyMonitor {
     private func observe(_ copy: SafetyFrame.Prepared, frame: CapturedFrame, watched: [String], allergens: [String]) async {
         let observation: SafetyObservation
         do {
-            observation = try await ai.chatJSON(SafetyObservation.self, system: SafetyPrompts.observeSystem,
-                                                user: SafetyPrompts.observeUser(watched: watched, allergens: allergens, ocr: copy.ocr),
-                                                image: .init(jpeg: copy.jpeg), jsonSchema: SafetyPrompts.observeSchema,
-                                                schemaName: "observation", maxTokens: 600, temperature: 0, background: true)
+            let ai = ai
+            let started = ContinuousClock.now
+            observation = try await Self.afterQuestions(ai) {
+                try await ai.chatJSON(SafetyObservation.self, system: SafetyPrompts.observeSystem,
+                                      user: SafetyPrompts.observeUser(watched: watched, allergens: allergens, ocr: copy.ocr),
+                                      image: .init(jpeg: copy.jpeg), jsonSchema: SafetyPrompts.observeSchema,
+                                      schemaName: "observation", maxTokens: 600, temperature: 0, background: true)
+            }
+            Trace.note("safety look: \((ContinuousClock.now - started).milliseconds) ms, frame \(String(format: "%.1f", Date().timeIntervalSince(frame.capturedAt))) s old")
         } catch {
             Log.pipeline.info("safety observe failed: \(String(describing: error), privacy: .public)")
             return
@@ -266,6 +280,9 @@ final class SafetyMonitor {
                 st.evidenceFrame = frameFile ?? st.evidenceFrame
             } else {
                 st.pendingOnCount += 1
+                // A first "on" reading: the confirming look is the next frame, not the next
+                // slot 5–30 s later (see `consider`).
+                if st.pendingOnCount < tuning.onReadingsNeeded, source == .vision { confirmSoon = Date() }
                 if st.pendingOnCount >= tuning.onReadingsNeeded || source != .vision {
                     st = ObjectState(object: object, state: "on", since: at, lastSeen: at, lastStateSeen: at,
                                      evidenceFrame: frameFile ?? st.evidenceFrame, pendingOnCount: 0, source: source, place: st.place,
@@ -562,10 +579,13 @@ final class SafetyMonitor {
             } else {
                 let match: SafetyPrompts.Match
                 do {
-                    match = try await ai.chatJSON(SafetyPrompts.Match.self, system: SafetyPrompts.matchSystem,
-                                                  user: "Rule: \(query)\n\nRecord:\n\(passage.prefix(2500))",
-                                                  jsonSchema: SafetyPrompts.matchSchema, schemaName: "match", maxTokens: 200,
-                                                  temperature: 0, background: true)
+                    let ai = ai
+                    match = try await Self.afterQuestions(ai) {
+                        try await ai.chatJSON(SafetyPrompts.Match.self, system: SafetyPrompts.matchSystem,
+                                              user: "Rule: \(query)\n\nRecord:\n\(passage.prefix(2500))",
+                                              jsonSchema: SafetyPrompts.matchSchema, schemaName: "match", maxTokens: 200,
+                                              temperature: 0, background: true)
+                    }
                 } catch {
                     continue
                 }
@@ -580,6 +600,20 @@ final class SafetyMonitor {
             var file: String?
             if let frame { file = await store.saveFrame(frame) }
             await fire(rule, at: Date(), label: label, speak: true, frameFile: file)
+        }
+    }
+
+    /// A safety call that a question pushed aside is made again once the question is answered
+    /// (before, that frame's check was simply lost).
+    private static func afterQuestions<T: Sendable>(_ ai: NemotronClient, _ call: @Sendable () async throws -> T) async throws -> T {
+        do {
+            return try await call()
+        } catch NemotronClient.NemotronError.preempted {
+            let waitStart = Date()
+            while await ai.questionsInFlight > 0, Date().timeIntervalSince(waitStart) < 30 {
+                try? await Task.sleep(for: .milliseconds(200))
+            }
+            return try await call()
         }
     }
 
@@ -691,6 +725,7 @@ final class SafetyMonitor {
         alerts = await store.alerts()
         lastAlertRule = id
         Log.pipeline.info("safety auto alert [\(id, privacy: .public)]: \(text, privacy: .public)")
+        Trace.note("safety auto alert [\(id)] \(String(format: "%.1f", Date().timeIntervalSince(at))) s after the frame: \(text.prefix(80))")
         if speak { await announce(text, nil, false, frame.map(store.frameURL)) }
         await notifyIfBackground(text)
         return true
@@ -736,6 +771,7 @@ final class SafetyMonitor {
         alerts = await store.alerts()
         lastAlertRule = rule.id
         Log.pipeline.info("safety alert [\(rule.id, privacy: .public)]: \(text, privacy: .public)")
+        Trace.note("safety alert [\(rule.id.prefix(8))] \(String(format: "%.1f", Date().timeIntervalSince(at))) s after the frame: \(text.prefix(80))")
         // Low severity: phone only (notification / Safety tab), never spoken.
         if speak, rule.severity != .low {
             await announce(text, rule.language, false, alert.evidenceFrame.map(store.frameURL))

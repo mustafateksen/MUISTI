@@ -10,9 +10,9 @@ struct MemorySummary: ViewModifier {
     let visible: Bool
 
     var text: String {
-        var parts = [total == 1 ? "1 memory" : "\(total) memories"]
-        if pending > 0 { parts.append("\(pending) processing") }
-        parts.append(retentionDays == 1 ? "Kept 1 day" : "Kept \(retentionDays) days")
+        var parts = [total == 1 ? String(localized: "1 memory") : String(localized: "\(total) memories")]
+        if pending > 0 { parts.append(String(localized: "\(pending) processing")) }
+        parts.append(retentionDays == 1 ? String(localized: "Kept 1 day") : String(localized: "Kept \(retentionDays) days"))
         return parts.joined(separator: " · ")
     }
 

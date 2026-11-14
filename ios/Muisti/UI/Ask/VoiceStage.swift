@@ -21,7 +21,7 @@ struct VoiceStage: View {
             .buttonStyle(OrbPressStyle())
             .disabled(voice.phase == .thinking)
             .accessibilityLabel(orbLabel)
-            .accessibilityInputLabels(["Ask", "Listen", "Microphone"])
+            .accessibilityInputLabels([Text("Ask"), Text("Listen"), Text("Microphone")])
             .sensoryFeedback(.impact(weight: .medium), trigger: voice.phase == .listening)
 
             VStack(spacing: Theme.Spacing.s) {
@@ -51,7 +51,7 @@ struct VoiceStage: View {
     private var caption: some View {
         switch voice.phase {
         case .listening:
-            Text(voice.transcript.isEmpty ? "I'm listening" : voice.transcript)
+            Text(voice.transcript.isEmpty ? String(localized: "I'm listening") : voice.transcript)
                 .font(.title3)
                 .foregroundStyle(voice.transcript.isEmpty ? .secondary : .primary)
                 .lineLimit(4)
@@ -83,19 +83,19 @@ struct VoiceStage: View {
 
     private var title: String {
         switch voice.phase {
-        case .listening: "Listening"
-        case .thinking: "Searching your memory…"
+        case .listening: String(localized: "Listening")
+        case .thinking: String(localized: "Searching your memory…")
         case .speaking: "Muisti"
-        case .failed: "Something went wrong"
-        case .idle: "Tap to ask"
+        case .failed: String(localized: "Something went wrong")
+        case .idle: String(localized: "Tap to ask")
         }
     }
 
     private var orbLabel: String {
         switch voice.phase {
-        case .listening: "Stop listening"
-        case .speaking: "Stop reading"
-        default: "Ask by voice"
+        case .listening: String(localized: "Stop listening")
+        case .speaking: String(localized: "Stop reading")
+        default: String(localized: "Ask by voice")
         }
     }
 }

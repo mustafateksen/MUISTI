@@ -41,45 +41,45 @@ struct HomeStatus {
 
         switch controller.state {
         case .running:
-            title = "Remembering"
+            title = String(localized: "Remembering")
             message = config.mode.usesScheduler
-                ? "I'm saving the signs and text you see when it matters. Keep Muisti open; the screen won't lock."
-                : "Continuous recording is on. Text you see is being added to your memory."
+                ? String(localized: "I'm saving the signs and text you see when it matters. Keep Muisti open; the screen won't lock.")
+                : String(localized: "Continuous recording is on. Text you see is being added to your memory.")
             symbol = usesGlasses ? "eyeglasses" : "iphone.rear.camera"
             tone = .active
         case .starting:
-            title = "Starting"
-            message = usesGlasses ? "Connecting to your glasses' camera…" : "Opening the iPhone camera…"
+            title = String(localized: "Starting")
+            message = usesGlasses ? String(localized: "Connecting to your glasses' camera…") : String(localized: "Opening the iPhone camera…")
             symbol = "hourglass"
             tone = .waiting
         case .waitingForDevice:
-            title = "Waiting for glasses"
-            message = running ? glasses.waitingHint : "Make sure your glasses are on, unfolded, and near your phone."
+            title = String(localized: "Waiting for glasses")
+            message = running ? glasses.waitingHint : String(localized: "Make sure your glasses are on, unfolded, and near your phone.")
             symbol = "antenna.radiowaves.left.and.right"
             tone = .waiting
         case .paused(let reason):
-            title = "Paused"
+            title = String(localized: "Paused")
             message = reason
             symbol = "pause.circle"
             tone = .attention
         case .needsRegistration:
-            title = "Connect your glasses"
-            message = "Just approve Muisti once in the Meta AI app."
+            title = String(localized: "Connect your glasses")
+            message = String(localized: "Just approve Muisti once in the Meta AI app.")
             symbol = "link"
             tone = .attention
         case .needsPermission:
-            title = "Camera access needed"
-            message = "Allow access in Meta AI to use the glasses camera."
+            title = String(localized: "Camera access needed")
+            message = String(localized: "Allow access in Meta AI to use the glasses camera.")
             symbol = "camera.badge.ellipsis"
             tone = .attention
         case .failed(let error):
-            title = "Something went wrong"
+            title = String(localized: "Something went wrong")
             message = error
             symbol = "exclamationmark.triangle"
             tone = .problem
         case .idle:
-            title = "Ready"
-            message = "Start recording and I'll remember the signs, numbers, and times you see as you walk."
+            title = String(localized: "Ready")
+            message = String(localized: "Start recording and I'll remember the signs, numbers, and times you see as you walk.")
             symbol = usesGlasses ? "eyeglasses" : "iphone.rear.camera"
             tone = .idle
         }
@@ -88,7 +88,7 @@ struct HomeStatus {
         if usesGlasses {
             if glasses.hasActiveDevice {
                 let device = glasses.device
-                let name = device.name.isEmpty ? "Glasses" : device.name
+                let name = device.name.isEmpty ? String(localized: "Glasses") : device.name
                 if let battery = device.battery {
                     let charging = device.charging == .charging
                     chips.append(Chip(
@@ -103,33 +103,35 @@ struct HomeStatus {
             } else {
                 chips.append(Chip(
                     id: "device",
-                    text: wearables.isRegistered ? "Glasses not found" : "Glasses not connected",
+                    text: wearables.isRegistered ? String(localized: "Glasses not found") : String(localized: "Glasses not connected"),
                     systemImage: "eyeglasses"
                 ))
             }
         } else {
-            chips.append(Chip(id: "device", text: "iPhone camera", systemImage: "iphone.rear.camera"))
+            chips.append(Chip(id: "device", text: String(localized: "iPhone camera"), systemImage: "iphone.rear.camera"))
         }
 
         switch controller.location.authorization {
         case .denied, .restricted:
-            chips.append(Chip(id: "location", text: "Location off", systemImage: "location.slash", tint: .attention))
+            chips.append(Chip(id: "location", text: String(localized: "Location off"), systemImage: "location.slash", tint: .attention))
         default:
             if controller.location.freshFix() != nil {
-                chips.append(Chip(id: "location", text: "Location on", systemImage: "location.fill", tint: .brandSky))
+                chips.append(Chip(id: "location", text: String(localized: "Location on"), systemImage: "location.fill", tint: .brandSky))
             }
         }
 
         chips.append(Chip(
             id: "memory",
-            text: "\(controller.memoryCount) \(controller.memoryCount == 1 ? "memory" : "memories")",
+            text: controller.memoryCount == 1
+                ? String(localized: "\(controller.memoryCount) memory")
+                : String(localized: "\(controller.memoryCount) memories"),
             systemImage: "square.stack.3d.up.fill",
             tint: .accentColor
         ))
         if !controller.enrichment.online {
-            chips.append(Chip(id: "online", text: "Offline", systemImage: "wifi.slash", tint: .attention))
+            chips.append(Chip(id: "online", text: String(localized: "Offline"), systemImage: "wifi.slash", tint: .attention))
         } else if controller.pendingCount > 0 {
-            chips.append(Chip(id: "pending", text: "\(controller.pendingCount) processing", systemImage: "sparkles"))
+            chips.append(Chip(id: "pending", text: String(localized: "\(controller.pendingCount) processing"), systemImage: "sparkles"))
         }
         self.chips = chips
 

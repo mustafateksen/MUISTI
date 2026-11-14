@@ -244,7 +244,7 @@ actor PerceptionEngine {
             }
         }
 
-        func coveredByFull(_ rect: CGRect) -> Bool {
+        @Sendable func coveredByFull(_ rect: CGRect) -> Bool {
             full.contains { line in
                 let overlap = line.box.intersection(rect)
                 return !overlap.isNull && overlap.width * overlap.height >= 0.5 * line.box.width * line.box.height
@@ -255,22 +255,36 @@ actor PerceptionEngine {
             .sorted { $0.lineHeight < $1.lineHeight }
             .prefix(8)
 
-        var out: [TextLine] = []
-        for block in candidates {
+        // The crops are read side by side (they were read one after another: up to 8 Vision
+        // passes in a row on every kept frame and on every live look).
+        final class Reads: @unchecked Sendable {
+            let lock = NSLock()
+            var byBlock: [Int: [TextLine]] = [:]
+        }
+        let reads = Reads()
+        let list = Array(candidates)
+        DispatchQueue.concurrentPerform(iterations: list.count) { index in
+            let block = list[index]
+            var out: [TextLine] = []
+            defer {
+                reads.lock.lock()
+                reads.byBlock[index] = out
+                reads.lock.unlock()
+            }
             let linePx = block.lineHeight * H
             let scale = min(4, max(1, 48 / max(linePx, 1)))
-            guard scale >= 1.3 || !coveredByFull(block.rect) else { continue }   // nothing to gain
+            guard scale >= 1.3 || !coveredByFull(block.rect) else { return }   // nothing to gain
             // Vision rects: origin bottom-left; CGImage crop: origin top-left.
             let pixel = CGRect(x: block.rect.minX * W, y: (1 - block.rect.maxY) * H,
                                width: block.rect.width * W, height: block.rect.height * H).integral
-            guard pixel.width >= 8, pixel.height >= 8, let crop = image.cropping(to: pixel) else { continue }
+            guard pixel.width >= 8, pixel.height >= 8, let crop = image.cropping(to: pixel) else { return }
             let outW = Int(min(2400, pixel.width * scale)), outH = Int(min(2400, pixel.height * scale))
             guard let ctx = CGContext(data: nil, width: outW, height: outH, bitsPerComponent: 8, bytesPerRow: 0,
                                       space: CGColorSpaceCreateDeviceRGB(),
-                                      bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else { continue }
+                                      bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else { return }
             ctx.interpolationQuality = .high
             ctx.draw(crop, in: CGRect(x: 0, y: 0, width: outW, height: outH))
-            guard let big = ctx.makeImage() else { continue }
+            guard let big = ctx.makeImage() else { return }
             for line in read(big, minimumTextHeight: 0) {
                 // Back to full-frame coordinates (both normalised, origin bottom-left).
                 let b = line.box
@@ -280,7 +294,7 @@ actor PerceptionEngine {
                 out.append(TextLine(text: line.text, box: mapped, confidence: line.confidence))
             }
         }
-        return out
+        return list.indices.flatMap { reads.byBlock[$0] ?? [] }
     }
 
     /// A zoomed reading replaces the full-frame readings it covers (≥ 80 % of their box) when

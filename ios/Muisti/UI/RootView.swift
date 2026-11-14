@@ -19,7 +19,7 @@ struct RootView: View {
             MemoryListView(controller: controller)
                 .tabItem { Label("Memory", systemImage: "square.stack.3d.up") }
                 .tag(AppTab.memory)
-            SafetyView(safety: controller.safety)
+            SafetyView(safety: controller.safety, ai: controller.ai)
                 .tabItem { Label("Safety", systemImage: "shield.lefthalf.filled") }
                 .tag(AppTab.safety)
         }

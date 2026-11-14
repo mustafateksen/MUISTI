@@ -15,8 +15,8 @@ struct MemoryDaySection: Identifiable {
     func title(calendar: Calendar) -> String { Self.title(day, calendar: calendar) }
 
     static func title(_ day: Date, calendar: Calendar) -> String {
-        if calendar.isDateInToday(day) { return "Today" }
-        if calendar.isDateInYesterday(day) { return "Yesterday" }
+        if calendar.isDateInToday(day) { return String(localized: "Today") }
+        if calendar.isDateInYesterday(day) { return String(localized: "Yesterday") }
         return day.formatted(.dateTime.weekday(.wide).day().month(.wide))
     }
 

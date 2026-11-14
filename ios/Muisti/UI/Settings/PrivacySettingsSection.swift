@@ -45,8 +45,8 @@ struct PrivacySettingsSection: View {
     }
 
     private func addZone() {
-        zoneMessage = controller.addZoneHere(name: "Place \(config.zones.count + 1)")
-            ? "Added."
-            : "Couldn't get your location. Try again while recording."
+        zoneMessage = controller.addZoneHere(name: String(localized: "Place \(config.zones.count + 1)"))
+            ? String(localized: "Added.")
+            : String(localized: "Couldn't get your location. Try again while recording.")
     }
 }

@@ -24,24 +24,31 @@ struct SettingsView: View {
                                 Label("Connected", systemImage: "checkmark.circle.fill")
                                     .foregroundStyle(.success)
                             } else {
-                                Button(wearables.registrationState == .registering ? "Connecting…" : "Connect", action: register)
+                                Button(wearables.registrationState == .registering ? String(localized: "Connecting…") : String(localized: "Connect"), action: register)
                             }
                         }
                     }
                 } header: {
                     Text("Camera")
                 } footer: {
-                    Text(controller.isRunning ? "Stop recording to change the camera." : "Ray-Ban Meta glasses or the iPhone's rear camera.")
+                    Text(controller.isRunning ? String(localized: "Stop recording to change the camera.") : String(localized: "Ray-Ban Meta glasses or the iPhone's rear camera."))
                 }
 
                 AISettingsSection(controller: controller, config: config)
 
                 Section {
-                    LabeledContent("Question language", value: "English")
+                    Picker("Question language", selection: $config.speechLanguage) {
+                        Text("Automatic").tag(SpeechLanguage.automatic)
+                        ForEach(SpeechLanguage.choices, id: \.id) { choice in
+                            Text(verbatim: choice.name).tag(choice.id)
+                        }
+                    }
+                    .onChange(of: config.speechLanguage) { applySettings() }
                     Toggle("Read answers aloud", isOn: $config.speakAnswers)
                     if config.speakAnswers {
-                        AnswerVoicePicker(controller: controller, language: "en", title: "English voice")
-                        AnswerVoicePicker(controller: controller, language: "tr", title: "Turkish voice")
+                        AnswerVoicePicker(controller: controller, language: "en", title: String(localized: "English voice"))
+                        AnswerVoicePicker(controller: controller, language: "tr", title: String(localized: "Turkish voice"))
+                        AnswerVoicePicker(controller: controller, language: "fi", title: String(localized: "Finnish voice"))
                     }
                     Toggle("Ask through the glasses", isOn: $config.handsFree)
                     if config.handsFree {
@@ -168,7 +175,7 @@ private struct AnswerVoicePicker: View {
     }
 
     private var autoLabel: String {
-        "Same as iPhone (Spoken Content)"
+        String(localized: "Same as iPhone (Spoken Content)")
     }
 }
 
@@ -182,10 +189,10 @@ private struct WakeWordTeacher: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Button(listening ? "Say “\(config.wakeWord)” 3 times…" : "Teach the wake word") {
+            Button(listening ? String(localized: "Say “\(config.wakeWord)” 3 times…") : String(localized: "Teach the wake word")) {
                 let speech = controller.glasses.headSpeech
                 guard controller.isRunning, controller.config.sourceKind == .glasses else {
-                    hint = "Put on the glasses and wait until recording starts, then try again."
+                    hint = String(localized: "Put on the glasses and wait until recording starts, then try again.")
                     return
                 }
                 hint = nil
@@ -207,7 +214,7 @@ private struct WakeWordTeacher: View {
                 Text(hint).font(.caption).foregroundStyle(.attention)
             }
             if !config.wakeAliases.isEmpty {
-                Text("The glasses hear it as: " + config.wakeAliases.joined(separator: ", "))
+                Text("The glasses hear it as: \(config.wakeAliases.joined(separator: ", "))")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

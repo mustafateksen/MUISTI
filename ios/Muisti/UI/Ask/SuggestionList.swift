@@ -5,9 +5,9 @@ struct SuggestionList: View {
     let onSelect: (String) -> Void
 
     static let suggestions = [
-        "What was the dentist's number?",
-        "When does the pharmacy close?",
-        "What did the last sign say?",
+        String(localized: "What was the dentist's number?"),
+        String(localized: "When does the pharmacy close?"),
+        String(localized: "What did the last sign say?"),
     ]
 
     var body: some View {

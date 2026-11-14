@@ -153,6 +153,7 @@ final class CaptureController {
             let watched = safety.watched.map { $0.split(separator: ":").last.map(String.init) ?? $0 }
             return Array(Set(watched)) + seen
         }
+        voice.warmUp()
         let safetyStore = safety.store
         let bridge = SafetyBridge(
             context: { await safety.promptContext() },

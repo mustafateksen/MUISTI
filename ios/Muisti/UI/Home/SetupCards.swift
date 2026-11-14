@@ -16,9 +16,9 @@ struct SetupCards: View {
                 if !wearables.isRegistered {
                     ActionCard(
                         icon: "eyeglasses",
-                        title: "Connect your glasses",
-                        message: "You'll switch to the Meta AI app to approve Muisti, then come back here. Requires an internet connection.",
-                        button: wearables.registrationState == .registering ? "Connecting…" : "Connect",
+                        title: String(localized: "Connect your glasses"),
+                        message: String(localized: "You'll switch to the Meta AI app to approve Muisti, then come back here. Requires an internet connection."),
+                        button: wearables.registrationState == .registering ? String(localized: "Connecting…") : String(localized: "Connect"),
                         action: register
                     )
                     if wearables.metaAIMissing {
@@ -28,18 +28,18 @@ struct SetupCards: View {
                 } else if controller.state == .needsPermission {
                     ActionCard(
                         icon: "camera.badge.ellipsis",
-                        title: "Camera access needed",
-                        message: "Allow access to the glasses camera in Meta AI.",
-                        button: "Allow",
+                        title: String(localized: "Camera access needed"),
+                        message: String(localized: "Allow access to the glasses camera in Meta AI."),
+                        button: String(localized: "Allow", comment: "Button: grant glasses camera access"),
                         action: askForPermission
                     )
                 }
                 if wearables.requiresFirmwareUpdate {
                     ActionCard(
                         icon: "arrow.down.circle",
-                        title: "Glasses software out of date",
-                        message: "Update it in the Meta AI app.",
-                        button: "Update",
+                        title: String(localized: "Glasses software out of date"),
+                        message: String(localized: "Update it in the Meta AI app."),
+                        button: String(localized: "Update"),
                         tint: .attention,
                         action: openFirmwareUpdate
                     )
@@ -47,9 +47,9 @@ struct SetupCards: View {
                 if glasses.needsGlassesAppUpdate {
                     ActionCard(
                         icon: "arrow.down.app",
-                        title: "App on glasses out of date",
-                        message: "Update it in the Meta AI app.",
-                        button: "Update",
+                        title: String(localized: "App on glasses out of date"),
+                        message: String(localized: "Update it in the Meta AI app."),
+                        button: String(localized: "Update"),
                         tint: .attention,
                         action: openGlassesAppUpdate
                     )
@@ -58,9 +58,9 @@ struct SetupCards: View {
             if !controller.enrichment.hasKey {
                 ActionCard(
                     icon: "sparkles",
-                    title: "Turn on AI",
-                    message: "Once you add a key, recordings are organized into names, phone numbers, and times, and questions get better answers. Until then, recordings wait on your phone.",
-                    button: "Go to Settings",
+                    title: String(localized: "Turn on AI"),
+                    message: String(localized: "Once you add a key, recordings are organized into names, phone numbers, and times, and questions get better answers. Until then, recordings wait on your phone."),
+                    button: String(localized: "Go to Settings"),
                     tint: .brandBlue,
                     action: openSettings
                 )

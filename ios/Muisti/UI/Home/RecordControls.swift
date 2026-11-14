@@ -65,9 +65,9 @@ struct RecordControls: View {
 
     private var primaryTitle: String {
         switch controller.state {
-        case .paused where controller.isRunning: return "Resume"
-        case _ where isRecording: return "Stop"
-        default: return "Start recording"
+        case .paused where controller.isRunning: return String(localized: "Resume")
+        case _ where isRecording: return String(localized: "Stop")
+        default: return String(localized: "Start recording")
         }
     }
 

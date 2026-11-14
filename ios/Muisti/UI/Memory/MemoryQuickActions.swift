@@ -10,18 +10,18 @@ struct MemoryQuickActions: View {
         HStack(spacing: Theme.Spacing.s) {
             if let phone = record.phone, let url = Self.telURL(phone) {
                 Link(destination: url) {
-                    action("Call", systemImage: "phone.fill")
+                    action(String(localized: "Call"), systemImage: "phone.fill")
                 }
                 .tint(.success)
             }
             if let mapsURL {
                 Link(destination: mapsURL) {
-                    action("Maps", systemImage: "map.fill")
+                    action(String(localized: "Maps"), systemImage: "map.fill")
                 }
                 .tint(.brandSky)
             }
             ShareLink(item: shareText) {
-                action("Share", systemImage: "square.and.arrow.up")
+                action(String(localized: "Share"), systemImage: "square.and.arrow.up")
             }
         }
         .buttonStyle(.bordered)

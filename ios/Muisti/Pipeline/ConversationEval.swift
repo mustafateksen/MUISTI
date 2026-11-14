@@ -123,6 +123,7 @@ enum ConversationEval {
                 total += 1
                 if pass { passed += 1 }
                 if actionPass { actionOK += 1 }
+                Log.pipeline.info("CONV TRACE c\(ci + 1) \(trace, privacy: .public)")
                 let line = "CONV \(pass ? "PASS" : "FAIL") c\(ci + 1) “\(turn.say)” want \(turn.expect.rawValue) did \(did.rawValue) [\(result.label.rawValue)]\(result.expectsReply ? " [asks back]" : "") → \(result.answer) · \(result.latencyMs) ms"
                 report.append(line)
                 Log.pipeline.info("\(line, privacy: .public)")

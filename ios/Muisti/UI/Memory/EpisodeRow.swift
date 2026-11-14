@@ -50,7 +50,7 @@ struct EpisodeRow: View {
         // One element with the row's own frame (`.combine` also took in the scaled-to-fill
         // cover photo, whose frame is wider than the clipped thumbnail).
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel([episode.displayTitle, subtitle, "\(episode.frameCount) frames", episode.summary].compactMap { $0 }.joined(separator: ", "))
+        .accessibilityLabel([episode.displayTitle, subtitle, String(localized: "\(episode.frameCount) frames"), episode.summary].compactMap { $0 }.joined(separator: ", "))
     }
 
     private var subtitle: String {

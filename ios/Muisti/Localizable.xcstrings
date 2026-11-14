@@ -1,0 +1,759 @@
+{
+  "sourceLanguage" : "en",
+  "strings" : {
+    "%@ · %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ · %2$@"
+          }
+        }
+      }
+    },
+    "%@, photo" : {
+
+    },
+    "%lld" : {
+
+    },
+    "%lld frames" : {
+
+    },
+    "%lld ms · %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$lld ms · %2$@"
+          }
+        }
+      }
+    },
+    "%llu" : {
+
+    },
+    "0°" : {
+
+    },
+    "180°" : {
+
+    },
+    "270° clockwise" : {
+
+    },
+    "90° clockwise" : {
+
+    },
+    "AI" : {
+
+    },
+    "AI hasn't processed this memory yet. It will be ready shortly once there's internet and an API key." : {
+
+    },
+    "API key" : {
+
+    },
+    "Adaptive mode" : {
+
+    },
+    "Add rule" : {
+
+    },
+    "Add your first rule" : {
+
+    },
+    "Advanced" : {
+
+    },
+    "All clear" : {
+
+    },
+    "All frames and memories on this iPhone will be permanently deleted." : {
+
+    },
+    "Allow the glasses microphone" : {
+
+    },
+    "Also save raw frames" : {
+
+    },
+    "Ask" : {
+
+    },
+    "Ask Muisti" : {
+
+    },
+    "Ask about signs, numbers, and times you've seen." : {
+
+    },
+    "Ask by voice" : {
+
+    },
+    "Ask through the glasses" : {
+
+    },
+    "Asks a spoken question about what your glasses have seen." : {
+
+    },
+    "Background: go to the Home Screen while recording; 'Resume' should appear when you return. Hinge/worn/battery controls are above." : {
+
+    },
+    "Base URL" : {
+
+    },
+    "Battery/thermal saver" : {
+
+    },
+    "Battery: %lld%%" : {
+
+    },
+    "Bundled sign video" : {
+
+    },
+    "Camera" : {
+
+    },
+    "Camera access" : {
+
+    },
+    "Camera feed" : {
+
+    },
+    "Cancel" : {
+
+    },
+    "Capture mode" : {
+
+    },
+    "Capture modes, Nemotron server, scheduler tuning and live diagnostics. When on, a button also appears on the Recording screen." : {
+
+    },
+    "Capture now" : {
+
+    },
+    "Capture settings changed while recording apply the next time you start." : {
+
+    },
+    "Chat model" : {
+
+    },
+    "Choose a provider preset" : {
+
+    },
+    "Choose video from Files" : {
+
+    },
+    "Choose video from Photos" : {
+
+    },
+    "Close" : {
+
+    },
+    "Collapse" : {
+
+    },
+    "Connect" : {
+
+    },
+    "Connected" : {
+
+    },
+    "Connecting…" : {
+
+    },
+    "Converting to HEVC…" : {
+
+    },
+    "Copy" : {
+
+    },
+    "Current" : {
+
+    },
+    "Data" : {
+
+    },
+    "Dataset" : {
+
+    },
+    "Dataset for the glasses window only. When off, no raw frames are stored." : {
+
+    },
+    "Delete" : {
+
+    },
+    "Delete all" : {
+
+    },
+    "Delete all memories" : {
+
+    },
+    "Delete all memories?" : {
+
+    },
+    "Delete memories and load sample photos" : {
+
+    },
+    "Delete memories from the last 10 minutes?" : {
+
+    },
+    "Delete this memory" : {
+
+    },
+    "Delete this memory?" : {
+
+    },
+    "Deny camera permission" : {
+
+    },
+    "Details" : {
+
+    },
+    "Developer" : {
+
+    },
+    "Developer options" : {
+
+    },
+    "Developer panel" : {
+
+    },
+    "Device state" : {
+
+    },
+    "Don't record at my current location" : {
+
+    },
+    "Done" : {
+
+    },
+    "Double-tap to zoom." : {
+
+    },
+    "Dwell %@ s" : {
+
+    },
+    "Earlier" : {
+
+    },
+    "Edit" : {
+
+    },
+    "Embedding (semantic search) source" : {
+
+    },
+    "Embedding URL" : {
+
+    },
+    "Embedding key" : {
+
+    },
+    "Embedding model" : {
+
+    },
+    "Episode for this memory" : {
+
+    },
+    "Error scenarios" : {
+
+    },
+    "Evidence" : {
+
+    },
+    "Evidence (%lld)" : {
+
+    },
+    "Evidence frame" : {
+
+    },
+    "Example questions" : {
+
+    },
+    "Faces and license plates are blurred on your iPhone; raw video is never stored." : {
+
+    },
+    "Fail the next photo" : {
+
+    },
+    "Failed" : {
+
+    },
+    "Fast: every %@ m" : {
+
+    },
+    "Files > On My iPhone > Muisti > sessions" : {
+
+    },
+    "Fixed interval (C): %lld s" : {
+
+    },
+    "Forget" : {
+
+    },
+    "Forget the last 10 minutes" : {
+
+    },
+    "Frames (%lld)" : {
+
+    },
+    "Glasses" : {
+
+    },
+    "Glasses and recording" : {
+
+    },
+    "Glasses microphone allowed" : {
+
+    },
+    "Glasses: %@" : {
+
+    },
+    "Got it" : {
+
+    },
+    "Grant camera permission" : {
+
+    },
+    "Heard %lld/3 · “%@”" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Heard %1$lld/3 · “%2$@”"
+          }
+        }
+      }
+    },
+    "High-resolution photo" : {
+
+    },
+    "Hinge open" : {
+
+    },
+    "Home" : {
+
+    },
+    "Inspect 1 in %lld stream frames" : {
+
+    },
+    "Keep memories for %lld days" : {
+
+    },
+    "Keep recording in background" : {
+
+    },
+    "Last error" : {
+
+    },
+    "Last observation" : {
+
+    },
+    "Last seen" : {
+
+    },
+    "Later" : {
+
+    },
+    "Listen" : {
+
+    },
+    "Live status" : {
+
+    },
+    "Live view" : {
+
+    },
+    "Llama Nemotron Rerank VL 1B (fast)" : {
+
+    },
+    "Low battery (iPhone < 20% or Low Power Mode, glasses < 20%) and heat lengthen the intervals; capture stops at critical temperature." : {
+
+    },
+    "Max per minute: %lld" : {
+
+    },
+    "Memory" : {
+
+    },
+    "Microphone" : {
+
+    },
+    "Min interval: %@ s" : {
+
+    },
+    "Mock glasses" : {
+
+    },
+    "Mock glasses (MockDeviceKit)" : {
+
+    },
+    "MockDeviceKit" : {
+
+    },
+    "Mode" : {
+
+    },
+    "Move here" : {
+
+    },
+    "Muisti" : {
+
+    },
+    "Muisti complements a stove guard and smoke alarm; it never replaces them." : {
+
+    },
+    "Muisti is speaking" : {
+
+    },
+    "Muisti is thinking" : {
+
+    },
+    "Muisti looks for things like a stove, iron or candle left on, smoke or running water, and warns you when you leave or forget them. Your own rules (Safety tab) work either way." : {
+
+    },
+    "Muisti remembers what you see. Your memory stays on this iPhone." : {
+
+    },
+    "Muisti uses your glasses' camera to save signs and text. The Meta AI app will open so you can allow access, then you'll come back here." : {
+
+    },
+    "Muisti wrote" : {
+
+    },
+    "My own Verda container" : {
+
+    },
+    "NVIDIA build (free key)" : {
+
+    },
+    "Name, number, street, text…" : {
+
+    },
+    "Nemotron 3.5 Rerank 8B (recommended)" : {
+
+    },
+    "Nemotron 3.5 Super VL" : {
+
+    },
+    "Nemotron pending" : {
+
+    },
+    "New rule" : {
+
+    },
+    "No" : {
+
+    },
+    "No location yet. Start recording first." : {
+
+    },
+    "No memories yet" : {
+
+    },
+    "No motion data: %@ s" : {
+
+    },
+    "No-record zones" : {
+
+    },
+    "Not set" : {
+
+    },
+    "Nothing seen within 100 m of places like home or work is saved to memory. Swipe left to delete." : {
+
+    },
+    "Notice hazards by itself" : {
+
+    },
+    "Off" : {
+
+    },
+    "Off: keywords only" : {
+
+    },
+    "Once on, the app connects to the mock glasses through the same SDK calls. Start recording from the main screen." : {
+
+    },
+    "Only a basic voice is installed. For a natural one, download a Premium or Enhanced voice in Settings › Accessibility › Spoken Content › Voices, then come back here." : {
+
+    },
+    "Open Meta AI" : {
+
+    },
+    "Open Meta AI in the App Store" : {
+
+    },
+    "Options" : {
+
+    },
+    "Pair Ray-Ban Meta" : {
+
+    },
+    "Photo" : {
+
+    },
+    "Photo quality" : {
+
+    },
+    "Photo size" : {
+
+    },
+    "Play %@" : {
+
+    },
+    "Powered on" : {
+
+    },
+    "Privacy" : {
+
+    },
+    "Question language" : {
+
+    },
+    "Raw dataset (if on): Files > On My iPhone > Muisti > sessions" : {
+
+    },
+    "Ray-Ban Meta glasses or the iPhone's rear camera." : {
+
+    },
+    "Read answers aloud" : {
+
+    },
+    "Reconnect when glasses return" : {
+
+    },
+    "Rerank key" : {
+
+    },
+    "Rerank model" : {
+
+    },
+    "Reranker" : {
+
+    },
+    "Reset to defaults" : {
+
+    },
+    "Rotate glasses photo" : {
+
+    },
+    "Rules" : {
+
+    },
+    "Safety" : {
+
+    },
+    "Samples: Documents/ingest (manifest.json + photos). They go through the real pipeline: OCR, blurring, episodes, Nemotron." : {
+
+    },
+    "Save to Photos" : {
+
+    },
+    "Saved" : {
+
+    },
+    "Say “%@” 3 times…" : {
+
+    },
+    "Seen" : {
+
+    },
+    "Send" : {
+
+    },
+    "Set here" : {
+
+    },
+    "Settings" : {
+
+    },
+    "Share" : {
+
+    },
+    "Showing the closest match" : {
+
+    },
+    "Simulation" : {
+
+    },
+    "Start when glasses connect" : {
+
+    },
+    "Stationary max %lld frames" : {
+
+    },
+    "Stationary refresh %@ s" : {
+
+    },
+    "Status" : {
+
+    },
+    "Stop" : {
+
+    },
+    "Stop recording to change the camera." : {
+
+    },
+    "Stop recording to change the mode." : {
+
+    },
+    "Stream and photo" : {
+
+    },
+    "Stream fps" : {
+
+    },
+    "Stream resolution" : {
+
+    },
+    "Structured / failed" : {
+
+    },
+    "Tap temple (pause/resume stream)" : {
+
+    },
+    "Tap to show details." : {
+
+    },
+    "Tap to view full screen." : {
+
+    },
+    "Teach the wake word" : {
+
+    },
+    "Test connection" : {
+
+    },
+    "Test without glasses in the Simulator: sign video, hinge, battery, heat and error scenarios." : {
+
+    },
+    "Text in the frame" : {
+
+    },
+    "The API key is in the regular Settings. Changes apply when the panel closes." : {
+
+    },
+    "The key is stored in the Keychain. Only a small blurred frame and the text read from it leave your iPhone; your memory stays on the device. Without a key, search runs locally." : {
+
+    },
+    "The summary will be ready shortly." : {
+
+    },
+    "Thermal" : {
+
+    },
+    "Turn off MockDeviceKit" : {
+
+    },
+    "Turn on mock glasses (registered + permitted)" : {
+
+    },
+    "Turn on mock glasses (unregistered, no permission)" : {
+
+    },
+    "Turn threshold %@°" : {
+
+    },
+    "Use iPhone camera" : {
+
+    },
+    "Version" : {
+
+    },
+    "Video must be H.265; otherwise it is converted automatically. If the stream is already running, restart it to use the new feed." : {
+
+    },
+    "View full screen" : {
+
+    },
+    "Visual details" : {
+
+    },
+    "Voice" : {
+
+    },
+    "Wait up to %@ s for sharpness" : {
+
+    },
+    "Wake word" : {
+
+    },
+    "Walking: at most every %@ s" : {
+
+    },
+    "Walking: every %@ m" : {
+
+    },
+    "Warnings" : {
+
+    },
+    "What should Muisti watch for?" : {
+
+    },
+    "What the glasses saw for this answer" : {
+
+    },
+    "When you start recording, the signs, numbers and opening hours you see will appear here." : {
+
+    },
+    "While recording, say the wake word and your question to the glasses (“Muisti, where was the Arduino stand?”). The glasses turn speech into text themselves; the answer plays through their speakers. Or: “Hey Siri, Ask Muisti”." : {
+
+    },
+    "Working" : {
+
+    },
+    "Worn" : {
+
+    },
+    "Write rule" : {
+
+    },
+    "Writing…" : {
+
+    },
+    "Yes" : {
+
+    },
+    "You: %@" : {
+
+    },
+    "critical" : {
+
+    },
+    "empty = embedding key" : {
+
+    },
+    "empty = keywords only" : {
+
+    },
+    "empty = off" : {
+
+    },
+    "empty = same as chat" : {
+
+    },
+    "hot" : {
+
+    },
+    "https://…/v1" : {
+
+    },
+    "iPhone rear camera (live)" : {
+
+    },
+    "model" : {
+
+    },
+    "normal" : {
+
+    },
+    "warm" : {
+
+    },
+    "·" : {
+
+    }
+  },
+  "version" : "1.0"
+}

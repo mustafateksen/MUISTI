@@ -4,12 +4,12 @@ enum IslandAction: Equatable {
 
     var title: String {
         switch self {
-        case .start: "Start recording"
-        case .resume: "Resume"
-        case .retry: "Try again"
-        case .stop: "Stop"
-        case .register: "Connect"
-        case .permission: "Allow"
+        case .start: String(localized: "Start recording")
+        case .resume: String(localized: "Resume")
+        case .retry: String(localized: "Try again")
+        case .stop: String(localized: "Stop")
+        case .register: String(localized: "Connect")
+        case .permission: String(localized: "Allow", comment: "Button: grant glasses camera access")
         }
     }
 

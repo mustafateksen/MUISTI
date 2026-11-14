@@ -5,6 +5,7 @@ import SwiftUI
 struct OpensPhotoViewer: ViewModifier {
     let url: URL
     var title: String?
+    var showsBadge = true
     @State private var presented = false
     @State private var toast: PhotoToast?
     @Namespace private var zoom
@@ -15,6 +16,7 @@ struct OpensPhotoViewer: ViewModifier {
         } label: {
             content
                 .overlay(alignment: .bottomTrailing) {
+                    if showsBadge {
                     Image(systemName: "arrow.up.left.and.arrow.down.right")
                         .font(.footnote.weight(.bold))
                         .foregroundStyle(.white)
@@ -22,6 +24,7 @@ struct OpensPhotoViewer: ViewModifier {
                         .background(.black.opacity(0.35), in: Circle())
                         .padding(Theme.Spacing.s)
                         .accessibilityHidden(true)
+                    }
                 }
                 .overlay {
                     if let toast {
@@ -41,7 +44,7 @@ struct OpensPhotoViewer: ViewModifier {
             Button("View full screen", systemImage: "arrow.up.left.and.arrow.down.right") { presented = true }
             Button("Save to Photos", systemImage: "square.and.arrow.down", action: save)
         }
-        .accessibilityLabel(title.map { "\($0), photo" } ?? "Photo")
+        .accessibilityLabel(title.map { String(localized: "\($0), photo") } ?? String(localized: "Photo"))
         .accessibilityHint("Tap to view full screen.")
         .accessibilityAction(named: "Save to Photos", save)
         .animation(Theme.Motion.standard, value: toast)
@@ -70,8 +73,9 @@ struct OpensPhotoViewer: ViewModifier {
 
 extension View {
     /// Tap to open this keyframe full screen (zoom, save to Photos, share).
-    func opensPhotoViewer(url: URL, title: String? = nil) -> some View {
-        modifier(OpensPhotoViewer(url: url, title: title))
+    /// `showsBadge: false` for small thumbnails, where the expand badge would cover the photo.
+    func opensPhotoViewer(url: URL, title: String? = nil, showsBadge: Bool = true) -> some View {
+        modifier(OpensPhotoViewer(url: url, title: title, showsBadge: showsBadge))
     }
 }
 

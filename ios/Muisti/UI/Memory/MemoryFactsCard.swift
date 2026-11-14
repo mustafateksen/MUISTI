@@ -7,15 +7,15 @@ struct MemoryFactsCard: View {
 
     private var facts: [(title: String, value: String, icon: String)] {
         var rows: [(String, String?, String)] = [
-            ("Phone", record.phone, "phone"),
-            ("Hours", record.hours, "clock"),
-            ("Description", record.caption, "text.quote"),
-            ("Other text", record.otherText, "text.alignleft"),
+            (String(localized: "Phone"), record.phone, "phone"),
+            (String(localized: "Hours"), record.hours, "clock"),
+            (String(localized: "Description"), record.caption, "text.quote"),
+            (String(localized: "Other text"), record.otherText, "text.alignleft"),
         ]
         if showsTechnical {
-            rows.append(("Keywords", record.keywords, "tag"))
-            rows.append(("Confidence", record.confidence.map { String(format: "%.2f", $0) }, "gauge.medium"))
-            rows.append(("Status", statusText, "gearshape"))
+            rows.append((String(localized: "Keywords"), record.keywords, "tag"))
+            rows.append((String(localized: "Confidence"), record.confidence.map { String(format: "%.2f", $0) }, "gauge.medium"))
+            rows.append((String(localized: "Status"), statusText, "gearshape"))
         }
         return rows.compactMap { title, value, icon in
             guard let value, !value.isEmpty else { return nil }
@@ -25,9 +25,9 @@ struct MemoryFactsCard: View {
 
     private var statusText: String {
         switch record.status {
-        case .pending: return "Waiting for Nemotron"
-        case .enriched: return "Structured"
-        case .failed: return "Couldn't structure (OCR only)"
+        case .pending: return String(localized: "Waiting for Nemotron")
+        case .enriched: return String(localized: "Structured")
+        case .failed: return String(localized: "Couldn't structure (OCR only)")
         }
     }
 

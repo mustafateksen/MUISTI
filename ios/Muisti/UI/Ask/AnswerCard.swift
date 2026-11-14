@@ -16,7 +16,7 @@ struct AnswerCard: View {
             // Share / copy live in the long-press menu (no empty header row).
             if !result.isCommand {
                 Label {
-                    Text(seen ? "Seen" : "Showing the closest match")
+                    (seen ? Text("Seen") : Text("Showing the closest match"))
                         .foregroundStyle(seen ? Color.success : Color.primary)
                 } icon: {
                     Image(systemName: seen ? "checkmark.seal.fill" : "exclamationmark.triangle.fill")

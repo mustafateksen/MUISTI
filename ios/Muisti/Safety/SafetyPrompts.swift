@@ -122,46 +122,25 @@ enum SafetyPrompts {
 
     // MARK: Rules inside the answer call
 
-    /// The part of the answer system prompt about safety rules (appended to `answerSystem`).
-    static let answerRules = """
+    /// Call 2 (answering from memory): how to talk about the safety status and log.
+    static let statusRules = """
 
-    SAFETY RULES (Muisti Turva). The user can ask Muisti to warn them about things it sees: \
-    a stove left on when they leave home, a medicine not taken or taken twice, keys left at \
-    home, an allergen on a product label, or "when you see X remind me Y". You get the current \
-    rules, the watched objects' last known states and the recent safety log in the message.
-    Extra actions, chosen in STEP 1 before "answer":
-    - "create_rule": the user asks to be warned, reminded or watched over in the future. Fill \
-    "rule" (below). "answer" is only the rule read back in one sentence in the user's language \
-    followed by a short question whether it is right; do not comment on what was or was not \
-    seen so far (nothing needs to have been seen to create a rule). Never create a rule from a \
-    question about the past. A request to be warned or reminded in the future is create_rule in any language ("warn me if…", "remind me…", "uyar beni…", "hatırlat…", "muistuta…"), even when it mentions things bought or seen ("warn me if the products I buy contain milk").
-    - "confirm" / "cancel": the user answers yes / no to the pending item shown in the message \
-    (a new rule, deleting a rule, or "did you take your medicine?"). Only when something is \
-    pending. "answer" says in a few words that it is done (or dropped); never ask again.
-    - "delete_rule": the user wants a rule removed or stopped. rule_id = the id of that rule; \
-    "answer" asks them to confirm.
-    - "log_event": the user tells you something they did or a state they set ("I took my \
-    medicine", "I turned the stove off", "I locked the door"). Fill "event": object (a watched \
-    object name, or a short English noun), kind ("action" or "state"), value (an action: took, \
-    turned_on, turned_off, locked, unlocked, picked_up, put_down; or a state: on, off, open, \
-    closed, locked, unlocked). "answer" acknowledges and says it was noted as their own words.
-    - "leaving": the user says they are leaving or going out now (even if no home location is \
-    set: Muisti then checks the rules itself). "arriving": they are home now. \
-    "set_home": this place is their home. "answer" is a short acknowledgement; Muisti adds any \
-    warning itself.
-    - "snooze": "not now", "later", "stop warning me for a while", "I know" right after a warning (see "Last warning" and the conversation). "answer" says Muisti will stay quiet about it for 30 minutes.
-    - Questions about the rules or about states ("did I turn off the stove?", "did I take my \
-    medicine today?", "what rules do I have?") are "answer": use the safety status and log. Say \
+    SAFETY STATUS (Muisti Turva). Questions about the rules or about watched objects ("did I turn \
+    off the stove?", "did I take my medicine today?", "what rules do I have?") are answered from \
+    the safety status and log in the message. Say \
     what was SEEN and when ("I last saw the stove on at 18:42 and did not see you turn it \
     off"); never "the stove is on" or "you are safe". If the log entry came from the user's own \
     words, say so ("you told me at 19:05 that you turned it off; I did not see it"). Times you \
     state must be copied from the log.
+    """
 
-    "rule" (only for create_rule, else null):
+    /// How to fill the `rule` argument of the `create_rule` tool (part of its description).
+    static let ruleGuide = """
+    The "rule" object:
     - watch: canonical English names of the objects to watch: "stove", "keys", "wallet", \
     "door_lock", "medication:<name the user gives or the box shows>", "allergen:<allergen>". \
     Use exactly the same name in watch, trigger.object, condition.object and in a later \
-    log_event (e.g. "medication:enalapril" everywhere). Names and allergens are English and \
+    log_event call (e.g. "medication:enalapril" everywhere). Names and allergens are English and \
     lower case (milk, gluten, egg, peanut, soy, fish, nuts) whatever language the user speaks.
     - trigger.type:
       * "context" with event "left_home" or "arrived_home";
@@ -219,6 +198,14 @@ enum SafetyPrompts {
       "confirm_question":{"type":["string","null"]}},
      "required":["summary","watch","trigger","condition","severity","message","cooldown_min","confirm_question"]}]}
     """#
+
+    /// `ruleSchema` without the null alternative (a tool argument is always an object).
+    static var ruleObjectSchema: String {
+        guard let root = try? JSONSerialization.jsonObject(with: Data(ruleSchema.utf8)) as? [String: Any],
+              let object = (root["anyOf"] as? [[String: Any]])?.first(where: { $0["type"] as? String == "object" }),
+              let data = try? JSONSerialization.data(withJSONObject: object) else { return "{\"type\":\"object\"}" }
+        return String(decoding: data, as: UTF8.self)
+    }
 
     static let eventSchema = #"""
     {"anyOf":[{"type":"null"},{"type":"object","properties":{

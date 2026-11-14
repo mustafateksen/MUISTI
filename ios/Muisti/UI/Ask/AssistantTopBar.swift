@@ -18,13 +18,13 @@ struct AssistantTopBar: View {
         HStack(spacing: Theme.Spacing.s) {
             Spacer()
             if canClear {
-                barButton("New chat", systemImage: "square.and.pencil", action: clear)
+                barButton(String(localized: "New chat"), systemImage: "square.and.pencil", action: clear)
                     .transition(.scale.combined(with: .opacity))
             }
             if developerMode {
-                barButton("Developer", systemImage: "hammer", action: showDeveloper)
+                barButton(String(localized: "Developer"), systemImage: "hammer", action: showDeveloper)
             }
-            barButton("Settings", systemImage: "gearshape", action: showSettings)
+            barButton(String(localized: "Settings"), systemImage: "gearshape", action: showSettings)
         }
         .frame(minHeight: 44)
         .overlay(alignment: .topLeading) {

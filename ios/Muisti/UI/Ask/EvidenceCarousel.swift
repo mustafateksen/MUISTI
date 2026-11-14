@@ -7,7 +7,7 @@ struct EvidenceCarousel: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.s) {
-            Label(hits.count == 1 ? "Evidence" : "Evidence (\(hits.count))", systemImage: "photo.on.rectangle.angled")
+            Label(hits.count == 1 ? String(localized: "Evidence") : String(localized: "Evidence (\(hits.count))"), systemImage: "photo.on.rectangle.angled")
                 .font(.headline)
 
             if hits.count == 1, let hit = hits.first {
