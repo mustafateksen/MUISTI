@@ -303,6 +303,25 @@ Rules:
         return notices.offer(cand, com.muisti.engine.InterventionPolicy(muted = mutedNotices), now)
     }
 
+    // ---------------- Safety monitor (P2.8) ----------------
+    val safetyRules = com.muisti.engine.SafetyRuleStore(File(ctx.filesDir, "memory"))
+    private val safety = com.muisti.engine.SafetyMonitor({ safetyRules.all() }, imageCheck = { d, r ->
+        // one look at the stored frame, through the privacy gate (a blocked or missing frame keeps the text verdict)
+        asker.lookAgain(com.muisti.engine.Doc("object", d.seenAt, d.frame, store.frameDir.path, "safety", false, "${r.name} sign", "sign",
+            text = r.name)).first
+    })
+    @Volatile private var safetyCheckedUpTo = System.currentTimeMillis() - 10 * 60_000L
+
+    /** New memories since the last check -> safety notices that should alert now. Local text first. */
+    @Synchronized
+    fun checkSafety(now: Long): List<com.muisti.engine.Notice> {
+        val fresh = docs().filter { it.type == "sighting" && it.seenAt > safetyCheckedUpTo }
+        if (fresh.isEmpty()) return emptyList()
+        safetyCheckedUpTo = fresh.maxOf { it.seenAt }
+        val found = safety.evaluate(fresh, now)
+        return if (found.isEmpty()) emptyList() else notices.offer(found, com.muisti.engine.InterventionPolicy(muted = mutedNotices), now)
+    }
+
     /** Runs an action the user confirmed (see PendingAction). Returns what to tell the user. */
     fun execute(action: org.json.JSONObject): String = when (action.optString("type")) {
         "create_zone" -> {
@@ -310,12 +329,18 @@ Rules:
             AppGraph.privacySettings.update { it.copy(zones = it.zones + z) }
             "Done. Nothing will be recorded within ${z.radiusM.toInt()} metres of here (${z.name})."
         }
+        "add_safety_rule" -> {
+            val r = com.muisti.engine.SafetyRule.fromJson(action.getJSONObject("rule"))
+            safetyRules.add(r)
+            "Done. I'll warn you when I read: ${r.phrases.joinToString(", ")}."
+        }
         else -> "I can't do that."
     }
 
     /** Phone-only agent tools (the exported Python prompts are not changed). */
     private fun tools(liveFrame: ByteArray?, fix: Fix?): List<com.muisti.engine.ExtraTool> = listOf(
         com.muisti.engine.createZoneTool { fix?.let { Triple(it.lat, it.lon, it.street) } },
+        com.muisti.engine.safetyRuleTool(),
         com.muisti.engine.visualSearchTool({ clip.embed(it) }, { store.vectors }, ::docForFrame),
         com.muisti.engine.noteTool { text, withView ->
             // the live frame given to ask() has already passed the privacy gate and been redacted

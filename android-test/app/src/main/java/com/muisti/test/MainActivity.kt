@@ -258,7 +258,7 @@ class MainActivity : ComponentActivity() {
                 // Agent Center: notice sources once a minute (local only, no model call)
                 if (System.currentTimeMillis() - lastNoticeCheck > 60_000) {
                     lastNoticeCheck = System.currentTimeMillis()
-                    runCatching { engine.checkNotices(lastNoticeCheck, location.fresh(60_000), upcomingEvents()) }
+                    runCatching { engine.checkSafety(lastNoticeCheck) + engine.checkNotices(lastNoticeCheck, location.fresh(60_000), upcomingEvents()) }
                         .onSuccess { it.forEach { n -> deliver(n) } }
                         .onFailure { android.util.Log.w("MuistiAgent", "notices failed: ${it.message}") }
                 }
@@ -597,7 +597,7 @@ class MainActivity : ComponentActivity() {
 
     fun openAgentCenter() {
         state.unreadNotices = 0
-        val labels = com.muisti.engine.Notice.LABELS.filterKeys { it != com.muisti.engine.Notice.SAFETY && it != com.muisti.engine.Notice.PATTERN }
+        val labels = com.muisti.engine.Notice.LABELS.filterKeys { it != com.muisti.engine.Notice.PATTERN }
         state.agentCenter = com.muisti.ui.AgentCenterState(null, engine.mutedNotices, labels)
         lifecycleScope.launch {
             val f = java.text.SimpleDateFormat("EEE HH:mm", Locale.US)
@@ -986,6 +986,8 @@ class MainActivity : ComponentActivity() {
         }
         state.online = true
         state.framesSent++
+        // safety: the new memory is checked at once (stored text, no model call unless a rule matches)
+        if (stored) lifecycleScope.launch(Dispatchers.IO) { runCatching { engine.checkSafety(System.currentTimeMillis()) }.getOrNull()?.forEach { deliver(it) } }
         state.lastFrame = if (stored) {
             state.memories = withContext(Dispatchers.IO) { engine.store.sightings().size }
             "Remembered · ${obs.size} text line${if (obs.size == 1) "" else "s"}"
