@@ -48,6 +48,16 @@ val copyPrompts by tasks.registering(Copy::class) {
 }
 tasks.named("preBuild") { dependsOn(copyPrompts) }
 
+// Parity tests talk to the real model with the same keys (eval against the Python pipeline).
+tasks.withType<Test>().configureEach {
+    for (k in listOf("llmBaseUrl", "llmModel", "llmKey", "embedKey")) local.getProperty("muisti.$k")?.let { systemProperty("muisti.$k", it) }
+    systemProperty("muisti.repo", rootProject.file("..").absolutePath)
+    System.getProperty("muisti.mem")?.let { systemProperty("muisti.mem", it) }
+    System.getProperty("muisti.q")?.let { systemProperty("muisti.q", it) }
+    testLogging { showStandardStreams = true; events("failed") }
+    outputs.upToDateWhen { false }
+}
+
 dependencies {
     val bom = platform("androidx.compose:compose-bom:2024.06.00")
     implementation(bom)

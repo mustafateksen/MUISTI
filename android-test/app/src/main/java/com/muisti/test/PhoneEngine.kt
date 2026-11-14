@@ -119,7 +119,7 @@ Rules:
             }
         }
         msgs.put(org.json.JSONObject().put("role", "user").put("content", question))
-        val text = llm.call(msgs, org.json.JSONObject().put("type", "text"), 250, 0.6).trim()
+        val text = llm.call(msgs, com.muisti.engine.RawJson.TEXT, 250, 0.6).trim()
         return Answer(question, "CHAT", text, emptyList(), emptyList(), "small talk", 1,
             (System.currentTimeMillis() - t0) / 1000.0, org.json.JSONObject())
     }

@@ -25,7 +25,7 @@ class Extractor(private val llm: Llm, private val prompts: Prompts, private val 
         var content = try {
             llm.call(messages, llm.schemaFormat("memory", prompts.recordSchema), maxTokens, temperature)
         } catch (e: BadRequest) {
-            llm.call(messages, JSONObject().put("type", "json_object"), maxTokens, temperature)
+            llm.call(messages, RawJson.JSON_OBJECT, maxTokens, temperature)
         }
         val parsed = try {
             JsonText.parse(content)

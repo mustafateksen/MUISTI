@@ -168,7 +168,7 @@ class Asker(private val llm: Llm, private val prompts: Prompts, private val imag
         return scored.sortedBy { -it.first }.take(k).filter { it.first > 0 }   // sortedBy is stable, like Python
     }
 
-    private fun semanticSetup(question: String, docs: List<Doc>): FloatArray? {
+    fun semanticSetup(question: String, docs: List<Doc>): FloatArray? {
         val e = embedder ?: return null
         if (!e.available()) return null
         val todo = docs.filter { it.vec == null }
@@ -234,7 +234,7 @@ class Asker(private val llm: Llm, private val prompts: Prompts, private val imag
             .put(llm.textPart("This photo is what the user's camera sees right now. Answer their question about it in one or two " +
                 "short spoken sentences. If there is readable text that matters, read it exactly. Do not guess what you cannot see. " +
                 "Question: $question"))))
-        return llm.call(msgs, JSONObject().put("type", "text"), 300, 0.0).trim()
+        return llm.call(msgs, RawJson.TEXT, 300, 0.0).trim()
     }
 
     // --- main entry --------------------------------------------------------------------
