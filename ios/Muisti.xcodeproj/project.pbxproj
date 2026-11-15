@@ -13,6 +13,7 @@
 		A10000000000000000000004 /* MWDATMotion in Frameworks */ = {isa = PBXBuildFile; productRef = A20000000000000000000004 /* MWDATMotion */; };
 		A10000000000000000000005 /* MWDATSpeech in Frameworks */ = {isa = PBXBuildFile; productRef = A20000000000000000000005 /* MWDATSpeech */; };
 		A10000000000000000000006 /* MWDATInputs in Frameworks */ = {isa = PBXBuildFile; productRef = A20000000000000000000006 /* MWDATInputs */; };
+		A10000000000000000000007 /* FluidAudio in Frameworks */ = {isa = PBXBuildFile; productRef = A20000000000000000000007 /* FluidAudio */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -56,6 +57,7 @@
 				A10000000000000000000004 /* MWDATMotion in Frameworks */,
 				A10000000000000000000005 /* MWDATSpeech in Frameworks */,
 				A10000000000000000000006 /* MWDATInputs in Frameworks */,
+				A10000000000000000000007 /* FluidAudio in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -123,6 +125,7 @@
 				A20000000000000000000004 /* MWDATMotion */,
 				A20000000000000000000005 /* MWDATSpeech */,
 				A20000000000000000000006 /* MWDATInputs */,
+				A20000000000000000000007 /* FluidAudio */,
 			);
 			productName = Muisti;
 			productReference = A30000000000000000000001 /* Muisti.app */;
@@ -181,6 +184,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				AB0000000000000000000001 /* XCRemoteSwiftPackageReference "meta-wearables-dat-ios" */,
+				AB0000000000000000000002 /* XCRemoteSwiftPackageReference "FluidAudio" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = A60000000000000000000002 /* Products */;
@@ -414,6 +418,14 @@
 				version = 1.0.1;
 			};
 		};
+		AB0000000000000000000002 /* XCRemoteSwiftPackageReference "FluidAudio" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/FluidInference/FluidAudio";
+			requirement = {
+				kind = exactVersion;
+				version = 0.18.3;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -446,6 +458,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = AB0000000000000000000001 /* XCRemoteSwiftPackageReference "meta-wearables-dat-ios" */;
 			productName = MWDATInputs;
+		};
+		A20000000000000000000007 /* FluidAudio */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = AB0000000000000000000002 /* XCRemoteSwiftPackageReference "FluidAudio" */;
+			productName = FluidAudio;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

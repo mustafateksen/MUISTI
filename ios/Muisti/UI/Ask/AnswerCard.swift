@@ -7,6 +7,7 @@ struct AnswerCard: View {
     /// Off in the chat, where the question is already shown as its own bubble.
     var showsQuestion = true
     @AppStorage(DeveloperMode.storageKey) private var developerMode = false
+    @AppStorage(DeveloperMode.cleanScreenKey) private var cleanScreen = false
 
     private var seen: Bool { result.label == .seen }
 
@@ -45,7 +46,7 @@ struct AnswerCard: View {
                     .foregroundStyle(.secondary)
             }
 
-            if developerMode {
+            if developerMode, !cleanScreen {
                 Text("\(result.latencyMs) ms · \(result.usedAI ? "Nemotron" : "local search")")
                     .font(.footnote.monospaced())
                     .foregroundStyle(.tertiary)

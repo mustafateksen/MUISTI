@@ -1,8 +1,15 @@
 # Muisti remote driver: a guide for the agent that will use it
 
-You (a coding agent on a Mac) can drive the Muisti app like a person wearing the glasses: show it a recorded video or photos as if the glasses saw them, ask it questions, and read what it answered and what it said on its own. This is for preparing a demo video and for trying whole scenarios without wearing the glasses.
+You (a coding agent on a Mac) control what the Muisti app on an iPhone shows and says, so a video can be recorded of the app in use. There are two ways to work, and the first is the one to use for a video:
+
+1. **Stage mode (use this for the video).** You decide everything: the words that appear as the user's question, how long Muisti "thinks", the exact answer text, the label on it, the pictures under it, what the camera view shows, what the memory list contains, what Muisti says by itself. The app calls no model and recognises nothing; it plays what you give it with its real screens, animations, sounds and voice. Nothing can go wrong on camera and nothing takes longer than you say.
+2. **Real mode.** The app does the work itself: you feed it a video or photos as if the glasses saw them and ask questions; its own analysis and answers come back. Slower and not predictable. Use it only when the point is to see what Muisti really answers.
+
+The two can be mixed: stage commands and real commands work side by side in one session.
 
 You do not need Xcode, and you do not build or change the app. The app is already installed on the phone (a DEBUG build, installed by cable from the owner's Mac). You only send HTTP requests to it over Wi-Fi with the tool in this repository.
+
+While the driver is on, the lines developers see under an answer (timings, traces) are hidden, whatever the phone's settings say.
 
 ## What you need
 
@@ -28,6 +35,76 @@ python3 tools/muisti-drive state
 ```
 
 `state` printing JSON means you are connected. Do not print the token, do not write it into files in the repository.
+
+## Stage mode
+
+Everything the viewer sees is one of these building blocks. Each command returns as soon as its step has finished on the phone (a turn returns when the answer has been read aloud), so a list of commands run one after another is already a timed scene.
+
+| Command | What the phone shows |
+|---|---|
+| `muisti-drive stage-status recording --battery 82` | The status island at the top says the glasses are connected and Muisti is remembering, with that battery level. `off`: recording off. `real`: back to what the glasses are actually doing. Run this first, or the island may say the glasses are not connected |
+| `muisti-drive stage-upload photo.jpg --name jacket` | Nothing yet: the picture is now in the app as `jacket.jpg`, for the commands below. Faces and number plates are masked, as on every frame Muisti shows; a private view (bathroom, card keypad) is refused. `--raw` keeps the picture untouched (only for pictures with no people in them) |
+| `muisti-drive stage-memory jacket.jpg --name "Corner shop" --kind shop --caption "…" --text "WINTER JACKET 85 €" --street "Otakaari 1" --minutes-ago 95` | A memory in the Memory tab, exactly as written, with that picture, time and place. Prints its `id`. `--at "2026-11-15 09:10"` instead of `--minutes-ago`; `--lat`/`--lon` put it on the map; `--phone`, `--hours`, `--area` are optional |
+| `muisti-drive stage-turn --question "How much was the winter jacket?" --answer "Eighty-five euros, with twenty percent off today." --label seen --evidence 619` | One whole turn on the Ask screen: the listening view with the question arriving word by word, the thinking view (with the end-of-question tone), then the answer card with its label and evidence, read aloud in Muisti's voice |
+| `muisti-drive stage-turn --answer "You left the stove on." --title "Muisti noticed" --images stove.jpg` | Muisti speaking first (no `--question`): a card with that heading and picture, read aloud |
+| `muisti-drive stage-view street.jpg` | That picture as the camera's view on the Recording screen |
+| `muisti-drive stage-phase listening "Where did I"` | Holds one view until the next command: `idle`, `listening`, `thinking` or `speaking`, with optional words on screen |
+| `muisti-drive stage-clear` | Empties the conversation on screen |
+| `muisti-drive screen ask\|memory\|safety\|notes\|back` | Switches the tab or screen the phone shows |
+
+Options of `stage-turn`:
+
+| Option | Meaning |
+|---|---|
+| `--answer` | The reply, word for word. Required. Write numbers the way they should be spoken |
+| `--question` | What the user "said". Left out: Muisti speaks first |
+| `--label` | `seen` (green "Seen" chip, the default), `unsure` ("Not sure"), `not_seen` ("Not seen"), `chat` (no chip: small talk, a command's confirmation) |
+| `--evidence 619,620` | Memory ids shown as evidence cards under the answer (picture, name, time, street). Make them first with `stage-memory` |
+| `--images a.jpg,b.jpg` | Uploaded pictures shown as a strip under the answer (for "did I lock the door?" style proof) |
+| `--live a.jpg` | An uploaded picture shown as the "Live view" the answer looked at (for "what is this?") |
+| `--title` | Heading when Muisti speaks first (default "Muisti noticed") |
+| `--note` | A small grey line under the answer |
+| `--lang en` | Voice language (`en`, `fi`, `tr`) |
+| `--heard 2.5` | Seconds the question takes to appear (default: about a third of a second per word) |
+| `--think 1.2` | Seconds of thinking before the answer (default 1.2) |
+| `--silent` | Show the answer without reading it aloud |
+
+### A whole scene from one file
+
+Write the scene as a JSON list and play it: `muisti-drive stage-play scene.json`. Paths in `upload` steps are relative to the script file. A memory step can be given a name with `"as"`, and a later turn cites it with `"evidence"`.
+
+```json
+[
+  {"do": "status", "glasses": "recording", "battery": 82},
+  {"do": "clear"},
+  {"do": "upload", "file": "jacket.jpg", "name": "jacket"},
+  {"do": "memory", "image": "jacket.jpg", "as": "jacket", "name": "Corner shop", "kind": "shop",
+   "caption": "A price tag on a winter jacket.", "text": "WINTER JACKET 85 € -20 % today",
+   "street": "Otakaari 1", "minutes_ago": 95},
+  {"do": "screen", "show": "ask"},
+  {"wait": 2},
+  {"do": "turn", "question": "How much was the winter jacket I saw this morning?",
+   "answer": "Eighty-five euros, with twenty percent off today. That was at the corner shop on Otakaari.",
+   "label": "seen", "evidence": ["jacket"], "think_seconds": 1.5},
+  {"wait": 3},
+  {"do": "turn", "answer": "You're passing that shop again. Want me to remind you about the jacket?",
+   "title": "Muisti noticed", "images": ["jacket.jpg"]}
+]
+```
+
+Every key of a step is sent as it is, so the keys are those of the HTTP routes: `question`, `answer`, `label`, `evidence_ids`, `images`, `live_image`, `title`, `note`, `language`, `heard_seconds`, `think_seconds`, `speak`, `proactive` for a turn; `image`, `name`, `kind`, `caption`, `text`, `street`, `area`, `minutes_ago`, `at`, `lat`, `lon`, `phone`, `hours` for a memory.
+
+### Recording tips
+
+- Prepare first (uploads, memories, status), then start the screen recording, then play the turns: preparation steps show nothing on screen except the memory count.
+- Start from a clean app when the Memory tab will be on camera: `muisti-drive reset --yes` deletes everything in it (ask the phone's owner first).
+- A staged answer is always read aloud with the voice chosen in Settings (on the phone, or on the glasses when they are connected); `--silent` turns that off for one turn. Real-mode answers are silent when the driver was switched on in the Developer screen.
+- What the staged answer says is your responsibility: the app does not check it against anything. Keep it to what the real app does, so the video shows the product and not something it cannot do.
+- A staged turn is not added to the conversation the model sees, so a later real `ask` does not know about it.
+
+## Real mode
+
+The commands below make the app do its own work.
 
 ## Commands
 

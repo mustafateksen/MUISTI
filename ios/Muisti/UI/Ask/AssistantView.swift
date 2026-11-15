@@ -47,7 +47,7 @@ struct AssistantView: View {
             AssistantTopBar(
                 status: IslandStatus(controller: controller, config: config, wearables: wearables),
                 canClear: !voice.history.isEmpty && !voice.isBusy,
-                developerMode: developerMode,
+                developerMode: developerMode && !UserDefaults.standard.bool(forKey: DeveloperMode.cleanScreenKey),
                 fades: !voiceMode,
                 perform: perform,
                 showDetails: { showPanel = true },

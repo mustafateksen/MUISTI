@@ -822,6 +822,11 @@ final class CaptureController {
         if let image { previewImage = image }
     }
 
+    #if DEBUG
+    /// Remote driver, staged demo: the picture shown as the camera's view.
+    func stagePreview(_ image: UIImage) { previewImage = image }
+    #endif
+
 }
 
 extension HeatLevel {

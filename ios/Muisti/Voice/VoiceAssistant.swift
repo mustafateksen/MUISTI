@@ -77,6 +77,11 @@ final class VoiceAssistant {
     /// Voice heard but no words yet (they come about a second after it): keep waiting at least this.
     static let firstWordsWait = 3.0
     @ObservationIgnored private var listenStartedAt = Date()
+    /// When the heard text last changed, and whether this session is Parakeet's.
+    @ObservationIgnored private var lastChangeAt = Date()
+    @ObservationIgnored private var usingParakeet = false
+    /// "Still speaking" without a new word for this long no longer keeps the microphone open.
+    static let stuckAfter = 4.0
     static let prepareAfter = 0.45
 
     init(engine: QueryEngine, location: LocationProvider) {
@@ -117,9 +122,14 @@ final class VoiceAssistant {
             // iOS 26+: Apple's newer speech model when its language model is installed (it is
             // downloaded in the background on first use); SFSpeechRecognizer until then.
             let modern = await modernSpeech()
+            // Parakeet (on the phone) when chosen, in the app and able to read this language.
+            let parakeet = await useParakeet()
+            usingParakeet = parakeet
+            lastChangeAt = Date()
             if let tap = glassesMic, tap.isFlowing {
                 Log.pipeline.info("listening on the glasses mic (camera stream audio)")
-                session = modern?(.glasses(tap), names) ?? TapSpeechSession(recognizer: recognizer, contextualStrings: names, tap: tap)
+                session = parakeet ? ParakeetSpeechSession(source: .glasses(tap), localeIdentifier: localeIdentifier)
+                    : modern?(.glasses(tap), names) ?? TapSpeechSession(recognizer: recognizer, contextualStrings: names, tap: tap)
             } else {
                 let wantsDevice = prefersGlassesMic()
                 try Self.activateAudioSession(glassesMic: wantsDevice)
@@ -133,9 +143,12 @@ final class VoiceAssistant {
                 }
                 Log.pipeline.info("listening on \(audio.currentRoute.inputs.first?.portName ?? "no input", privacy: .public)")
                 Trace.note("listening on \(audio.currentRoute.inputs.first?.portName ?? "no input")")
-                session = modern?(.microphone, names) ?? SpeechSession(recognizer: recognizer, contextualStrings: names)
+                session = parakeet ? ParakeetSpeechSession(source: .microphone, localeIdentifier: localeIdentifier)
+                    : modern?(.microphone, names) ?? SpeechSession(recognizer: recognizer, contextualStrings: names)
             }
-            Log.pipeline.info("speech engine: \(modern == nil ? "SFSpeechRecognizer" : "SpeechAnalyzer", privacy: .public) (\(self.localeIdentifier, privacy: .public))")
+            let engineName = parakeet ? "Parakeet" : modern == nil ? "SFSpeechRecognizer" : "SpeechAnalyzer"
+            Log.pipeline.info("speech engine: \(engineName, privacy: .public) (\(self.localeIdentifier, privacy: .public))")
+            Trace.note("speech engine: \(engineName) (\(localeIdentifier))")
             try session.start { [weak self] text, isFinal in
                 Task { @MainActor in self?.handlePartial(text, isFinal: isFinal) }
             } onError: { [weak self] message in
@@ -413,6 +426,110 @@ final class VoiceAssistant {
         Task { _ = await self.names() }
         // Starts the newer speech model's download if it isn't on the phone yet.
         Task { _ = await self.modernSpeech() }
+        // The on-device models in the app: who is speaking (endpoint) and Parakeet.
+        Task {
+            await SpeechLab.shared.prepareEndpoint()
+            if SpeechSettings.engine != .apple { await SpeechLab.shared.prepareParakeet(self.localeIdentifier) }
+        }
+    }
+
+    private func useParakeet() async -> Bool {
+        guard SpeechSettings.engine != .apple, SpeechSettings.parakeetReads(localeIdentifier) else { return false }
+        let locale = localeIdentifier
+        if await SpeechLab.shared.parakeetReady(locale) { return true }
+        // Not loaded yet: load behind this question, which Apple's model hears.
+        Task { await SpeechLab.shared.prepareParakeet(locale) }
+        return false
+    }
+
+    #if DEBUG
+    // MARK: Staged demo (remote driver, for a screen recording)
+
+    /// The listening view with the words arriving as if heard. Nothing is recorded or recognised.
+    func stageHeard(_ text: String, seconds: Double) async {
+        synthesizer.stopSpeaking(at: .immediate)
+        player.stop()
+        transcript = ""
+        phase = .listening
+        let words = text.split(separator: " ")
+        let perWord = max(0.08, seconds / Double(max(words.count, 1)))
+        for index in words.indices {
+            guard phase == .listening else { return }
+            transcript = words[...index].joined(separator: " ")
+            // The orb moves as it does with a voice.
+            for _ in 0..<max(1, Int(perWord / 0.06)) {
+                levels.update(.init(level: Float.random(in: 0.35...0.9),
+                                    bands: (0..<SpectrumAnalyzer.bandCount).map { _ in Float.random(in: 0.1...0.9) }))
+                try? await Task.sleep(for: .milliseconds(60))
+            }
+        }
+        levels.reset()
+    }
+
+    /// The thinking view for a while (with the end-of-question tone, as after a real question).
+    func stageThinking(_ question: String, seconds: Double, tone: Bool) async {
+        transcript = question
+        phase = .thinking
+        if tone { playEndTone() }
+        try? await Task.sleep(for: .seconds(seconds))
+    }
+
+    /// Shows a reply exactly as given, and reads it aloud when asked.
+    func stageAnswer(_ result: AskResult, speak aloud: Bool) async {
+        lastResult = result
+        history.insert(result, at: 0)
+        if history.count > 20 { history.removeLast() }
+        if aloud {
+            phase = .speaking
+            await speak(result.answer, language: result.language ?? localeIdentifier)
+            Self.deactivateAudioSession()
+        }
+        phase = .idle
+    }
+
+    /// One view by itself (to hold a pose for the camera): idle, listening, thinking or speaking.
+    func stagePhase(_ name: String, text: String?) {
+        switch name {
+        case "listening": phase = .listening
+        case "thinking": phase = .thinking
+        case "speaking": phase = .speaking
+        default:
+            phase = .idle
+            levels.reset()
+        }
+        if let text { transcript = text }
+    }
+    #endif
+
+    // MARK: Microphone test (Settings)
+
+    /// Opens the microphone a question would be heard on, for a test recording. Returns the
+    /// capture and the name of the input.
+    func openTestMicrophone() async throws -> (capture: MicCapture, input: String) {
+        guard phase == .idle || phase.isFailed else {
+            throw NSError(domain: "Muisti.Speech", code: 2, userInfo: [NSLocalizedDescriptionKey: String(localized: "Muisti is busy. Try again in a moment.")])
+        }
+        _ = await Self.requestSpeechAuthorization()
+        guard await AVAudioApplication.requestRecordPermission() else {
+            throw NSError(domain: "Muisti.Speech", code: 3, userInfo: [NSLocalizedDescriptionKey: String(localized: "No access to the microphone. Settings > Muisti > Microphone.")])
+        }
+        if let tap = glassesMic, tap.isFlowing {
+            return (MicCapture(source: .glasses(tap)), String(localized: "Glasses microphone (camera stream)"))
+        }
+        let wantsDevice = prefersGlassesMic()
+        try Self.activateAudioSession(glassesMic: wantsDevice)
+        let audio = AVAudioSession.sharedInstance()
+        if wantsDevice, audio.availableInputs?.contains(where: { $0.portType == .bluetoothHFP }) == true,
+           !audio.currentRoute.inputs.contains(where: { $0.portType == .bluetoothHFP }) {
+            _ = await Self.prepareGlassesMic()
+        }
+        let name = audio.currentRoute.inputs.first?.portName ?? String(localized: "no input")
+        return (MicCapture(source: .microphone), "\(name) · \(Int(audio.sampleRate)) Hz")
+    }
+
+    func closeTestMicrophone() {
+        guard phase == .idle || phase.isFailed else { return }
+        Self.deactivateAudioSession()
     }
 
     /// A factory for `SpeechAnalyzer` sessions when the newer model is ready for the question
@@ -440,17 +557,28 @@ final class VoiceAssistant {
         if isFinal {
             Task { await finishListening() }
         } else {
-            if changed { turn.mark("last word") }
+            if changed {
+                turn.mark("last word")
+                lastChangeAt = Date()
+            } else if Date().timeIntervalSince(lastChangeAt) > Self.stuckAfter {
+                // "Still speaking" updates with no new word for this long are not the user:
+                // a street, a fan, other people. The timer already running ends the question.
+                return
+            }
             // Updates also arrive (unchanged) while the user is audibly speaking, so these
             // timers only run out after real silence (see AnalyzerSpeechSession).
             let words = text.trimmingCharacters(in: .whitespacesAndNewlines)
             if words.isEmpty {
                 let left = 6 - Date().timeIntervalSince(listenStartedAt)
+                // Sound but never a word for ten seconds: that is the room, not a question.
+                guard Date().timeIntervalSince(listenStartedAt) < 10 else { return }
                 armSilenceTimer(after: max(Self.firstWordsWait, left))
             } else if let last = words.last, ".?!".contains(last) {
-                armSilenceTimer(after: Self.endOfQuestionSilence)
+                armSilenceTimer(after: usingParakeet ? SpeechSettings.endSilence : Self.endOfQuestionSilence)
             } else {
-                armSilenceTimer(after: Self.midSentenceSilence)
+                // Parakeet's updates stop exactly when the voice does (a speech model listens for
+                // it), so the wait can be shorter than with word bursts seconds apart.
+                armSilenceTimer(after: usingParakeet ? SpeechSettings.endSilence + 0.9 : Self.midSentenceSilence)
             }
             guard changed, !words.isEmpty else { return }
             // A short pause: start searching on these words. If the user goes on, the next

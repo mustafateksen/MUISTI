@@ -4,4 +4,5 @@ import Foundation
 enum SettingsRoute: Hashable {
     case developer
     case assistantNotes
+    case micTest
 }

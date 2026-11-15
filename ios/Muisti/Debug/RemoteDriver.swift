@@ -39,6 +39,8 @@ final class RemoteDriver {
     /// Posted with the screen's name; `RootView` switches to it.
     static let showScreen = Notification.Name("muisti.remoteDriver.showScreen")
     static let defaultPort: UInt16 = 8765
+    /// Pictures uploaded for the staged demo.
+    static let stageDirectory = FileManager.default.temporaryDirectory.appendingPathComponent("muisti-stage", isDirectory: true)
     private(set) static var port: UInt16 = defaultPort
     private(set) static var failure: String?
 
@@ -85,6 +87,8 @@ final class RemoteDriver {
             return false
         }
         failure = nil
+        // The screen may be recorded: no timings or traces under the answers.
+        UserDefaults.standard.set(true, forKey: DeveloperMode.cleanScreenKey)
         Self.port = port
         let driver = RemoteDriver(controller: controller, token: token, listener: listener)
         shared = driver
@@ -96,6 +100,8 @@ final class RemoteDriver {
     }
 
     static func stop() {
+        UserDefaults.standard.set(false, forKey: DeveloperMode.cleanScreenKey)
+        UserDefaults.standard.removeObject(forKey: DeveloperMode.stageStatusKey)
         shared?.listener.cancel()
         shared?.videoTask?.cancel()
         shared = nil
@@ -361,6 +367,150 @@ final class RemoteDriver {
             let id = await controller.safety.store.insert(SafetyEvent(at: at, kind: kind, object: object.lowercased(), value: value.lowercased(),
                                                                       confidence: nil, source: .user_confirmed, frameFile: nil))
             return Response(status: 200, json: ["id": Int(id), "at": Cue.stamp(at)])
+        case ("POST", "/speech"):
+            // A recording (WAV or any audio file as the body) through every on-device speech
+            // engine, and what the two "is someone speaking" detectors make of it.
+            let file = FileManager.default.temporaryDirectory.appendingPathComponent("driver-speech-\(UUID().uuidString).wav")
+            defer { try? FileManager.default.removeItem(at: file) }
+            guard (try? request.body.write(to: file)) != nil, let audio = try? AVAudioFile(forReading: file),
+                  let buffer = AVAudioPCMBuffer(pcmFormat: audio.processingFormat, frameCapacity: AVAudioFrameCount(audio.length)),
+                  (try? audio.read(into: buffer)) != nil else {
+                return Response(status: 400, json: ["error": "send an audio file as the body"])
+            }
+            let samples = Resampler16k().convert(buffer)
+            let locale = text("locale") ?? controller.voice.localeIdentifier
+            var out: [String: Any] = ["seconds": Double(samples.count) / 16_000, "locale": locale]
+            func timed(_ name: String, _ run: () async -> String?) async {
+                let began = Date()
+                let heard = await run()
+                out[name] = ["text": heard as Any? ?? NSNull(), "seconds": Date().timeIntervalSince(began)] as [String: Any]
+            }
+            await SpeechLab.shared.prepareEndpoint()
+            await timed("parakeet") {
+                guard await SpeechLab.shared.prepareParakeet(locale) else { return nil }
+                return await SpeechLab.shared.transcribe(samples, localeIdentifier: locale)
+            }
+            await timed("apple_general") { await AppleSpeechTest.modern(samples, localeIdentifier: locale, dictation: false) }
+            await timed("apple_dictation") { await AppleSpeechTest.modern(samples, localeIdentifier: locale, dictation: true) }
+            await timed("apple_legacy") { await AppleSpeechTest.legacy(samples, localeIdentifier: locale) }
+            // Per 256 ms: the speech model's verdict and the loudness detector's.
+            let trace = await SpeechLab.shared.speechTrace(samples)
+            let loudness = VoiceActivity()
+            var loud: [Bool] = []
+            var index = 0
+            while index + 4096 <= samples.count {
+                loud.append(Resampler16k.buffer(Array(samples[index..<(index + 4096)])).map { loudness.isVoice($0) } ?? false)
+                index += 4096
+            }
+            // The same verdict a live session uses: speech, and loud enough to be the user.
+            var judge = VoiceGate.Judge()
+            let mine = trace.enumerated().map { hop, probability -> Bool in
+                let from = hop * 4096
+                return judge.isUser(probability: probability, samples: Array(samples[min(from, samples.count)..<min(from + 4096, samples.count)]))
+            }
+            let lastSpeech = mine.lastIndex(of: true)
+            // What a live session would hand to Parakeet: up to half a second past the user's speech.
+            if let lastSpeech, (lastSpeech + 1) * 4096 + 8_000 < samples.count {
+                let own = Array(samples[..<((lastSpeech + 1) * 4096 + 8_000)])
+                out["parakeet_live"] = await SpeechLab.shared.transcribe(own, localeIdentifier: locale) as Any? ?? NSNull()
+            }
+            out["speech_model"] = ["speech_seconds": Double(mine.filter { $0 }.count) * 0.256,
+                                   "last_speech_at": lastSpeech.map { Double($0 + 1) * 0.256 } as Any? ?? NSNull()] as [String: Any]
+            out["loudness"] = ["voiced_seconds": Double(loud.filter { $0 }.count) * 0.256,
+                               "last_voiced_at": loud.lastIndex(of: true).map { Double($0 + 1) * 0.256 } as Any? ?? NSNull()] as [String: Any]
+            return Response(status: 200, json: out)
+        // MARK: Stage: the screen shows and says exactly what the driver gives it. No model is
+        // called, nothing is recognised; made for recording a video.
+        case ("POST", "/stage/upload"):
+            // A picture for later stage calls. Faces and plates are masked here, as on every
+            // frame Muisti shows; a private view (bathroom, card keypad) is refused.
+            guard let jpeg = ImageData.ensureJPEG(request.body) else { return Response(status: 400, json: ["error": "send a picture as the body (Content-Type: image/jpeg)"]) }
+            let raw = request.query["raw"] == "1"
+            let prepared = raw ? nil : await Task.detached(priority: .userInitiated) { SafetyFrame.prepare(jpeg, maxPixel: 1536, fromPipeline: false) }.value
+            guard raw || prepared != nil else { return Response(status: 422, json: ["error": "this picture is withheld (a private view, or it could not be masked)"]) }
+            let name = (request.query["name"] ?? UUID().uuidString.prefix(8).lowercased()) + ".jpg"
+            try? FileManager.default.createDirectory(at: Self.stageDirectory, withIntermediateDirectories: true)
+            try? (prepared?.jpeg ?? jpeg).write(to: Self.stageDirectory.appendingPathComponent(name))
+            return Response(status: 200, json: ["file": name, "text_read": prepared?.ocr ?? ""])
+        case ("POST", "/stage/turn"):
+            // One whole turn: the question arrives word by word, Muisti thinks, the answer is
+            // shown with its pictures and read aloud. Every part is optional except `answer`.
+            guard let answer = text("answer"), !answer.isEmpty else { return Response(status: 400, json: ["error": "answer is missing"]) }
+            let voice = controller.voice
+            let question = text("question") ?? ""
+            let proactive = (value("proactive") as? Bool) == true || question.isEmpty
+            if !question.isEmpty {
+                let words = Double(question.split(separator: " ").count)
+                await voice.stageHeard(question, seconds: number("heard_seconds") ?? max(1.0, words * 0.33))
+                await voice.stageThinking(question, seconds: number("think_seconds") ?? 1.2, tone: (value("tone") as? Bool) != false)
+            }
+            let label: AnswerLabel = switch text("label") ?? "seen" {
+            case "not_seen": .unknown
+            case "unsure": .unsure
+            default: .seen
+            }
+            var hits: [MemoryHit] = []
+            for id in (value("evidence_ids") as? [Any] ?? []).compactMap({ ($0 as? NSNumber)?.int64Value }) {
+                if let record = await controller.store.record(id: id) { hits.append(MemoryHit(record: record, score: 1)) }
+            }
+            let pictures = (value("images") as? [String] ?? []).map { Self.stageDirectory.appendingPathComponent($0) }.filter { FileManager.default.fileExists(atPath: $0.path) }
+            let live = text("live_image").flatMap { try? Data(contentsOf: Self.stageDirectory.appendingPathComponent($0)) }
+            // `chat`: a plain reply with no "Seen / Not seen" chip (small talk, a command, Muisti speaking first).
+            let plain = text("label") == "chat" || proactive
+            let result = AskResult(question: proactive ? (text("title") ?? String(localized: "Muisti noticed")) : question, answer: answer, label: label,
+                                   evidence: hits, usedAI: true, latencyMs: 0, note: text("note"), language: text("language"),
+                                   isCommand: plain, safetyFrames: pictures, spontaneous: proactive, liveFrame: live)
+            await voice.stageAnswer(result, speak: (value("speak") as? Bool) != false)
+            return Response(status: 200, json: ["shown": true, "evidence": hits.map { Int($0.record.id) }, "pictures": pictures.count, "live_image": live != nil])
+        case ("POST", "/stage/phase"):
+            // Hold one view: idle, listening, thinking or speaking, with optional words on screen.
+            guard let phase = text("phase"), ["idle", "listening", "thinking", "speaking"].contains(phase) else {
+                return Response(status: 400, json: ["error": "phase: idle, listening, thinking or speaking"])
+            }
+            controller.voice.stagePhase(phase, text: text("text"))
+            return Response(status: 200, json: ["phase": phase])
+        case ("POST", "/stage/view"):
+            // The picture shown as what the camera sees (the preview on the Recording screen).
+            guard let name = text("image"), let data = try? Data(contentsOf: Self.stageDirectory.appendingPathComponent(name)), let image = UIImage(data: data) else {
+                return Response(status: 400, json: ["error": "image: a file name from /stage/upload"])
+            }
+            controller.stagePreview(image)
+            return Response(status: 200, json: ["showing": name])
+        case ("POST", "/stage/memory"):
+            // A memory written exactly as given (Memory tab, map, evidence cards): no analysis call.
+            guard let name = text("image"), let jpeg = try? Data(contentsOf: Self.stageDirectory.appendingPathComponent(name)) else {
+                return Response(status: 400, json: ["error": "image: a file name from /stage/upload"])
+            }
+            let at = text("at").flatMap { Cue(at: $0).nextDue(after: Date.distantPast) } ?? Date()
+            let seenAt = number("minutes_ago").map { Date().addingTimeInterval(-$0 * 60) } ?? at
+            guard let id = await controller.store.insert(NewMemory(seenAt: seenAt, latitude: number("lat"), longitude: number("lon"), accuracy: number("lat") == nil ? nil : 10,
+                                                                   heading: nil, street: text("street"), area: text("area"), ocrText: text("text") ?? "", frameJPEG: jpeg)) else {
+                return Response(status: 500, json: ["error": "the memory could not be written"])
+            }
+            var fields: [String: Any] = ["useful": true, "kind": text("kind") ?? "other", "objects": [Any](), "relations": [Any](), "depictions": [Any](), "confidence": 0.95]
+            for key in ["name", "subtype", "phone", "hours", "other_text", "caption"] { if let given = text(key) { fields[key] = given } }
+            if let keywords = value("keywords") as? [String] { fields["keywords"] = keywords }
+            guard let json = try? JSONSerialization.data(withJSONObject: fields), let record = try? JSONDecoder().decode(ExtractedRecord.self, from: json) else {
+                return Response(status: 500, json: ["error": "the record fields could not be read", "id": Int(id)])
+            }
+            await controller.store.applyEnrichment(id: id, record: record, embedding: nil, model: "")
+            return Response(status: 200, json: ["id": Int(id), "seen_at": Cue.stamp(seenAt)])
+        case ("POST", "/stage/status"):
+            // The status island at the top: "recording" (glasses connected and remembering),
+            // "off", or "real" (what the glasses are actually doing). `battery`: the glasses' percentage.
+            guard let glasses = text("glasses"), ["recording", "off", "real"].contains(glasses) else {
+                return Response(status: 400, json: ["error": "glasses: recording, off or real"])
+            }
+            UserDefaults.standard.set(glasses == "real" ? nil : glasses, forKey: DeveloperMode.stageStatusKey)
+            UserDefaults.standard.set(Int(number("battery") ?? 0), forKey: DeveloperMode.stageBatteryKey)
+            // The screen redraws on the next change; nudge it now.
+            controller.voice.stagePhase("idle", text: nil)
+            NotificationCenter.default.post(name: Self.showScreen, object: "ask")
+            return Response(status: 200, json: ["glasses": glasses])
+        case ("POST", "/stage/clear"):
+            controller.voice.stagePhase("idle", text: "")
+            controller.voice.clearConversation()
+            return Response(status: 200, json: ["cleared": true])
         case ("GET", "/habits"):
             let now = Date()
             return Response(status: 200, json: ["habits": Habits.lines(await controller.agent.habits(now: now), now: now)])
@@ -383,7 +533,8 @@ final class RemoteDriver {
                                                 "routes": ["GET /state", "GET /events?since=", "GET /evidence?id=", "GET /wait-idle?timeout=", "POST /ask", "POST /frame", "POST /video",
                                                            "POST /location", "POST /motion", "POST /tick", "POST /reply", "POST /reset", "GET /chat", "POST /chat/clear",
                                                            "GET /memories?limit=", "POST /memory/delete", "POST /forget", "POST /intent", "POST /rule",
-                                                           "POST /settings", "POST /screen"]])
+                                                           "POST /settings", "POST /screen", "POST /speech",
+                                                           "POST /stage/upload", "POST /stage/turn", "POST /stage/phase", "POST /stage/view", "POST /stage/memory", "POST /stage/status", "POST /stage/clear"]])
         }
     }
 

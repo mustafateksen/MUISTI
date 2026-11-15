@@ -7,3 +7,4 @@ __pycache__/
 
 # Keys bundled into local builds only (never committed)
 Muisti/Resources/Secrets.plist
+Muisti/Resources/SpeechModels/

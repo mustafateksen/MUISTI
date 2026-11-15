@@ -92,10 +92,11 @@ final class AnalyzerSpeechSession: ListeningSession, @unchecked Sendable {
         // While the user is audibly speaking, repeat the current text: the listener restarts
         // its end-of-question timer on every update, so it only ends after real silence, not
         // when the model goes quiet for a few seconds before finalising a phrase.
-        let activity = VoiceActivity()
+        // Whether it is a voice comes from the speech/no-speech model (loudness alone kept the
+        // microphone open on a noisy street), from loudness until that model is loaded.
         let lastBeat = OSAllocatedUnfairLock(initialState: Date.distantPast)
-        let heartbeat: @Sendable (AVAudioPCMBuffer) -> Void = { buffer in
-            guard activity.isVoice(buffer) else { return }
+        let resampler = Resampler16k()
+        let gate = VoiceGate {
             let now = Date()
             guard lastBeat.withLock({ last in
                 guard now.timeIntervalSince(last) > 0.25 else { return false }
@@ -106,6 +107,7 @@ final class AnalyzerSpeechSession: ListeningSession, @unchecked Sendable {
             // for words (they come about a second after the voice), never ends early.
             onText(speechText.withLock { Self.join($0.finalized, $0.volatile) }, false)
         }
+        let heartbeat: @Sendable (AVAudioPCMBuffer) -> Void = { buffer in gate.feed(resampler.convert(buffer)) }
         switch source {
         case .glasses(let tap):
             tap.setConsumer { buffer in
@@ -115,6 +117,7 @@ final class AnalyzerSpeechSession: ListeningSession, @unchecked Sendable {
             }
         case .microphone:
             let node = audioEngine.inputNode
+            try? node.setVoiceProcessingEnabled(SpeechSettings.voiceProcessing)
             let format = node.outputFormat(forBus: 0)
             guard format.sampleRate > 0, format.channelCount > 0 else {
                 throw NSError(domain: "Muisti.Speech", code: 1,

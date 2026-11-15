@@ -45,6 +45,9 @@ struct SettingsView: View {
                         }
                     }
                     .onChange(of: config.speechLanguage) { applySettings() }
+                    NavigationLink(value: SettingsRoute.micTest) {
+                        Label("Microphone test and speech engine", systemImage: "waveform.and.mic")
+                    }
                     Toggle("Read answers aloud", isOn: $config.speakAnswers)
                     if config.speakAnswers, !VoicePicker.hasPremiumAva {
                         Button("Get a natural voice (Ava)", systemImage: "waveform.badge.plus") { showVoiceSetup = true }
@@ -118,6 +121,8 @@ struct SettingsView: View {
                     DeveloperView(controller: controller, config: config, wearables: wearables)
                 case .assistantNotes:
                     AgentNotesView(controller: controller)
+                case .micTest:
+                    MicTestView(controller: controller)
                 }
             }
             .toolbar {

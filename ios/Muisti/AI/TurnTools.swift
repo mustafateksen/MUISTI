@@ -102,7 +102,9 @@ enum TurnTools {
              See what is in front of the user right now through the glasses camera. Call it whenever the \
              message is about the present view, in any words or language: what is this, what do you see, \
              look, read this, what does it say, what colour is it, is it on, is this the right one, \
-             "this" or "here" pointing at something, a garbled request about seeing or looking, or a \
+             "this" or "here" pointing at something, a request that names nothing and that the \
+             conversation does not explain ("what's the answer?", "solve it", "is that right?": it is \
+             about what they are looking at), a garbled request about seeing or looking, or a \
              "yes" to your own offer to look. You can always look: never say you cannot see. \
              (Whether something was seen at this place earlier — "did I see one here" — is a \
              question about the past: search_memory with place here.)

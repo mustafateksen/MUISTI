@@ -18,6 +18,22 @@ struct IslandStatus: Equatable {
     let badge: String?
 
     init(controller: CaptureController, config: AppConfig, wearables: WearablesController) {
+        // A staged screen (remote driver, for a video): the status is what the driver set,
+        // whatever the glasses are really doing.
+        if let staged = UserDefaults.standard.string(forKey: DeveloperMode.stageStatusKey) {
+            let level = UserDefaults.standard.integer(forKey: DeveloperMode.stageBatteryKey)
+            badge = level > 0 ? "\(level)%" : nil
+            isRecording = staged == "recording"
+            if isRecording {
+                (symbol, tint, title, message, action, persistent) =
+                    ("eyeglasses", .success, String(localized: "Remembering"), String(localized: "Saving the signs and text you see."), nil, false)
+            } else {
+                (symbol, tint, title, message, action, persistent) =
+                    ("eyeglasses", .secondary, String(localized: "Recording off"), String(localized: "Start recording and I'll remember the signs, numbers, and times you see."), nil, false)
+            }
+            key = "\(title)|\(message)"
+            return
+        }
         let glasses = controller.glasses
         let usesGlasses = config.sourceKind == .glasses
         let sourceSymbol = usesGlasses ? "eyeglasses" : "iphone.rear.camera"

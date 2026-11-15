@@ -35,6 +35,25 @@ Commands:
                                 quiet_from, quiet_to (numbers). Without arguments: prints them
   screen ask|memory|safety|notes|back   what the phone shows (for a screen recording)
   reset --yes                   delete all memories, rules and notes in the app
+
+Stage (you decide everything the screen shows and says; no model is called):
+  stage-upload <photo> [--name NAME] [--raw]
+                                put a picture in the app; prints its file name (NAME.jpg). Faces and
+                                plates are masked as on every frame; --raw keeps it untouched
+  stage-turn --answer "<text>" [--question "<text>"] [--label seen|not_seen|unsure|chat]
+             [--evidence ID,ID] [--images a.jpg,b.jpg] [--live a.jpg] [--title "<text>"]
+             [--note "<text>"] [--lang en] [--heard SECONDS] [--think SECONDS] [--silent]
+                                one whole turn: the question appears word by word in the listening
+                                view, Muisti thinks, the answer is shown and read aloud. Without
+                                --question Muisti speaks first (--title is its heading)
+  stage-memory <uploaded.jpg> [--name ..] [--kind shop] [--caption ..] [--text "<sign text>"]
+               [--street ..] [--area ..] [--minutes-ago N | --at "yyyy-MM-dd HH:mm"] [--lat .. --lon ..]
+                                write a memory exactly as given; prints its id (for --evidence)
+  stage-view <uploaded.jpg>     the picture shown as the camera's view
+  stage-phase idle|listening|thinking|speaking ["<words on screen>"]
+  stage-status recording|off|real [--battery 82]   the status island at the top
+  stage-clear                   empty the conversation on screen
+  stage-play <script.json>      run a list of the steps above in order (see the docs)
 """
 import json, os, sys, urllib.request, urllib.error
 
@@ -90,6 +109,92 @@ def print_events(result):
             line += f"   ({e['reason']})"
         print(line)
     return result.get("last", 0)
+
+
+def stage_upload(path, name=None, raw=False):
+    with open(path, "rb") as handle:
+        data = handle.read()
+    query = "?" + "&".join(filter(None, [f"name={name}" if name else "", "raw=1" if raw else ""])) if (name or raw) else ""
+    return call("POST", "/stage/upload" + query, raw=data, content_type="image/jpeg")
+
+
+def stage(what, args):
+    """One stage step from command-line arguments."""
+    if what == "upload":
+        name, raw = option(args, "--name"), flag(args, "--raw")
+        return stage_upload(args[0], name, raw)
+    if what == "turn":
+        body = {"answer": option(args, "--answer", "")}
+        for key, name in (("question", "--question"), ("label", "--label"), ("title", "--title"), ("note", "--note"),
+                          ("language", "--lang"), ("live_image", "--live")):
+            value = option(args, name)
+            if value is not None:
+                body[key] = value
+        for key, name in (("heard_seconds", "--heard"), ("think_seconds", "--think")):
+            value = option(args, name, cast=float)
+            if value is not None:
+                body[key] = value
+        evidence, images = option(args, "--evidence"), option(args, "--images")
+        if evidence:
+            body["evidence_ids"] = [int(x) for x in evidence.split(",")]
+        if images:
+            body["images"] = images.split(",")
+        if flag(args, "--silent"):
+            body["speak"] = False
+        return call("POST", "/stage/turn", body)
+    if what == "memory":
+        body = {}
+        for key, name in (("name", "--name"), ("kind", "--kind"), ("caption", "--caption"), ("text", "--text"),
+                          ("street", "--street"), ("area", "--area"), ("at", "--at"), ("phone", "--phone"), ("hours", "--hours")):
+            value = option(args, name)
+            if value is not None:
+                body[key] = value
+        for key, name in (("minutes_ago", "--minutes-ago"), ("lat", "--lat"), ("lon", "--lon")):
+            value = option(args, name, cast=float)
+            if value is not None:
+                body[key] = value
+        body["image"] = args[0]
+        return call("POST", "/stage/memory", body)
+    if what == "view":
+        return call("POST", "/stage/view", {"image": args[0]})
+    if what == "phase":
+        return call("POST", "/stage/phase", {"phase": args[0], **({"text": args[1]} if len(args) > 1 else {})})
+    if what == "status":
+        battery = option(args, "--battery", cast=int)
+        return call("POST", "/stage/status", {"glasses": args[0], **({"battery": battery} if battery else {})})
+    if what == "clear":
+        return call("POST", "/stage/clear", {})
+    if what == "play":
+        import time
+        folder = os.path.dirname(os.path.abspath(args[0]))
+        with open(args[0]) as handle:
+            steps = json.load(handle)
+        ids, last = {}, {}
+        for number, step in enumerate(steps, 1):
+            step = dict(step)
+            do = step.pop("do", "wait" if "wait" in step else None)
+            if do == "wait":
+                time.sleep(float(step["wait"]))
+                continue
+            if do == "upload":
+                last = stage_upload(os.path.join(folder, step["file"]), step.get("name"), step.get("raw", False))
+            elif do == "screen":
+                last = call("POST", "/screen", {"show": step["show"]})
+            elif do in ("turn", "memory", "view", "phase", "status", "clear"):
+                # "evidence": ["jacket"] names memories made earlier in this script with "as": "jacket".
+                if "evidence" in step:
+                    step["evidence_ids"] = [ids[name] for name in step.pop("evidence")]
+                remember = step.pop("as", None)
+                last = call("POST", "/stage/" + do, step)
+                if remember and "id" in last:
+                    ids[remember] = last["id"]
+            else:
+                sys.exit(f"step {number}: unknown \"do\": {do}")
+            if "error" in last or "http_error" in last:
+                sys.exit(f"step {number} ({do}) failed: {last}")
+            print(f"{number:>2} {do}: ok", flush=True)
+        return {"played": len(steps)}
+    sys.exit(f"unknown stage command stage-{what}; run with --help")
 
 
 def main():
@@ -212,6 +317,8 @@ def main():
         show(call("POST", "/settings", body))
     elif command == "screen":
         show(call("POST", "/screen", {"show": args[0]}))
+    elif command.startswith("stage-"):
+        show(stage(command[6:], args))
     elif command == "reset":
         if "--yes" not in args:
             sys.exit("this deletes everything in the app; add --yes")
