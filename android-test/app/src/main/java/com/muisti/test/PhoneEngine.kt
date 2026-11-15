@@ -350,6 +350,19 @@ Rules:
 
     fun frameFile(name: String) = if (name.startsWith("n")) File(notes.frameDir, name) else File(store.frameDir, name)
 
+    /**
+     * Turkish voice support: the question is translated to English before the (English) agent sees it,
+     * and the answer back to Turkish. Names, numbers, times and quoted sign text stay exactly as they are.
+     */
+    fun translateTo(text: String, target: String): String {
+        val msgs = org.json.JSONArray()
+            .put(org.json.JSONObject().put("role", "system").put("content",
+                "Translate the user's message into natural, everyday spoken $target. Keep names, brands, numbers, phone numbers, " +
+                    "times and anything inside quotation marks exactly as written. Output only the translation, nothing else."))
+            .put(org.json.JSONObject().put("role", "user").put("content", text))
+        return llm.call(msgs, com.muisti.engine.RawJson.TEXT, 400, 0.0).trim().ifEmpty { text }
+    }
+
     /** Translate sign text to English (detail sheet). Names stay as they are. */
     fun translate(text: String): String {
         val msgs = org.json.JSONArray()

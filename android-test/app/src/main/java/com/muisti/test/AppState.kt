@@ -72,6 +72,7 @@ class AppState {
     var phase by mutableStateOf(VoicePhase.Idle)
     var partial by mutableStateOf("")
     var level by mutableFloatStateOf(0f)
+    var voiceLang by mutableStateOf("auto")     // live voice: auto (detect EN/TR) | en | tr
     var spoken by mutableStateOf("")             // what MUISTI is saying (lyrics view)
     var spokenFrom by mutableIntStateOf(0)        // current word [from, to) in [spoken]
     var spokenTo by mutableIntStateOf(0)

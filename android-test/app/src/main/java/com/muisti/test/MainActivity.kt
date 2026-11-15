@@ -1085,7 +1085,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    fun ask(question: String, spoken: Boolean, heard: List<String> = emptyList()) {
+    fun ask(question: String, spoken: Boolean, heard: List<String> = emptyList(), lang: String = "en") {
         val q = question.trim()
         if (q.isEmpty()) return
         // a spoken (or typed) yes/no to the open proposal; anything else drops the proposal and is asked normally
@@ -1118,7 +1118,11 @@ class MainActivity : ComponentActivity() {
                 }
                 // never leave the user waiting: 45 s, then a clear error (the HTTP call is interrupted)
                 val fix = location.fresh(60_000)
-                val r = kotlinx.coroutines.withTimeout(45_000) { kotlinx.coroutines.runInterruptible(Dispatchers.IO) { engine.ask(q, live, heard, fix) } }
+                // Turkish: translate the question for the English agent, and its answer back (both on Nemotron)
+                val qAgent = if (lang == "tr") withContext(Dispatchers.IO) { engine.translateTo(q, "English") } else q
+                val r0 = kotlinx.coroutines.withTimeout(45_000) { kotlinx.coroutines.runInterruptible(Dispatchers.IO) { engine.ask(qAgent, live, heard, fix) } }
+                val r = r0
+                val answerText = if (lang == "tr") withContext(Dispatchers.IO) { engine.translateTo(r0.answer, "Turkish") } else r0.answer
                 if (r.label == "FORGOT") state.memories = withContext(Dispatchers.IO) { engine.store.sightings().size }
                 val shots = withContext(Dispatchers.IO) { loadShots(r) }
                 val used = r.evidence.filter { it.id in r.used }.ifEmpty { r.evidence.take(1) }
@@ -1130,7 +1134,7 @@ class MainActivity : ComponentActivity() {
                         ?.let { BitmapFactory.decodeFile(it.path, BitmapFactory.Options().apply { inSampleSize = 4 })?.asImageBitmap() } } }
                     ConfirmCard(p.id, p.count, thumbs)
                 }
-                Msg.Answer(label = r.label, text = r.answer, shots = if (confirm != null) emptyList() else shots, confirm = confirm,
+                Msg.Answer(label = r.label, text = answerText, shots = if (confirm != null) emptyList() else shots, confirm = confirm,
                     place = where?.let { it.street ?: "%.5f, %.5f".format(it.lat, it.lon) }.takeIf { r.label == "SEEN" || r.label == "UNSURE" },
                     mapUri = where?.let { "geo:${it.lat},${it.lon}?q=${it.lat},${it.lon}(${android.net.Uri.encode(it.street ?: "Seen here")})" }
                         .takeIf { r.label == "SEEN" || r.label == "UNSURE" })
@@ -1144,7 +1148,7 @@ class MainActivity : ComponentActivity() {
             if (i >= 0) state.messages[i] = answer else state.messages.add(answer)
             if (spoken && ttsReady && state.live) {
                 // QUEUE_ADD: if the filler is mid-sentence, the answer follows it instead of cutting it off
-                speakHuman(answer.text, TextToSpeech.QUEUE_ADD)
+                speakHuman(answer.text, TextToSpeech.QUEUE_ADD, lang)
             } else if (spoken) afterTurn()
         }
     }
@@ -1202,10 +1206,19 @@ class MainActivity : ComponentActivity() {
             speech = SpeechRecognizer.createSpeechRecognizer(this).apply { setRecognitionListener(listener) }
         } else speech?.cancel()
         state.partial = ""
+        detectedLang = null
         state.phase = VoicePhase.Listening
         speech?.startListening(Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE, "en-US")
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE, if (state.voiceLang == "tr") "tr-TR" else "en-US")
+            if (state.voiceLang == "auto" && android.os.Build.VERSION.SDK_INT >= 34) {
+                // let the recognizer notice Turkish and switch its model to it mid-sentence
+                val langs = arrayListOf("en-US", "tr-TR")
+                putExtra(RecognizerIntent.EXTRA_ENABLE_LANGUAGE_DETECTION, true)
+                putStringArrayListExtra(RecognizerIntent.EXTRA_LANGUAGE_DETECTION_ALLOWED_LANGUAGES, langs)
+                putExtra(RecognizerIntent.EXTRA_ENABLE_LANGUAGE_SWITCH, RecognizerIntent.LANGUAGE_SWITCH_BALANCED)
+                putStringArrayListExtra(RecognizerIntent.EXTRA_LANGUAGE_SWITCH_ALLOWED_LANGUAGES, langs)
+            }
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
             putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 5)      // alternatives go to Nemotron, which picks the sensible one
             if (android.os.Build.VERSION.SDK_INT >= 33)           // nudge the recognizer toward what people say to MUISTI
@@ -1244,7 +1257,18 @@ class MainActivity : ComponentActivity() {
             val text = all.firstOrNull().orEmpty()
             state.partial = text
             if (text.isBlank()) { if (state.live) relistenSoon(250) else state.phase = VoicePhase.Idle }
-            else ask(text, spoken = true, heard = all.drop(1))
+            else {
+                val tr = when (state.voiceLang) {
+                    "tr" -> true
+                    "en" -> false
+                    else -> (detectedLang ?: b?.getString(SpeechRecognizer.DETECTED_LANGUAGE))?.startsWith("tr") == true || looksTurkish(text)
+                }
+                android.util.Log.i("MuistiLang", "heard '${text.take(60)}' detected=$detectedLang -> ${if (tr) "tr" else "en"}")
+                ask(text, spoken = true, heard = if (tr) emptyList() else all.drop(1), lang = if (tr) "tr" else "en")
+            }
+        }
+        override fun onLanguageDetection(results: Bundle) {
+            detectedLang = results.getString(SpeechRecognizer.DETECTED_LANGUAGE)
         }
         override fun onPartialResults(b: Bundle?) {
             b?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()?.let { state.partial = it }
@@ -1265,12 +1289,34 @@ class MainActivity : ComponentActivity() {
         val v = preferred.firstNotNullOfOrNull { n -> all.firstOrNull { it.name == n } }
             ?: all.filter { it.locale.country == "US" }.sortedWith(compareByDescending<android.speech.tts.Voice> { it.isNetworkConnectionRequired }
                 .thenByDescending { it.quality }).firstOrNull()
-        v?.let { tts?.voice = it; android.util.Log.i("MuistiVoice", "using ${it.name}") }
+        v?.let { tts?.voice = it; enVoice = it; android.util.Log.i("MuistiVoice", "using ${it.name}") }
+        val tr = tts?.voices?.filter { it.locale.language == "tr" && TextToSpeech.Engine.KEY_FEATURE_NOT_INSTALLED !in it.features }.orEmpty()
+        for (t in tr.sortedBy { it.name }) android.util.Log.i("MuistiVoice", "${t.name} q=${t.quality} net=${t.isNetworkConnectionRequired}")
+        trVoice = tr.sortedWith(compareByDescending<android.speech.tts.Voice> { it.isNetworkConnectionRequired }.thenByDescending { it.quality }).firstOrNull()
+        android.util.Log.i("MuistiVoice", "turkish: ${trVoice?.name}")
+    }
+    private var enVoice: android.speech.tts.Voice? = null
+    private var trVoice: android.speech.tts.Voice? = null
+    @Volatile private var detectedLang: String? = null
+
+    /** Fallback when the recognizer does not report a language: Turkish letters or several common Turkish words. */
+    private fun looksTurkish(t: String): Boolean {
+        if (t.any { it in "çğıöşüÇĞİÖŞÜ" }) return true
+        val words = t.lowercase().split(Regex("[^a-zçğıöşü]+")).toSet()
+        return listOf("ne", "nerede", "neydi", "nedir", "hangi", "kaç", "bu", "bir", "mi", "mı", "var", "gördüm", "nasıl", "benim", "saat", "nereye")
+            .count { it in words } >= 2
+    }
+
+    /** Live-screen switch: Auto (detect) -> EN -> TR. Restarts listening in the new language. */
+    fun cycleVoiceLang() {
+        state.voiceLang = when (state.voiceLang) { "auto" -> "en"; "en" -> "tr"; else -> "auto" }
+        if (state.live && state.phase == VoicePhase.Listening) listen()
     }
 
     /** One natural utterance (no splitting, no pitch tricks: those made it sound robotic); the lyrics view follows it. */
-    private fun speakHuman(text: String, queueMode: Int) {
-        val said = spokenText(text)
+    private fun speakHuman(text: String, queueMode: Int, lang: String = "en") {
+        (if (lang == "tr") trVoice else enVoice)?.let { tts?.voice = it }
+        val said = if (lang == "tr") text.trim() else spokenText(text)
         state.spoken = said; state.spokenFrom = 0; state.spokenTo = 0
         tts?.speak(said.ifEmpty { " " }, queueMode, null, "answer")
     }

@@ -206,7 +206,7 @@ fun MuistiApp(act: MainActivity) {
                     Tab.Settings -> s.showPrivacy = true
                 }
             }
-            VoiceOverlay(s, t, onClose = { act.stopVoice() }, onOrb = { act.interrupt() })
+            VoiceOverlay(s, t, onClose = { act.stopVoice() }, onOrb = { act.interrupt() }, onLang = { act.cycleVoiceLang() })
         }
     }
 }
@@ -704,7 +704,7 @@ private fun Composer(t: Tones, s: AppState, onSend: (String) -> Unit, onMic: () 
 // ---------------- voice overlay ----------------
 
 @Composable
-private fun VoiceOverlay(s: AppState, t: Tones, onClose: () -> Unit, onOrb: () -> Unit) {
+private fun VoiceOverlay(s: AppState, t: Tones, onClose: () -> Unit, onOrb: () -> Unit, onLang: () -> Unit = {}) {
     // the phone's back button / gesture ends the live conversation (no X, no End button)
     androidx.activity.compose.BackHandler(enabled = s.live) { onClose() }
     AnimatedVisibility(s.live, enter = fadeIn(tween(250)), exit = fadeOut(tween(300))) {
@@ -715,8 +715,14 @@ private fun VoiceOverlay(s: AppState, t: Tones, onClose: () -> Unit, onOrb: () -
             Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().padding(horizontal = 22.dp, vertical = 14.dp),
                 horizontalAlignment = Alignment.CenterHorizontally) {
                 // same look as the home greeting; leaving is the phone's back gesture
-                Text("Live with MUISTI", color = t.text, fontSize = 30.sp, fontWeight = FontWeight.Bold, letterSpacing = (-0.6).sp,
-                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp))
+                Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text("Live with MUISTI", color = t.text, fontSize = 30.sp, fontWeight = FontWeight.Bold, letterSpacing = (-0.6).sp,
+                        modifier = Modifier.weight(1f))
+                    // spoken language: AUTO detects English / Turkish; tap to force one
+                    Text(s.voiceLang.uppercase(), color = t.text, fontSize = 13.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp,
+                        modifier = Modifier.clip(CircleShape).background(t.card).border(0.5.dp, t.hair, CircleShape)
+                            .clickable(onClick = onLang).padding(horizontal = 14.dp, vertical = 8.dp))
+                }
                 val speaking = s.phase == VoicePhase.Speaking
                 val orbSize by animateDpAsState(if (speaking) 240.dp else 300.dp, spring(dampingRatio = 0.8f, stiffness = 250f), label = "orb")
                 Spacer(Modifier.weight(if (speaking) 0.2f else 0.45f))
