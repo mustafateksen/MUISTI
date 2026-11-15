@@ -37,10 +37,10 @@ enum SafetyPrompts {
     - label: only if allergens are watched and a food or drink package is in view (null \
     otherwise). product: its name. If the ingredient list is readable: ingredients_visible \
     true, source "ingredients", and which watched allergens the ingredient text contains (in \
-    any language or as a derived ingredient: whey or casein is milk, mansikka is strawberry). \
+    any language, or as an ingredient derived from it). \
     If only the front is visible: ingredients_visible false, source "front", and the watched \
     allergens the front clearly shows (in the product name or flavour, or a picture of the \
-    food itself on the package, e.g. strawberries on a strawberry wafer). evidence: the words or \
+    food itself on the package). evidence: the words or \
     picture you based it on. Never guess an allergen that nothing in the frame shows.
     """
 
@@ -108,7 +108,7 @@ enum SafetyPrompts {
     vision model and OCR understood from a frame the user's camera glasses saw (type, name, \
     caption, visual details, text read on it). Decide whether the record clearly shows what the \
     rule is about: for an allergen, a food or drink whose ingredient text contains it (in any \
-    language or as a derived ingredient: whey is milk, mansikka is strawberry), or whose \
+    language, or as an ingredient derived from it), or whose \
     name, flavour or package picture clearly shows it; for another object, that object itself \
     being there. Something only pictured on a poster, screen or advert is not a product in \
     front of the user. Never guess: if the record does not clearly show it, matches is false.

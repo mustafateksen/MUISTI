@@ -20,6 +20,9 @@ struct Proposal: Sendable {
     /// Something the user started and is waiting for (turn-by-turn directions): spoken whatever
     /// the daily budget and the gap say. Quiet hours, mutes and the main switch still apply.
     var expected = false
+    /// A reminder the user asked for, or one whose set time or place has come: never held back
+    /// as "said already" (those checks are for what Muisti brings up on its own).
+    var userAsked = false
 }
 
 /// The one gate everything Muisti says unasked goes through — safety warnings and agent
@@ -51,7 +54,21 @@ final class InterventionPolicy {
     /// "don't tell me this again" refer to.
     private(set) var lastDelivered: Intervention?
 
-    static let topicPause: TimeInterval = 5 * 60
+    static let topicPause: TimeInterval = 15 * 60
+    /// Two of Muisti's own remarks this alike are the same remark.
+    static let sameRemark = 0.55
+    static let sameRemarkWithin: TimeInterval = 3 * 3600
+
+    /// How alike two sentences are: shared words over all words (0…1), ignoring case and
+    /// very short words. Language-independent; used only to stop a remark being repeated.
+    nonisolated static func similarity(_ a: String, _ b: String) -> Double {
+        func words(_ text: String) -> Set<String> {
+            Set(text.lowercased().split(whereSeparator: { !$0.isLetter && !$0.isNumber }).map(String.init).filter { $0.count >= 3 })
+        }
+        let x = words(a), y = words(b)
+        guard !x.isEmpty, !y.isEmpty else { return 0 }
+        return Double(x.intersection(y).count) / Double(x.union(y).count)
+    }
     static let holdTimely: TimeInterval = 120
     static let holdUseful: TimeInterval = 300
 
@@ -131,10 +148,17 @@ final class InterventionPolicy {
         }
         var reason: String?
         if p.late { return (min(level, .notification), "from a frame processed later") }
-        // The same topic a moment ago: once is enough (an intent has its own snooze).
-        if p.intentID == nil, let last = recent.first(where: { $0.topic == p.topic && $0.level >= .notification }),
+        // The same topic a moment ago: once is enough. (Before, anything tied to a note of
+        // Muisti's own skipped this and came back every few minutes.) What the user is waiting
+        // for (`expected`) is not held back.
+        if !p.expected, !p.userAsked, let last = recent.first(where: { $0.topic == p.topic && $0.level >= .notification }),
            now.timeIntervalSince(last.at) < Self.topicPause {
             return (.silent, "same topic \(Int(now.timeIntervalSince(last.at) / 60)) min ago")
+        }
+        // Nearly the same sentence as one already said: nothing new to hear.
+        if !p.expected, !p.userAsked, let twin = recent.first(where: { $0.level >= .notification && now.timeIntervalSince($0.at) < Self.sameRemarkWithin
+                                                          && Self.similarity($0.text, p.text) >= Self.sameRemark }) {
+            return (.silent, "said nearly the same at \(QueryEngine.clock(twin.at))")
         }
         // A topic the user keeps turning down is brought up one step more quietly.
         let lastOutcomes = recent.filter { $0.topic == p.topic && $0.outcome != nil }.prefix(3).compactMap(\.outcome)

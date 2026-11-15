@@ -25,9 +25,9 @@ enum TurnTools {
     """
 
     static func user(question: String, now: Date, conversation: [String], safety: String, lookedSecondsAgo: Int?, position: String? = nil,
-                     cameraLive: Bool? = nil) -> String {
+                     cameraLive: Bool? = nil, replyLanguage: String? = nil) -> String {
         """
-        Current local time: \(QueryEngine.promptTime(now))
+        Current local time: \(QueryEngine.promptTime(now))\(replyLanguage.map { "\nLanguage of this message, and of anything you say back: \($0). Older turns, notes and place names in another language do not change it." } ?? "")
         User position now: \(position ?? "unknown")\(cameraLive.map { "\nGlasses camera: " + ($0 ? "sending pictures (look_now sees what is in front of the user right now)" : "NOT sending pictures right now (look_now would see nothing; what is around the user can still be answered with search_memory, place here)") } ?? "")
         Conversation so far (oldest first):
         \(conversation.isEmpty ? "(new conversation)" : conversation.joined(separator: "\n"))
@@ -107,12 +107,16 @@ enum TurnTools {
              about what they are looking at), a garbled request about seeing or looking, or a \
              "yes" to your own offer to look. You can always look: never say you cannot see. \
              (Whether something was seen at this place earlier — "did I see one here" — is a \
-             question about the past: search_memory with place here.)
+             question about the past: search_memory with place here.) Not for finding a named \
+             place or thing that is somewhere else ("where is the info desk", "do you know where \
+             X is", "how do I get to X", "I'm looking for X"): the glasses passed signs, floor \
+             plans and the place itself earlier, so that is search_memory.
              """,
              properties: [#""reasoning_needed":{"type":["boolean","null"],"description":"true when answering takes working through several steps (an equation, a word problem, comparing prices per unit); otherwise false or null."}"#]),
         tool("search_memory", """
              Look up what the glasses saw earlier and what Muisti Turva knows: places, signs and their \
-             text, objects, when and where something was, what came before or after it, the safety \
+             text, objects, floor plans and direction signs, where a named place or thing is and how \
+             to find it, when and where something was, what came before or after it, the safety \
              rules, the watched objects' states, medicines, and what the user told you. Call it for \
              every question about the user's own day or surroundings in the past, also follow-ups \
              ("and the phone number?", "what was next to it?", "are you sure?", "what does it say \
@@ -138,11 +142,17 @@ enum TurnTools {
              me if I leave the stove on", "remind me of my pill every morning", "tell me when \
              something contains nuts", in any language). Anything else they want to be reminded of is \
              remember_intent. Never from a question about the past. The reply reads the rule back in one sentence and asks \
-             whether it is right; nothing needs to have been seen yet.
+             whether it is right; nothing needs to have been seen yet. The object, medicine or \
+             allergen of the rule is the one named in this message, as the user said it: never one \
+             taken from older turns, notes or rules already kept (an allergy mentioned last week is \
+             not what this message is about). If the message names nothing a rule can be about (it \
+             was misheard, or names a person or something that is not a food, medicine or object), \
+             make no rule: say what you understood and ask what they want to be warned about.
 
              """ + SafetyPrompts.ruleGuide,
-             properties: ["\"rule\":" + SafetyPrompts.ruleObjectSchema, "\"reply\":" + reply],
-             required: ["rule", "reply"]),
+             properties: [#""said":{"type":"string","description":"The words in the user's message that name what the rule is about (the object, the medicine or the allergen), copied exactly as they stand in the message, in its language. Nothing in the message names such a thing: empty."}"#,
+                          "\"rule\":" + SafetyPrompts.ruleObjectSchema, "\"reply\":" + reply],
+             required: ["said", "rule", "reply"]),
         tool("confirm_pending", """
              The user says yes (yes, right, okay, do it, evet, kyllä …) to the pending yes/no shown in \
              the message: a new rule, deleting a rule, or a question Muisti asked. Only when something \
@@ -186,11 +196,11 @@ enum TurnTools {
              The reply confirms in one sentence what will be brought up and when.
              """,
              properties: [#""text":{"type":"string","description":"What it is, in the user's own words and language, complete by itself."}"#,
-                          #""say":{"type":"string","description":"The one short sentence Muisti says when the moment comes, in the user's language (\"You wanted to buy milk.\")."}"#,
+                          #""when_due":{"type":"string","description":"What Muisti will say LATER, at the moment the cue comes (hours from now, or when the place or thing is in view), in the user's language: the thing itself, as a nudge to do it now. It is heard with nothing before it, so it names the thing. Never the confirmation and never a promise to remind: that is reply, said now."}"#,
                           #""kind":{"type":"string","enum":["reminder","todo","watch"],"description":"todo: something to get or do with no fixed moment (shopping, errands). reminder: tied to a time or a place. watch: tell me whenever you see this, more than once."}"#,
                           "\"cue\":" + Notice.cueSchema("When to bring it up; null for the parts that do not apply. Fill every part that does: a time the user gave (worked out from the current local time); place, whenever the thing is done at a kind of place even if the user named none (something to buy: the kind of shop that sells it; a prescription: a pharmacy); and sight, what the glasses would see at that moment (the shop's sign or shelves as well as the thing itself)."),
                           "\"reply\":" + reply],
-             required: ["text", "say", "kind", "cue", "reply"]),
+             required: ["text", "when_due", "kind", "cue", "reply"]),
         tool("set_destination", """
              The user says where they are going now ("I'm going to the pharmacy", "take me to hall 3", \
              "I need to find gate B12"). Muisti follows along and speaks up if they walk away from it \
@@ -282,9 +292,11 @@ enum TurnTools {
         var from: String?
         var to: String?
         var reasoning_needed: Bool?
+        var said: String?
 
         init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
+            said = c.lenientString(.said)
             query = c.lenientString(.query)
             reasoning_needed = c.lenientBool(.reasoning_needed)
             text = c.lenientString(.text)
@@ -295,7 +307,7 @@ enum TurnTools {
             object = c.lenientString(.object)
             kind = c.lenientString(.kind)
             value = c.lenientString(.value)
-            say = c.lenientString(.say)
+            say = c.lenientString(.when_due) ?? c.lenientString(.say)
             cue = (try? c.decodeIfPresent(Cue.self, forKey: .cue)) ?? nil
             place = c.lenientString(.place)
             intent_id = c.lenientString(.intent_id)
@@ -310,7 +322,7 @@ enum TurnTools {
 
         enum CodingKeys: String, CodingKey {
             case query, text, minutes, reply, rule, rule_id, object, kind, value
-            case say, cue, place, intent_id, name, topic, title, start, location, from, to, reasoning_needed
+            case say, when_due, cue, place, intent_id, name, topic, title, start, location, from, to, reasoning_needed, said
         }
     }
 
@@ -336,7 +348,10 @@ enum TurnTools {
                           args?.place.flatMap { $0.trimmingCharacters(in: .whitespaces).isEmpty || $0.lowercased() == "null" ? nil : $0 })
             case "forget_recent": return .forget(minutes: args?.minutes, reply: reply)
             case "create_rule":
-                if let rule = args?.rule { return .command(.createRule(rule), reply: reply, tool: call.name) }
+                if var rule = args?.rule {
+                    rule.said = args?.said ?? ""
+                    return .command(.createRule(rule), reply: reply, tool: call.name)
+                }
             case "confirm_pending": return .command(.confirm, reply: reply, tool: call.name)
             case "cancel_pending": return .command(.cancel, reply: reply, tool: call.name)
             case "delete_rule":
@@ -353,7 +368,10 @@ enum TurnTools {
             case "remember_intent":
                 if let text = args?.text {
                     let kind = Intent.Kind(rawValue: args?.kind?.lowercased() ?? "") ?? .reminder
-                    return .agent(.remember(text: text, say: args?.say, kind: kind, cue: args?.cue ?? Cue()), reply: reply, tool: call.name)
+                    // What is said when the moment comes is not the confirmation said now (seen on the phone:
+                    // a reminder arrived reading "I'll remind you to…").
+                    let due = args?.say.flatMap { InterventionPolicy.similarity($0, reply) >= 0.6 ? nil : $0 }
+                    return .agent(.remember(text: text, say: due, kind: kind, cue: args?.cue ?? Cue()), reply: reply, tool: call.name)
                 }
             case "set_destination":
                 if let place = args?.place { return .agent(.setDestination(place), reply: reply, tool: call.name) }

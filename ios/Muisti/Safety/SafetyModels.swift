@@ -111,6 +111,9 @@ struct SafetyRule: Codable, Sendable, Identifiable, Equatable {
     var confirm_question: String?
 
     var confirmQuestion: String? { confirm_question.flatMap { $0.isEmpty ? nil : $0 } }
+    /// The words of the user's message that name what the rule is about, as the model copied
+    /// them (checked against the message before the rule is read back; not part of the rule).
+    var said: String? = nil
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)

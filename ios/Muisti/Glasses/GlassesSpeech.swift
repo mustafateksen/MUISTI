@@ -107,8 +107,23 @@ final class GlassesSpeech {
     }
 
     /// A finished utterance from the phone recogniser running on the glasses mic's audio.
-    func utterance(_ text: String, source: String) {
-        heard(text, isFinal: true, source: source)
+    /// `better`: the same audio read by the more accurate model (Parakeet), when there is one.
+    /// The wake word is still found in `text` (the recogniser biased to it); the question's
+    /// words come from `better`.
+    func utterance(_ text: String, source: String, better: String? = nil) {
+        heard(text, isFinal: true, source: source, better: better)
+    }
+
+    /// This utterance will become a question (it holds the wake word, or the wake word was
+    /// just said): worth reading again with the better model.
+    func leadsToQuestion(_ text: String) -> Bool {
+        guard !isBusy(), learning == nil else { return false }
+        if let until = armedUntil, Date() < until { return true }
+        return wakeIndex(in: Self.words(text)) != nil
+    }
+
+    private static func words(_ text: String) -> [String] {
+        text.split(whereSeparator: { !$0.isLetter && !$0.isNumber && $0 != "'" }).map(String.init)
     }
 
     /// A partial transcript from the phone recogniser (wake word acknowledgement only).
@@ -116,7 +131,7 @@ final class GlassesSpeech {
         heard(text, isFinal: false, source: "phone")
     }
 
-    private func heard(_ text: String, isFinal: Bool, source: String = "glasses") {
+    private func heard(_ text: String, isFinal: Bool, source: String = "glasses", better: String? = nil) {
         lastHeard = text
         if isFinal { Log.glasses.info("\(source, privacy: .public) heard: “\(text, privacy: .public)”\(self.isBusy() ? " (busy, ignored)" : "")") }
         guard !isBusy() else { return }
@@ -124,9 +139,9 @@ final class GlassesSpeech {
         // Mid-sentence: answer "yes?" as soon as the wake word shows up; the question itself
         // is taken from the finished sentence.
         if !isFinal {
-            if learning == nil, wakeIndex(in: words) != nil,
-               acknowledgedAt.map({ Date().timeIntervalSince($0) > 6 }) ?? true {
+            if learning == nil, wakeIndex(in: words) != nil, Date().timeIntervalSince(lastWakeAt) > 6 {
                 acknowledgedAt = Date()
+                lastWakeAt = Date()
                 onWake()
             }
             return
@@ -139,13 +154,26 @@ final class GlassesSpeech {
             if learned.count >= learnWanted { finishLearning() }
             return
         }
+        if let better, !better.isEmpty { Log.glasses.info("parakeet heard: “\(better, privacy: .public)”") }
         if let index = wakeIndex(in: words) {
-            let rest = words[index...].joined(separator: " ")
-            if acknowledgedAt.map({ Date().timeIntervalSince($0) > 6 }) ?? true { onWake() }
+            var rest = words[index...].joined(separator: " ")
+            if let better, !better.isEmpty {
+                // The question as the better model wrote it: after the wake word where that
+                // model wrote one too, else after as many words as the wake word took.
+                let again = Self.words(better)
+                let start = wakeIndex(in: again) ?? min(index, again.count)
+                rest = again[start...].joined(separator: " ")
+            }
+            // Heard only now (no partial showed it): the microphone opens for the question.
+            if Date().timeIntervalSince(lastWakeAt) > 6 {
+                lastWakeAt = Date()
+                onWake()
+                return
+            }
             acknowledgedAt = nil
             if rest.split(separator: " ").count >= 2 {
                 armedUntil = nil
-                onQuestion(rest)
+                ask(rest)
             } else {
                 armedUntil = Date().addingTimeInterval(8)
             }
@@ -153,7 +181,7 @@ final class GlassesSpeech {
         }
         if let until = armedUntil, Date() < until {
             armedUntil = nil
-            onQuestion(text)
+            ask(better.flatMap { $0.isEmpty ? nil : $0 } ?? text)
         }
     }
 
@@ -167,7 +195,46 @@ final class GlassesSpeech {
                 return start + parts.count
             }
         }
-        return words.firstIndex(where: { Self.sounds($0, like: wakeWord) }).map { $0 + 1 }
+        // The wake word may be a phrase ("Hey Meta"): its words in a row, each matched loosely.
+        let phrase = Self.normalized(wakeWord.split(separator: " ").map(String.init)).filter { !$0.isEmpty }
+        guard !phrase.isEmpty, phrase.count <= norm.count else { return nil }
+        for start in 0...(norm.count - phrase.count)
+        where zip(norm[start..<start + phrase.count], phrase).allSatisfy({ Self.sounds($0, like: $1) }) {
+            return start + phrase.count
+        }
+        return nil
+    }
+
+    /// When the wake phrase last opened the microphone (the glasses' recogniser and the
+    /// phone's both hear it, a moment apart: one opening, not two).
+    private var lastWakeAt = Date.distantPast
+
+    /// What follows the wake phrase in `text` ("Hey Meta. Where is the lab?" → "Where is the
+    /// lab?"); the text itself when the phrase is not in it. Empty: only the phrase was said.
+    func afterWake(_ text: String) -> String {
+        let words = Self.words(text)
+        guard let index = wakeIndex(in: words) else { return text }
+        // Cut the original text (with its punctuation) after that many words.
+        var seen = 0, inWord = false
+        for position in text.indices {
+            let character = text[position]
+            let isWord = character.isLetter || character.isNumber || character == "'"
+            if isWord, !inWord { seen += 1 }
+            if !isWord, inWord, seen == index {
+                return String(text[position...]).trimmingCharacters(in: CharacterSet.whitespacesAndNewlines.union(.punctuationCharacters).subtracting(CharacterSet(charactersIn: "?!")))
+                    .replacingOccurrences(of: "^[?!\\s]+", with: "", options: .regularExpression)
+            }
+            inWord = isWord
+        }
+        return ""
+    }
+
+    /// The glasses' own recogniser and the phone's hear the same sentence: one question, not two.
+    private var lastQuestionAt = Date.distantPast
+    private func ask(_ question: String) {
+        guard Date().timeIntervalSince(lastQuestionAt) > 4 else { return }
+        lastQuestionAt = Date()
+        onQuestion(question)
     }
 
     /// Teach the wake word: the next `count` sentences (the user saying only the wake word) are

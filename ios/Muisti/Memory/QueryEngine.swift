@@ -194,6 +194,27 @@ actor QueryEngine {
     func setSharpView(_ provider: @escaping @Sendable () async -> (jpeg: Data, ocr: String, at: Date)?) { sharpView = provider }
     /// Whether the glasses are sending pictures now (nil: not known, as in tests).
     private var cameraLive: (@Sendable () async -> Bool)?
+    static let ruleSubjectSystem = """
+    You check one thing. You get a message a user said to an assistant (speech recognition, any \
+    language, possibly misheard) and the subjects of a rule the assistant wants to make from \
+    it, in English. Is every subject named in the message itself, in any language or wording? \
+    A subject the message does not mention is not named, whatever else the user may be \
+    allergic to or own. Output JSON: {"named": true or false}.
+    """
+    /// The language questions are spoken in (the voice setting). A question whose own language
+    /// cannot be told with confidence is answered in this one: left to the model, a short
+    /// English question was now and then answered in Turkish because older turns, street
+    /// names or the user's notes were Turkish.
+    private var spokenLanguage: (code: String, name: String)?
+    func setSpokenLanguage(_ localeIdentifier: String) {
+        let code = String(localeIdentifier.prefix(2)).lowercased()
+        spokenLanguage = (code, Locale(identifier: "en_US").localizedString(forLanguageCode: code) ?? code)
+    }
+
+    /// The language to answer `text` in: its own when that is clear, else the spoken one.
+    private func replyLanguage(_ text: String) -> (code: String, name: String)? {
+        Self.detectLanguage(text) ?? spokenLanguage
+    }
     func setCameraLive(_ live: @escaping @Sendable () async -> Bool) { cameraLive = live }
 
     private func area(named name: String, here: LocationFix?) async -> MemoryArea? {
@@ -290,12 +311,13 @@ actor QueryEngine {
         let place = position
         let camera = cameraLive
         let box = toolbox
+        let replyIn = replyLanguage(trimmed).map { "\($0.name) (\($0.code))" }
         let decideTask = Task { () -> (decision: TurnTools.Decision?, ms: Int, looked: AgentLoop.Outcome?) in
             guard hasKey else { return (nil, 0, nil) }
             let safetyText = await safetyBridge?.context() ?? ""
             return await Self.decide(ai, user: TurnTools.user(question: trimmed, now: now, conversation: Array(talk),
                                                               safety: safetyText, lookedSecondsAgo: looked, position: place,
-                                                              cameraLive: await camera?()), toolbox: box)
+                                                              cameraLive: await camera?(), replyLanguage: replyIn), toolbox: box)
         }
         let findTask = Task { await self.find(trimmed, location: location) }
         // A first message is complete by itself: its rerank starts at once. In a conversation
@@ -615,6 +637,36 @@ actor QueryEngine {
         case .command(let command, let reply, let tool):
             // Muisti Turva commands: the reply is an acknowledgement / read-back, run by the caller.
             trace.add("safety: \(tool)")
+            if case .createRule(let rule) = command {
+                // What the rule watches must be what the message names. This is asked of the
+                // model once more with the message alone: no conversation, no notes, no
+                // summaries, so nothing remembered can stand in for what was said. (15 Nov: the
+                // running summary kept "Muisti set a strawberry rule", and every later
+                // sentence with "allergic" in it became a strawberry rule again. Comparing the
+                // model's quoted words with the message letter by letter was tried first and
+                // fails on inflected languages: "çilek" is not in "çileğe".)
+                var why: String?
+                do {
+                    let subjects = (rule.condition.allergens ?? []) + rule.watch.map { String($0.split(separator: ":").last ?? Substring($0)) }
+                    let asked = Array(Set(subjects.map { $0.lowercased() }.filter { !$0.isEmpty && $0 != "label" })).sorted()
+                    if !asked.isEmpty {
+                        struct Named: Decodable { var named: Bool }
+                        let check = try? await ai.chatJSON(Named.self, system: Self.ruleSubjectSystem,
+                                                           user: "Message: \(trimmed)\nSubjects: \(asked.joined(separator: ", "))",
+                                                           jsonSchema: #"{"type":"object","properties":{"named":{"type":"boolean"}},"required":["named"]}"#,
+                                                           schemaName: "named", maxTokens: 20)
+                        if check?.named == false { why = "the message does not name \(asked.joined(separator: ", "))" }
+                    }
+                }
+                if let why {
+                    trace.add("create_rule dropped: \(why)")
+                    let ask = String(localized: "I didn't catch what you want me to watch for. What should I warn you about?")
+                    var r = result(trimmed, ask, .seen, [], true, started, nil, Self.detectLanguage(ask)?.code, trace)
+                    r.isCommand = true
+                    r.expectsReply = true
+                    return r
+                }
+            }
             var r = result(trimmed, reply, .seen, [], true, started, nil,
                            (Self.detectLanguage(reply) ?? Self.detectLanguage(trimmed))?.code, trace)
             r.safety = command
@@ -700,13 +752,14 @@ actor QueryEngine {
         pool = Self.group(pool)
 
         let answerStarted = ContinuousClock.now
-        let language = Self.detectLanguage(trimmed)
+        let language = replyLanguage(trimmed)
         // Newest frames first, so recency never has to be worked out from relevance order.
         let latest = await store.recent(limit: 5).filter { placeIDs?.contains($0.id) ?? true }.map { r -> String in
             let ago = max(0, Int(now.timeIntervalSince(r.seenAt) / 60))
             let what = [r.kind, r.name].compactMap { $0 }.joined(separator: " ")
             return "- id \(r.id), minutes_ago: \(ago), \(Self.promptTime(r.seenAt))" + (what.isEmpty ? "" : ", \(what)")
-                + (r.street.map { ", \($0)" } ?? "")
+                + (r.street.map { ", \($0)" } ?? "") + (r.caption.map { ", \($0.prefix(90))" } ?? "")
+                + (Self.heightLine(r, now: now).map { ", \($0)" } ?? "")
         }
         var safetyText = await safetyTextAsync
         // The frames of the first records, as one picture: the model looks at them as well as
@@ -879,6 +932,18 @@ actor QueryEngine {
             } else {
                 trace.add("sharper photo: none")
             }
+        }
+
+        // Looked, and what was asked about is not in front of the user ("where is the info
+        // desk?" in a hallway): that is a question for the memory, which may well hold it (a
+        // floor plan, the desk itself an hour ago). Before, the answer stopped at "I don't see
+        // one here".
+        if isLook, lookedLive, draft.in_view == false, draft.too_small != true, second == nil, !Task.isCancelled {
+            trace.add("look_now: not in view → memory")
+            var back = retrieval
+            back.decision = .search(retrieval.query ?? trimmed, place: nil)
+            lookedLive = false
+            return await run(question, location: location, now: now, started: started, second: back, trace: trace)
         }
 
         // One repair round: tell the model exactly which check failed and let it answer again.
@@ -1349,7 +1414,13 @@ actor QueryEngine {
             // solution — keeps its conclusion: that is what was asked for.)
             label = .unsure
             let ocr = evidence.map(Self.mergedOCR).joined(separator: "\n")
-            if let observations = draft.observations, !observations.isEmpty,
+            // Worked out from where things were seen in height (the barometer) and the user's
+            // own movement: the estimate is the answer ("about four floors down, the lifts
+            // are on this level"). It stays, marked not sure; a list of raw facts would
+            // leave the user to do the sum.
+            if evidence.contains(where: { Self.heightLine($0.record, now: Date()) != nil }) {
+                trace.add("worked out from heights")
+            } else if let observations = draft.observations, !observations.isEmpty,
                EvidenceRule.numbersSupported(in: observations, ocr: ocr, allowed: Self.seenTimes(evidence)) {
                 answer = observations
             }
@@ -1416,6 +1487,13 @@ actor QueryEngine {
     static func clock(_ date: Date) -> String { Cue.stamp(date).suffix(5).description }
 
     /// Labelled record text: without labels the model did not tell a slogan from a sign's name.
+    /// Where a record was seen in height, relative to where the user is now (barometer).
+    static func heightLine(_ r: MemoryRecord, now: Date) -> String? {
+        guard let above = LevelTrack.shared.above(level: r.level, seenAt: r.seenAt) else { return nil }
+        if abs(above) < 2 { return "Height: seen on the level the user is on now" }
+        return "Height: seen about \(Int(abs(above).rounded())) m \(above > 0 ? "below" : "above") where the user is now"
+    }
+
     private static func describe(_ hit: MemoryHit, now: Date, position: (index: Int, count: Int)? = nil) -> String {
         let r = hit.record
         let minutesAgo = max(0, Int(now.timeIntervalSince(r.seenAt) / 60))
@@ -1430,6 +1508,7 @@ actor QueryEngine {
         if let street = r.street { lines.append("Street: \(street)") }
         if let area = r.area { lines.append("Area: \(area)") }
         if let distance = hit.distanceMeters { lines.append("distance_m: \(Int(distance.rounded()))") }
+        if let height = heightLine(r, now: now) { lines.append(height) }
         if let kind = r.kind { lines.append("Type: \(kind)") }
         if let name = r.name { lines.append("Name on sign: \(name)") }
         if let phone = r.phone { lines.append("Phone on sign: \(phone)") }

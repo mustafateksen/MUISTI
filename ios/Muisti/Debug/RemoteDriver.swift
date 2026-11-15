@@ -275,6 +275,11 @@ final class RemoteDriver {
             await controller.agent.navigationFix(controller.location.latest!)
             await controller.agent.tick()
             return Response(status: 200, json: ["position": controller.location.positionText() ?? "unknown"])
+        case ("POST", "/height"):
+            // The user goes up (+) or down (−) so many metres, as the barometer would show it.
+            guard let by = number("by") else { return Response(status: 400, json: ["error": "by (metres, + up) is needed"]) }
+            await LevelTrack.shared.simulate(by: by, seconds: max(0.5, number("seconds") ?? 4))
+            return Response(status: 200, json: ["position": controller.location.positionText() ?? "unknown"])
         case ("POST", "/motion"):
             guard let kind = text("kind").flatMap(MotionActivityKind.init(rawValue:)) else {
                 return Response(status: 400, json: ["error": "kind: stationary, walking, running, cycling or automotive"])

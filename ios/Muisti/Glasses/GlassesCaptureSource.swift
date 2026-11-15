@@ -728,8 +728,17 @@ final class GlassesCaptureSource: CaptureSource {
                 if wakeListening {
                     wake.start(contextualStrings: wakeStrings(), onPartial: { text in
                         Task { @MainActor in speech.partial(text) }
-                    }) { text in
-                        Task { @MainActor in speech.utterance(text, source: "phone") }
+                    }) { text, audio in
+                        Task { @MainActor in
+                            // A question is coming: its words from Parakeet (on the phone),
+                            // which hears them far better than the wake-word recogniser.
+                            var better: String?
+                            if speech.leadsToQuestion(text), SpeechSettings.engine != .apple,
+                               await SpeechLab.shared.prepareParakeet("en-US") {
+                                better = await SpeechLab.shared.transcribe(audio, localeIdentifier: "en-US")
+                            }
+                            speech.utterance(text, source: "phone", better: better)
+                        }
                     }
                 }
                 Log.glasses.info("camera stream carries the glasses mic (push-to-talk\(wakeListening ? " + wake word" : "", privacy: .public))")

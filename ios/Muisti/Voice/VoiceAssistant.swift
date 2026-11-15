@@ -128,7 +128,8 @@ final class VoiceAssistant {
             lastChangeAt = Date()
             if let tap = glassesMic, tap.isFlowing {
                 Log.pipeline.info("listening on the glasses mic (camera stream audio)")
-                session = parakeet ? ParakeetSpeechSession(source: .glasses(tap), localeIdentifier: localeIdentifier)
+                session = parakeet ? ParakeetSpeechSession(source: .glasses(tap), localeIdentifier: localeIdentifier,
+                                                           preroll: wakeStarted ? tap.recent(seconds: 5) : [])
                     : modern?(.glasses(tap), names) ?? TapSpeechSession(recognizer: recognizer, contextualStrings: names, tap: tap)
             } else {
                 let wantsDevice = prefersGlassesMic()
@@ -186,7 +187,8 @@ final class VoiceAssistant {
         if let ending = session, !finishing {
             finishing = true
             defer { finishing = false }
-            if let final = await ending.finalize(timeout: 0.8)?.trimmingCharacters(in: .whitespacesAndNewlines), !final.isEmpty {
+            if var final = await ending.finalize(timeout: 0.8)?.trimmingCharacters(in: .whitespacesAndNewlines), !final.isEmpty {
+                if wakeStarted { final = afterWake(final) }
                 if final != transcript { Log.pipeline.info("final transcript revised the partial") }
                 transcript = final
             }
@@ -196,6 +198,8 @@ final class VoiceAssistant {
         if session === bargeSession { bargeSession = nil }
         session = nil
         levels.reset()
+        if wakeStarted { Trace.note("after the wake phrase: “\(transcript.prefix(80))”") }
+        wakeStarted = false
         let question = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !question.isEmpty else {
             phase = .idle
@@ -228,6 +232,7 @@ final class VoiceAssistant {
             session = nil
             levels.reset()
             transcript = ""
+            wakeStarted = false
             phase = .idle
             Self.deactivateAudioSession()
         case .thinking:
@@ -332,8 +337,13 @@ final class VoiceAssistant {
         // Spoken conversation: the mic opens again (earcon first) only when Muisti asked
         // something back (`expects_reply`); after "thanks" or a plain answer it stays closed,
         // and a double tap asks the next question.
-        if byVoice, speakAnswers, !result.spontaneous, result.expectsReply {
-            if glassesListening() { expectGlassesReply() } else { await listenWithEarcon() }
+        // A reply that ends by asking the user something is answered by voice without a tap
+        // (before, only replies the model had flagged; a rule's "Is that right?" was not).
+        let asks = result.expectsReply || result.answer.trimmingCharacters(in: .whitespacesAndNewlines).last.map { "?？".contains($0) } == true
+        if byVoice, speakAnswers, !result.spontaneous, asks {
+            // The glasses mic is in the stream: the same listening as for a question (Parakeet,
+            // the listening view). Only without it is the reply left to the glasses' own recogniser.
+            if glassesListening(), glassesMic?.isFlowing != true { expectGlassesReply() } else { await listenWithEarcon() }
         }
     }
 
@@ -552,6 +562,9 @@ final class VoiceAssistant {
 
     private func handlePartial(_ text: String, isFinal: Bool) {
         guard phase == .listening, !finishing else { return }
+        // After the wake phrase: the phrase itself is not part of the question (and "Hey Meta."
+        // alone is not yet a question that could end).
+        let text = wakeStarted ? afterWake(text) : text
         let changed = text != transcript
         transcript = text
         if isFinal {
@@ -704,6 +717,10 @@ final class VoiceAssistant {
     /// words start the next question. Only when the answer is in the recogniser's language
     /// (a Turkish answer heard by an English recogniser is all "new words").
     private func listenWhileSpeaking(_ text: String, language: String) {
+        // With the wake phrase on, its recogniser is already running on this audio and the
+        // phrase interrupts an answer; a second recognition on the same audio is not started
+        // (two at once ended the wake listener's).
+        guard !wakeListening() else { return }
         guard bargeInEnabled, let tap = glassesMic, tap.isFlowing,
               VoicePicker.languageCode(language) == VoicePicker.languageCode(localeIdentifier),
               SFSpeechRecognizer.authorizationStatus() == .authorized,
@@ -830,6 +847,34 @@ final class VoiceAssistant {
         guard phase == .idle || phase.isFailed else { return }
         playEarcon()
     }
+
+    /// The wake phrase was heard on the glasses: the same listening as a tap (earcon, the
+    /// listening view, Parakeet, the speech detector ending it), starting from the last seconds
+    /// already heard, so a question said in one breath with the phrase is whole.
+    func listenAfterWake() async {
+        Trace.note("wake phrase heard (\(phase))")
+        if phase == .speaking {
+            // Said over an answer: the answer stops and Muisti listens.
+            interrupted = true
+            cancel()
+            let waitStart = Date()
+            while phase == .speaking, Date().timeIntervalSince(waitStart) < 1.5 {
+                try? await Task.sleep(for: .milliseconds(20))
+            }
+        }
+        guard phase == .idle || phase.isFailed else { return }
+        wakeStarted = true
+        await listenWithEarcon()
+        if phase != .listening { wakeStarted = false }
+    }
+
+    /// The text after the wake phrase (set by the controller; the glasses' matcher knows how
+    /// the phrase gets written).
+    @ObservationIgnored var afterWake: (String) -> String = { $0 }
+    /// The wake phrase is being listened for on the glasses audio (set by the controller).
+    @ObservationIgnored var wakeListening: () -> Bool = { false }
+    /// This listening session was opened by the wake phrase.
+    @ObservationIgnored private var wakeStarted = false
 
     /// The glasses' side tap: start listening (after the earcon), or finish the question if
     /// already listening, or stop an answer being read.

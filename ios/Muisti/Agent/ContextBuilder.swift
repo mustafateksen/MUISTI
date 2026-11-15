@@ -56,7 +56,10 @@ enum ContextBuilder {
     who asked for what, what Muisti promised or set up (reminders, rules, destinations, with \
     their #ids when given), what was decided, what the user told Muisti about themselves or \
     their plans. Keep every name, number, time and place exactly as it was said. Nothing that \
-    was not said; no commentary.
+    was not said; no commentary. Leave out entirely: anything Muisti proposed that the user \
+    did not confirm (a rule read back and answered with no, or never answered), anything \
+    Muisti got wrong and was corrected on, and warnings Muisti gave by itself. Only what the \
+    user said or agreed to is worth keeping; a mistake written down here comes back as a fact.
     """
 
     /// Folds the oldest open turns into a summary once there are too many of them. The turns

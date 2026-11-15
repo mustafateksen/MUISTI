@@ -93,6 +93,8 @@ final class AgentCenter {
     }
 
     static let snooze: TimeInterval = 30 * 60
+    /// How long a note Muisti made by itself rests before a frame can bring it up.
+    static let ownNoteRest: TimeInterval = 15 * 60
     static let nearPlace: Double = 90
     /// Muisti's own look at how the day is going, while capturing and when something changed
     /// (pipeline v2: every 2 minutes; it was 10 when the server was shared and slow).
@@ -263,8 +265,13 @@ final class AgentCenter {
             }
         }
         if motion.isRunning, motion.activity != .unknown { lines.append("Movement now: \(motion.activity.rawValue)") }
-        if let last = policy.recent.first(where: { $0.level > .silent }) {
-            lines.append("Last thing Muisti brought up by itself: \(QueryEngine.promptTime(last.at)) [\(last.topic)\(last.intentID.map { ", intent \($0)" } ?? "")] “\(last.text)”" + (last.outcome.map { " (the user: \($0.rawValue))" } ?? ""))
+        // Everything it said by itself in the last hours (newest first), so it can see when it
+        // is about to repeat itself: with only the last one shown, the same remark about the
+        // user's laptop came back every few minutes in other words (15 Nov).
+        let said = policy.recent.filter { $0.level > .silent && now.timeIntervalSince($0.at) < 3 * 3600 }.prefix(8)
+        if !said.isEmpty {
+            lines.append("What Muisti already said by itself (newest first):")
+            lines += said.map { "- \(QueryEngine.promptTime($0.at)) [\($0.topic)\($0.intentID.map { ", intent \($0)" } ?? "")] “\($0.text)”" + ($0.outcome.map { " (the user: \($0.rawValue))" } ?? "") }
         }
         if !policy.mutes.isEmpty { lines.append("Muted by the user: " + policy.mutes.map(\.topic).joined(separator: ", ")) }
         lines.append("Notes about people (text on badges and cards): \(settings.people ? "allowed" : "not allowed")")
@@ -519,7 +526,7 @@ final class AgentCenter {
         } else if flag == "personal (hazard)" {
             happened = "The glasses saw the frame below \(ago) seconds ago. It may show a danger on the ground where the user is walking right now. If it is real, close and ahead of them (not a picture, not across the street, not something they are plainly already dealing with), warn them in one short urgent sentence; otherwise stay silent."
         } else if flag?.hasPrefix("personal") == true {
-            happened = "The glasses saw the frame below \(ago) seconds ago. It looks like something of the user's own, or something left on or open: the kind of thing you look out for without being asked. Check the notes and the safety log for whether it is already taken care of today, then say or ask what a friend would."
+            happened = "The glasses saw the frame below \(ago) seconds ago. It looks like something of the user's own, or something left on or open. A medicine: look in the notes and the safety log; when nothing there says it was taken today, ask whether they have (once a day is enough). Something on or open with nobody dealing with it: say so. Keys, a wallet, a phone, a laptop or a bag: only when they are really being left (the user is going and they stay); beside someone who is sitting with them they are just their things and need no words. Nothing you already raised (see what Muisti already said) is raised again."
         } else {
             happened = "The glasses saw the frame below \(ago) seconds ago, and its analysis flagged it. Nothing was found that links it to the user's intents, destination, calendar or belongings: unless you see such a link yourself, or it is a physical danger where they are walking, stay silent."
         }
@@ -537,6 +544,8 @@ final class AgentCenter {
         guard let vector = n.vector else { return [] }
         var close: [(intent: Intent, sight: String, cosine: Double)] = []
         for intent in intents where intent.status == .open && !intent.isSnoozed(now) && !policy.isMuted("", intentID: intent.id) {
+            // Muisti's own note is not "seen again" in the scene it was just made from.
+            if intent.source == .agent, now.timeIntervalSince(intent.createdAt) < Self.ownNoteRest { continue }
             var sight = intent.cue.sight
             if sight == nil, intent.kind == .destination, intent.coordinate == nil {
                 sight = "A sign, entrance or building of \(intent.placeName ?? intent.text)"
@@ -613,6 +622,11 @@ final class AgentCenter {
             if let intent = intents.first(where: { $0.id == id }), intent.kind != .watch { await close(intent, as: .done) }
         }
         for var note in outcome.notes {
+            // The same note again (the same table five minutes later) is not a new note.
+            if let twin = intents.first(where: { $0.status == .open && $0.source == .agent && InterventionPolicy.similarity($0.text, note.text) >= 0.5 }) {
+                Trace.note("agent note dropped: like \(twin.id) (\(note.text.prefix(50)))")
+                continue
+            }
             await resolvePlace(&note)
             await save(note)
             Trace.note("agent note \(note.id): \(note.text.prefix(60))\(Self.cueText(note.cue))")
@@ -664,7 +678,7 @@ final class AgentCenter {
         lastJudgement = "\(ms) ms · \(urgency.rawValue) [\(telling.topic)]: \(text)"
         await policy.submit(Proposal(topic: intent == nil ? telling.topic : "reminder", urgency: urgency, text: text,
                                      language: language(), expectsReply: telling.expectsReply, frame: frame, intentID: intent?.id,
-                                     recordID: recordID, expires: expires, late: late), now: now)
+                                     recordID: recordID, expires: expires, late: late, userAsked: intent?.source == .user), now: now)
         // "Whenever you see…" stays open however final the model thought this was.
         if let intent { await broughtUp(intent, done: telling.intentDone && intent.kind != .watch, now: now) }
     }
@@ -730,7 +744,7 @@ final class AgentCenter {
             // Long overdue (Muisti was closed; the phone's own notification covered it): not said again.
             if now.timeIntervalSince(due) < 30 * 60 {
                 await policy.submit(Proposal(topic: "reminder", urgency: .timely, text: intent.say ?? intent.text, language: intent.language ?? language(),
-                                             intentID: intent.id, expires: due.addingTimeInterval(30 * 60)), now: now)
+                                             intentID: intent.id, expires: due.addingTimeInterval(30 * 60), userAsked: true), now: now)
             }
             let once = intent.cue.daily == nil
             if once, intent.cue.place == nil, intent.cue.sight == nil, intent.cue.on == nil {
@@ -753,7 +767,7 @@ final class AgentCenter {
         let event = atHome ? "arriving_home" : "leaving_home"
         for intent in intents where intent.status == .open && intent.cue.on == event && !intent.isSnoozed(now) {
             await policy.submit(Proposal(topic: "reminder", urgency: .timely, text: intent.say ?? intent.text, language: intent.language ?? language(),
-                                         intentID: intent.id, expires: now.addingTimeInterval(10 * 60)), now: now)
+                                         intentID: intent.id, expires: now.addingTimeInterval(10 * 60), userAsked: true), now: now)
             await broughtUp(intent, done: intent.cue.daily == nil && intent.kind != .watch, now: now)
         }
     }

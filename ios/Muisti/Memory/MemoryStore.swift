@@ -28,6 +28,9 @@ struct MemoryRecord: Sendable, Identifiable, Hashable {
     var episodeID: Int64?
     /// Named place, district, city and floor around the street, when the phone knew them.
     var area: String? = nil
+    /// The user's level when this was seen (metres of climbing, `LevelTrack`), when the
+    /// barometer was read. Only its difference to another level of the same run means anything.
+    var level: Double? = nil
 
     var title: String {
         if let name, !name.isEmpty { return kind.map { "\(name) · \($0)" } ?? name }
@@ -197,6 +200,8 @@ actor MemoryStore {
         sqlite3_exec(db, "ALTER TABLE memories ADD COLUMN image_embed_model TEXT", nil, nil, nil)
         // v6: named place / district / city / floor around the street.
         sqlite3_exec(db, "ALTER TABLE memories ADD COLUMN area TEXT", nil, nil, nil)
+        // v7: the user's level (barometer) when the frame was taken.
+        sqlite3_exec(db, "ALTER TABLE memories ADD COLUMN level REAL", nil, nil, nil)
     }
 
     /// Selects the embedding model in use and (re)loads its vectors into the in-memory index.
@@ -235,7 +240,7 @@ actor MemoryStore {
             Log.pipeline.error("keyframe write failed: \(error.localizedDescription, privacy: .public)")
             return nil
         }
-        let sql = "INSERT INTO memories(seen_at, lat, lon, accuracy, heading, street, ocr_text, frame_file, area) VALUES(?,?,?,?,?,?,?,?,?)"
+        let sql = "INSERT INTO memories(seen_at, lat, lon, accuracy, heading, street, ocr_text, frame_file, area, level) VALUES(?,?,?,?,?,?,?,?,?,?)"
         guard let stmt = prepare(sql) else { return nil }
         defer { sqlite3_finalize(stmt) }
         bind(stmt, 1, memory.seenAt.timeIntervalSince1970)
@@ -247,6 +252,7 @@ actor MemoryStore {
         bind(stmt, 7, memory.ocrText)
         bind(stmt, 8, file)
         bind(stmt, 9, memory.area)
+        bind(stmt, 10, LevelTrack.shared.level(at: memory.seenAt))
         guard sqlite3_step(stmt) == SQLITE_DONE else { return nil }
         let id = sqlite3_last_insert_rowid(db)
         indexFTS(id: id, ocr: memory.ocrText, kind: nil, name: nil, caption: nil, other: nil, keywords: nil,
@@ -768,7 +774,7 @@ actor MemoryStore {
         sqlite3_step(stmt)
     }
 
-    private static let columns = "id, seen_at, lat, lon, heading, street, ocr_text, kind, name, phone, hours, other_text, caption, keywords, confidence, frame_file, status, visual_text, episode_id, area"
+    private static let columns = "id, seen_at, lat, lon, heading, street, ocr_text, kind, name, phone, hours, other_text, caption, keywords, confidence, frame_file, status, visual_text, episode_id, area, level"
 
     /// Street and area as one searchable text (the keyword index has one "where" column).
     static func whereText(_ street: String?, _ area: String?) -> String? {
@@ -801,7 +807,8 @@ actor MemoryStore {
                 frameFile: text(stmt, 15) ?? "",
                 status: MemoryRecord.Status(rawValue: Int(sqlite3_column_int(stmt, 16))) ?? .pending,
                 episodeID: sqlite3_column_type(stmt, 18) == SQLITE_NULL ? nil : sqlite3_column_int64(stmt, 18),
-                area: text(stmt, 19)
+                area: text(stmt, 19),
+                level: double(stmt, 20)
             ))
         }
         return result

@@ -82,9 +82,13 @@ final class ParakeetSpeechSession: ListeningSession, @unchecked Sendable {
 
     private let localeIdentifier: String
 
-    init(source: MicSource, localeIdentifier: String) {
+    private let preroll: [Float]
+
+    /// `preroll`: audio heard just before the session opened (the wake phrase and what followed).
+    init(source: MicSource, localeIdentifier: String, preroll: [Float] = []) {
         capture = MicCapture(source: source)
         self.localeIdentifier = localeIdentifier
+        self.preroll = preroll
     }
 
     func start(onText: @escaping @Sendable (String, Bool) -> Void,
@@ -105,6 +109,10 @@ final class ParakeetSpeechSession: ListeningSession, @unchecked Sendable {
             onText(state.withLock { $0.text }, false)
         }
         self.gate = gate
+        if !preroll.isEmpty {
+            state.withLock { $0.samples = preroll }
+            gate.feed(preroll)
+        }
         try capture.start(onSamples: { samples in
             state.withLock { s in
                 guard s.samples.count < Self.maxSamples else { return }

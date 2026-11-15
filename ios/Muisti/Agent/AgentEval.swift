@@ -104,7 +104,7 @@ enum AgentEval {
         var levels: [InterventionLevel] = []
         let noon = Calendar.current.date(bySettingHour: 12, minute: 0, second: 0, of: now) ?? now
         for i in 0..<5 {
-            levels.append(await agent.policy.submit(Proposal(topic: "topic_\(i)", urgency: .timely, text: "note \(i)"), now: noon.addingTimeInterval(Double(i) * 11 * 60)))
+            levels.append(await agent.policy.submit(Proposal(topic: "topic_\(i)", urgency: .timely, text: ["the tram leaves soon", "milk is cheaper here", "your meeting moved", "rain starts later", "pharmacy closes early"][i]), now: noon.addingTimeInterval(Double(i) * 11 * 60)))
         }
         check("policy: budget of 3 spoken, then notifications", levels == [.spoken, .spoken, .spoken, .notification, .notification], "\(levels.map(\.rawValue))")
         let gap = await agent.policy.submit(Proposal(topic: "gap", urgency: .timely, text: "too soon"), now: noon.addingTimeInterval(60))

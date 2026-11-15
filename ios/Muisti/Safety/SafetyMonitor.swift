@@ -487,6 +487,25 @@ final class SafetyMonitor {
             if case .rule(let waiting) = pending, waiting.trigger == rule.trigger, waiting.condition == rule.condition {
                 return await handle(.confirm, now: now)
             }
+            // A rule that is already kept is not made again. This also catches the model taking
+            // the subject from what it already knows instead of from what was said: on 15 Nov
+            // "I'm allergic to my friend Omar" came back three times as a strawberry rule,
+            // because a strawberry rule existed and had just warned.
+            let asked = Set((rule.condition.allergens ?? []).map { $0.lowercased() })
+            let known = Set(rules.filter(\.enabled).flatMap { $0.condition.allergens ?? [] }.map { $0.lowercased() })
+            let twin = rules.first { $0.enabled && $0.trigger == rule.trigger && $0.condition == rule.condition }
+            // "strawberry" and "strawberries" are one allergen.
+            func same(_ a: String, _ b: String) -> Bool {
+                let shared = a.commonPrefix(with: b).count
+                return a == b || (abs(a.count - b.count) <= 2 && shared >= max(3, min(a.count, b.count) - 1))
+            }
+            let allKept = !asked.isEmpty && asked.allSatisfy { new in known.contains { same(new, $0) } }
+            if twin != nil || allKept {
+                pending = nil
+                let kept = twin?.summary ?? rules.first { ($0.condition.allergens ?? []).contains { old in asked.contains { same($0, old.lowercased()) } } }?.summary ?? ""
+                Trace.note("create_rule dropped: already kept (\(kept.prefix(60)))")
+                return String(localized: "I already keep that one: \(kept) Tell me what else you want me to watch for.")
+            }
             pending = .rule(rule)
         case .confirm:
             switch pending {

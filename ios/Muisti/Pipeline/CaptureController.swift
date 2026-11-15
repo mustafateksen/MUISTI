@@ -92,6 +92,15 @@ final class CaptureController {
         queryEngine = QueryEngine(store: store, ai: ai)
         voice = VoiceAssistant(engine: queryEngine, location: location)
         voice.localeIdentifier = config.voiceLocale
+        Task { [queryEngine, config] in await queryEngine.setSpokenLanguage(config.voiceLocale) }
+        LevelTrack.shared.start()
+        // Once (15 Nov): the kept conversation held Muisti's own wrong rule proposals as if they
+        // were facts, and each turn read them back. Only the conversation (turns, summaries,
+        // the model's notes) is cleared; memories, rules and reminders stay.
+        if !UserDefaults.standard.bool(forKey: "clearedDialogNov15") {
+            UserDefaults.standard.set(true, forKey: "clearedDialogNov15")
+            Task { [queryEngine] in await queryEngine.resetConversation() }
+        }
         glasses.headSpeech.wakeWord = config.wakeWord.isEmpty ? "Muisti" : config.wakeWord
         voice.speakAnswers = config.speakAnswers
         pipeline = MemoryPipeline(recorder: recorder, store: store, worker: worker)
@@ -142,8 +151,13 @@ final class CaptureController {
         // Hands-free questions through the glasses mic (on-glasses transcription).
         let headSpeech = glasses.headSpeech
         headSpeech.onQuestion = { question in Task { await voice.askFromGlasses(question) } }
-        headSpeech.isBusy = { voice.isBusy }
-        headSpeech.onWake = { voice.acknowledge() }
+        // While an answer is read the wake phrase still counts (it interrupts the answer).
+        headSpeech.isBusy = { voice.phase == .listening || voice.phase == .thinking }
+        voice.wakeListening = { [weak wearables] in config.handsFree && wearables?.microphonePermission == .granted }
+        // The wake phrase opens the same listening as a tap (before: only a chime, and the next
+        // thing the wake recogniser wrote was taken as the question — "Yeah." on 15 Nov).
+        headSpeech.onWake = { Task { await voice.listenAfterWake() } }
+        voice.afterWake = { headSpeech.afterWake($0) }
         // Push-to-talk: a tap on the glasses' touchpad, reported by the SDK or as a media key.
         let mediaKeys = mediaKeys
         mediaKeys.onTap = { Task { await voice.pushToTalk() } }
@@ -402,6 +416,7 @@ final class CaptureController {
         await pipeline.configure(recordRaw: config.recordToDisk, streamEveryN: config.passthroughEveryN, zones: config.zones)
         scheduler.tuning = config.tuning
         voice.localeIdentifier = config.voiceLocale
+        Task { [queryEngine, config] in await queryEngine.setSpokenLanguage(config.voiceLocale) }
         voice.speakAnswers = config.speakAnswers
         glasses.headSpeech.wakeWord = config.wakeWord.isEmpty ? "Muisti" : config.wakeWord
         glasses.headSpeech.aliases = config.wakeAliases

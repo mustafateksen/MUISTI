@@ -21,8 +21,18 @@ final class GlassesAudioRecognizer: @unchecked Sendable {
     private var lastChange = Date()
     private var startedAt = Date()
     private var running = false
+    /// The recognition task ended by itself (an error, the recogniser's own limit, another
+    /// recognition taking its place): a new one is started on the next tick.
+    private var ended = false
+    private var lastAudio = Date()
+    private var silentNoted = false
     private var strings: [String] = []
-    private var onUtterance: @Sendable (String) -> Void = { _ in }
+    private var onUtterance: @Sendable (String, [Float]) -> Void = { _, _ in }
+    /// The audio of the utterance in progress (16 kHz mono), so the question can be read again
+    /// by the better model once the wake word was heard.
+    private var samples: [Float] = []
+    private let resampler = Resampler16k()
+    private static let keptSamples = 16_000 * 20
     private var onPartial: @Sendable (String) -> Void = { _ in }
     private let queue = DispatchQueue(label: "fi.junction.muisti.wake")
 
@@ -30,7 +40,7 @@ final class GlassesAudioRecognizer: @unchecked Sendable {
     private let pause: TimeInterval = 0.8
 
     func start(contextualStrings: [String], onPartial: @escaping @Sendable (String) -> Void = { _ in },
-               onUtterance: @escaping @Sendable (String) -> Void) {
+               onUtterance: @escaping @Sendable (String, [Float]) -> Void) {
         lock.lock()
         defer { lock.unlock() }
         guard !running, recognizer?.isAvailable == true else { return }
@@ -69,8 +79,14 @@ final class GlassesAudioRecognizer: @unchecked Sendable {
 
     /// Called on the SDK's audio thread for every frame.
     func append(_ buffer: AVAudioPCMBuffer) {
+        let converted = resampler.convert(buffer)
         lock.lock()
         let request = running ? self.request : nil
+        lastAudio = Date()
+        if running {
+            samples += converted
+            if samples.count > Self.keptSamples { samples.removeFirst(samples.count - Self.keptSamples) }
+        }
         lock.unlock()
         request?.append(buffer)
     }
@@ -86,8 +102,17 @@ final class GlassesAudioRecognizer: @unchecked Sendable {
         lastText = ""
         lastChange = Date()
         startedAt = Date()
-        task = recognizer.recognitionTask(with: request) { [weak self] result, _ in
-            guard let self, let result else { return }
+        ended = false
+        task = recognizer.recognitionTask(with: request) { [weak self] result, error in
+            guard let self else { return }
+            guard let result else {
+                // Before: a task that failed stayed dead until the 50 s renewal, or for good
+                // when every later one failed the same way; the wake phrase then worked once.
+                self.lock.lock()
+                if self.request === request, error != nil { self.ended = true }
+                self.lock.unlock()
+                return
+            }
             let text = result.bestTranscription.formattedString
             self.lock.lock()
             var partial: (@Sendable (String) -> Void)?
@@ -96,6 +121,7 @@ final class GlassesAudioRecognizer: @unchecked Sendable {
                 self.lastChange = Date()
                 partial = self.onPartial
             }
+            if self.request === request, result.isFinal { self.ended = true }
             self.lock.unlock()
             partial?(text)
         }
@@ -106,16 +132,28 @@ final class GlassesAudioRecognizer: @unchecked Sendable {
         guard running else { lock.unlock(); return }
         let now = Date()
         var utterance: String?
+        var audio: [Float] = []
         if !lastText.isEmpty, now.timeIntervalSince(lastChange) >= pause {
             utterance = lastText
+            audio = samples
         }
-        if utterance != nil || now.timeIntervalSince(startedAt) > 50 {
+        // No sound from the glasses for a while (the stream stopped, or the glasses gave the
+        // microphone to something else): said once in the trace, for the field log.
+        let silent = now.timeIntervalSince(lastAudio) > 4
+        if silent != silentNoted {
+            silentNoted = silent
+            Trace.note(silent ? "wake listener: no audio from the glasses for 4 s" : "wake listener: audio is back")
+        }
+        let died = ended && now.timeIntervalSince(startedAt) > 0.5
+        if died { Trace.note("wake listener: recognition ended by itself, restarted") }
+        if utterance != nil || died || now.timeIntervalSince(startedAt) > 50 {
             request?.endAudio()
             task?.cancel()
+            samples.removeAll(keepingCapacity: true)
             beginLocked()
         }
         let deliver = onUtterance
         lock.unlock()
-        if let utterance { deliver(utterance) }
+        if let utterance { deliver(utterance, audio) }
     }
 }

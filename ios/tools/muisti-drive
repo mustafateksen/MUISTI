@@ -20,6 +20,8 @@ Commands:
   events [--since N] [--all]    what Muisti said or kept to itself since entry N
   wait [--timeout 180]          until the video is fed and every frame is processed
   location <lat> <lon> [--course DEG] [--speed M/S]
+  height <metres> [--seconds 4] the user goes up (+) or down (-) that far, as the phone's barometer
+                                would show it (a lift, stairs); a storey is 3 to 4 m
   motion <stationary|walking|running|cycling|automotive>
   reply <yes|no|not_now>        answer Muisti's pending question
   tick                          let the agent look at the clock and position now
@@ -264,6 +266,8 @@ def main():
     elif command == "wait":
         timeout = option(args, "--timeout", 180, float)
         show(call("GET", f"/wait-idle?timeout={timeout}", timeout=timeout + 30))
+    elif command == "height":
+        show(call("POST", "/height", {"by": float(args[0]), "seconds": option(args, "--seconds", 4.0, float)}))
     elif command == "location":
         course = option(args, "--course", None, float)
         speed = option(args, "--speed", None, float)

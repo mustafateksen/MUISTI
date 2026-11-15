@@ -13,13 +13,21 @@ final class GlassesMicTap: @unchecked Sendable {
     private struct State {
         var consumer: (@Sendable (AVAudioPCMBuffer) -> Void)?
         var lastBuffer: Date?
+        /// The last seconds heard, 16 kHz mono: what was said while the wake phrase was still
+        /// being recognised belongs to the question.
+        var recent: [Float] = []
     }
+    private let resampler = Resampler16k()
+    private static let keptSamples = 16_000 * 8
     private let state = OSAllocatedUnfairLock(initialState: State())
 
     /// Called on the SDK's audio thread for every audio frame.
     func feed(_ buffer: AVAudioPCMBuffer) {
+        let samples = resampler.convert(buffer)
         let consumer = state.withLock { s -> (@Sendable (AVAudioPCMBuffer) -> Void)? in
             s.lastBuffer = Date()
+            s.recent += samples
+            if s.recent.count > Self.keptSamples { s.recent.removeFirst(s.recent.count - Self.keptSamples) }
             return s.consumer
         }
         consumer?(buffer)
@@ -28,6 +36,11 @@ final class GlassesMicTap: @unchecked Sendable {
     /// Audio arrived within the last second (the stream carries the mic now).
     var isFlowing: Bool {
         state.withLock { $0.lastBuffer.map { Date().timeIntervalSince($0) < 1 } ?? false }
+    }
+
+    /// The last `seconds` of audio (16 kHz mono).
+    func recent(seconds: Double) -> [Float] {
+        state.withLock { Array($0.recent.suffix(Int(seconds * 16_000))) }
     }
 
     func setConsumer(_ consumer: (@Sendable (AVAudioPCMBuffer) -> Void)?) {

@@ -77,6 +77,9 @@ struct AnswerDraft: Codable, Sendable {
     /// written before the answer (the answer is only as good as the working in front of it).
     var problem: String?
     var working: String?
+    /// Look turns: the thing asked about is in the live picture. False ("where is the info
+    /// desk?" in a hallway without one): the question is answered from memory instead.
+    var in_view: Bool?
     var unclear_reply: String?
     var rule: SafetyRule?
     var event: EventDraft?
@@ -125,6 +128,7 @@ struct AnswerDraft: Codable, Sendable {
         figures = (try? c.decodeIfPresent([Figure].self, forKey: .figures)) ?? []
         too_small = c.lenientBool(.too_small)
         problem = c.lenientString(.problem)
+        in_view = c.lenientBool(.in_view)
         working = c.lenientString(.working)
         unclear_reply = c.lenientString(.unclear_reply)
         rule = (try? c.decodeIfPresent(SafetyRule.self, forKey: .rule)) ?? nil
@@ -252,6 +256,22 @@ enum MemoryPrompts {
     records show there; when the position is unknown, use the most recent records. "Area" on a \
     record is the named place, district and city it was seen in (and the floor, when the phone \
     knew it): use it for questions about a city, district or building. \
+    - Put what you are shown together; a record is not only what is written on it. The position \
+    now can carry the user's own movement in height from the phone's barometer (went up about \
+    14 m, 3 min ago), and a record can carry "Height": how far below or above the user's \
+    present level it was seen. Together with floor numbers read on signs, lift indicators and \
+    directories (in the records and in the most recent frames) they say where the user is now \
+    relative to what was seen: the exit was read 14 m below the present level, a storey is 3 \
+    to 4 m, so it is about four floors down, and the lift or stairs seen on this level lead \
+    there. Work such relations out and give them to the user as the answer to what they \
+    asked, spoken to them ("you", never "the user"): for a way somewhere, the way itself (which \
+    direction in height, about how many floors, and the lift or stairs seen nearest to where \
+    they are now), as an estimate ("about four floors down"), with what it rests on in a few \
+    words (the sign, the phone's barometer). support is "inferred" for such an answer and the \
+    answer still carries the conclusion. A count of floors or metres you \
+    work out this way goes in figures as worked_out. Without a height on the record and \
+    without a floor number on a sign, say only what the sign says and that you cannot tell how \
+    many floors away it is. \
     Only records that fit the reference answer such a question; if none fits, say that you \
     saw none there or then.
     - "Type" is the specific kind of place or thing (cafe, pharmacy, dentist). Match the kind of \
@@ -380,13 +400,18 @@ enum MemoryPrompts {
     what you can make out and that you need a closer or steadier look. Otherwise too_small is \
     false. If the user asks for a hint, a first step or a check of their own \
     answer instead of the solution, give exactly that and keep the result to yourself.
+    in_view is true whenever the question is about this picture or something in it (what it is, \
+    what it says, translating or solving it). It is false only when the user asks where a named \
+    place or thing is, how to get to it or whether you know it, and that place or thing is not \
+    in the picture: what the glasses saw earlier answers that.
     """
 
     /// The answer schema for such a turn: the same, plus `figures`.
     static let lookAnswerSchema: String = answerSchema
         .replacingOccurrences(of: #""language":{"type":"string"},"#,
                               with: #""language":{"type":"string"},"problem":{"type":"string"},"working":{"type":"string"},"#)
-        .replacingOccurrences(of: #""required":["language","#, with: #""required":["language","problem","working","#)
+        .replacingOccurrences(of: #""required":["language","#, with: #""required":["language","in_view","problem","working","#)
+        .replacingOccurrences(of: #""problem":{"type":"string"},"#, with: #""in_view":{"type":"boolean"},"problem":{"type":"string"},"#)
         .replacingOccurrences(of: #""quotes":{"type":"array","items":{"type":"string"}},"#,
                               with: #""quotes":{"type":"array","items":{"type":"string"}},"figures":{"type":"array","items":{"type":"object","properties":{"value":{"type":"string"},"how":{"type":"string","enum":["read","worked_out"]}},"required":["value","how"]}},"#)
         .replacingOccurrences(of: #""used_ids","quotes","#, with: #""used_ids","quotes","figures","too_small","#)

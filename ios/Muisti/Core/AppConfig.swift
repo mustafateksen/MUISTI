@@ -247,8 +247,16 @@ final class AppConfig {
             defaults.set(true, forKey: "migratedHandsFreeOff")
             defaults.set(false, forKey: "handsFree")
         }
-        handsFree = defaults.object(forKey: "handsFree") as? Bool ?? false
-        wakeWord = defaults.string(forKey: "wakeWord") ?? "Muisti"
+        // 15 Nov: asking by voice through the glasses is back on, with "Hey Meta" as the wake
+        // phrase (the team's choice for the demo). Set once; Settings can change both.
+        if !defaults.bool(forKey: "migratedHeyMeta") {
+            defaults.set(true, forKey: "migratedHeyMeta")
+            defaults.set(true, forKey: "handsFree")
+            defaults.set("Hey Meta", forKey: "wakeWord")
+            defaults.removeObject(forKey: "wakeAliases")
+        }
+        handsFree = defaults.object(forKey: "handsFree") as? Bool ?? true
+        wakeWord = defaults.string(forKey: "wakeWord") ?? "Hey Meta"
         wakeAliases = defaults.stringArray(forKey: "wakeAliases") ?? []
         safetyAuto = defaults.object(forKey: "safetyAuto") as? Bool ?? true
         backgroundCapture = defaults.object(forKey: "backgroundCapture") as? Bool ?? true

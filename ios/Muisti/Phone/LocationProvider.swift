@@ -57,12 +57,15 @@ final class LocationProvider: NSObject, CLLocationManagerDelegate {
 
     /// Where the user is now, for the answer model: street, area, floor, coordinates.
     func positionText(maxAge: TimeInterval = 120) -> String? {
-        guard let fix = freshFix(maxAge: maxAge) else { return nil }
+        // Indoors there is often no fix at all; what the barometer says still stands.
+        let height = LevelTrack.shared.nowText()
+        guard let fix = freshFix(maxAge: maxAge) else { return height }
         var parts: [String] = []
         if let street { parts.append("street: \(street)") }
         if let area { parts.append("area: \(area)") }
         if let floor = fix.floor { parts.append("floor \(floor) (phone's indoor positioning)") }
         parts.append(String(format: "coordinates %.4f, %.4f (±%d m)", fix.latitude, fix.longitude, Int(fix.accuracy.rounded())))
+        if let height { parts.append(height) }
         return parts.joined(separator: "; ")
     }
 

@@ -360,8 +360,8 @@ extension MemoryPrompts {
     a light): the thing, its state as it looks in this frame ("unknown" when it cannot be told), \
     and the few words of what shows it (a blue flame, a glowing ring, the knob position). A \
     thing shown on a screen or a picture is not listed. Usually [].
-    - allergens_seen: food allergens named on a product, label, menu or plate in view (milk, egg, \
-    nuts, peanut, gluten, wheat, soy, fish, shellfish, sesame, strawberry and the like): the \
+    - allergens_seen: food allergens named on a product, label, menu or plate in view (the \
+    common ones, and any fruit or other food a person can be allergic to): the \
     allergen in English, where it is (label, front of package, menu, plate) and the words read, \
     in their own language. Usually [].
     - actions: only what a hand in the frame is plainly doing to a thing right now (turning a \
