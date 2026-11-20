@@ -1,0 +1,86 @@
+[
+ {
+  "variant": "temp 0.0, thinking off",
+  "at_10.04.33_PM": {
+   "records": 7,
+   "entity_recall": "3/3",
+   "correct_floor_pairs": "5/6",
+   "wrong_floor_pairs_unique": 0,
+   "junk_items": [
+    "6TH FLOOR -> ANDROID HARDWARE LAB & MEETING SPACE"
+   ]
+  },
+  "at_10.39.08_PM": {
+   "records": 20,
+   "entity_recall": "8/10",
+   "correct_floor_pairs": "0/0",
+   "wrong_floor_pairs_unique": 0,
+   "junk_items": []
+  },
+  "verifier_rejections": 4,
+  "avg_latency_s": 0.48,
+  "calls": 110
+ },
+ {
+  "variant": "temp 0.2, thinking off (default)",
+  "at_10.04.33_PM": {
+   "records": 7,
+   "entity_recall": "3/3",
+   "correct_floor_pairs": "6/6",
+   "wrong_floor_pairs_unique": 0,
+   "junk_items": []
+  },
+  "at_10.39.08_PM": {
+   "records": 16,
+   "entity_recall": "8/10",
+   "correct_floor_pairs": "0/0",
+   "wrong_floor_pairs_unique": 0,
+   "junk_items": []
+  },
+  "verifier_rejections": 2,
+  "avg_latency_s": 0.44,
+  "calls": 110
+ },
+ {
+  "variant": "temp 0.6, thinking off (NVIDIA vision default)",
+  "at_10.04.33_PM": {
+   "records": 8,
+   "entity_recall": "3/3",
+   "correct_floor_pairs": "6/6",
+   "wrong_floor_pairs_unique": 0,
+   "junk_items": []
+  },
+  "at_10.39.08_PM": {
+   "records": 15,
+   "entity_recall": "9/10",
+   "correct_floor_pairs": "0/0",
+   "wrong_floor_pairs_unique": 0,
+   "junk_items": []
+  },
+  "verifier_rejections": 4,
+  "avg_latency_s": 0.55,
+  "calls": 110
+ },
+ {
+  "variant": "temp 0.2, thinking ON",
+  "at_10.04.33_PM": {
+   "records": 12,
+   "entity_recall": "3/3",
+   "correct_floor_pairs": "5/6",
+   "wrong_floor_pairs_unique": 0,
+   "junk_items": [
+    "6TH FLOOR -> ANDROID HARDWARE LAB & MEETING SPACE"
+   ]
+  },
+  "at_10.39.08_PM": {
+   "records": 24,
+   "entity_recall": "8/10",
+   "correct_floor_pairs": "0/0",
+   "wrong_floor_pairs_unique": 0,
+   "junk_items": []
+  },
+  "verifier_rejections": 0,
+  "avg_latency_s": 6.3,
+  "calls": 110
+ }
+]

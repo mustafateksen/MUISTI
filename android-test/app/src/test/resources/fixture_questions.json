@@ -1,0 +1,145 @@
+{
+ "now": "2026-11-14T18:30:00",
+ "questions": [
+  {
+   "q": "Which floor is the Arduino lab on?",
+   "expect_label": "SEEN",
+   "must_contain": [
+    "5|fifth"
+   ],
+   "must_not_contain": []
+  },
+  {
+   "q": "What time are the hackathon final demos?",
+   "expect_label": "SEEN",
+   "must_contain": [
+    "14"
+   ],
+   "must_not_contain": []
+  },
+  {
+   "q": "What is the phone number of the pharmacy?",
+   "expect_label": "SEEN",
+   "must_contain": [
+    "694"
+   ],
+   "must_not_contain": []
+  },
+  {
+   "q": "When does the bakery close on Saturday?",
+   "expect_label": "SEEN",
+   "must_contain": [
+    "15"
+   ],
+   "must_not_contain": []
+  },
+  {
+   "q": "How much was the oat milk?",
+   "expect_label": "SEEN",
+   "must_contain": [
+    "1.89|1,89"
+   ],
+   "must_not_contain": []
+  },
+  {
+   "q": "Where did I see my keys?",
+   "expect_label": "SEEN",
+   "must_contain": [
+    "kitchen"
+   ],
+   "must_not_contain": []
+  },
+  {
+   "q": "What did the note on the fridge say?",
+   "expect_label": "SEEN",
+   "must_contain": [
+    "dentist"
+   ],
+   "must_not_contain": []
+  },
+  {
+   "q": "What are the opening hours of K-Market?",
+   "expect_label": "SEEN",
+   "must_contain": [
+    "7"
+   ],
+   "must_not_contain": []
+  },
+  {
+   "q": "How much was the lunch soup at Cafe Aalto?",
+   "expect_label": "SEEN",
+   "must_contain": [
+    "9.50|9,50"
+   ],
+   "must_not_contain": []
+  },
+  {
+   "q": "Which buses stop at Fredrikinkatu?",
+   "expect_label": "SEEN",
+   "must_contain": [
+    "14"
+   ],
+   "must_not_contain": []
+  },
+  {
+   "q": "What is the phone number of the supermarket?",
+   "expect_label": "DONT_KNOW",
+   "must_contain": [],
+   "must_not_contain": []
+  },
+  {
+   "q": "When does the pharmacy open on Sunday?",
+   "expect_label": "DONT_KNOW",
+   "must_contain": [],
+   "must_not_contain": []
+  },
+  {
+   "q": "How much was the coffee at Cafe Aalto?",
+   "expect_label": "DONT_KNOW",
+   "must_contain": [],
+   "must_not_contain": []
+  },
+  {
+   "q": "Where did I see the elephant statue?",
+   "expect_label": "DONT_KNOW",
+   "must_contain": [],
+   "must_not_contain": []
+  },
+  {
+   "q": "What was the wifi password at the office?",
+   "expect_label": "DONT_KNOW",
+   "must_contain": [],
+   "must_not_contain": []
+  },
+  {
+   "q": "Which floor is the gym on?",
+   "expect_label": "DONT_KNOW",
+   "must_contain": [],
+   "must_not_contain": []
+  },
+  {
+   "q": "What is the phone number of Cafe Aalto?",
+   "expect_label": "DONT_KNOW",
+   "must_contain": [],
+   "must_not_contain": []
+  },
+  {
+   "q": "What was the price of the bananas?",
+   "expect_label": "DONT_KNOW",
+   "must_contain": [],
+   "must_not_contain": []
+  },
+  {
+   "q": "Did I see a dog today?",
+   "expect_label": "DONT_KNOW",
+   "must_contain": [],
+   "must_not_contain": []
+  },
+  {
+   "q": "What time does the bus 55 leave?",
+   "expect_label": "DONT_KNOW",
+   "must_contain": [],
+   "must_not_contain": []
+  }
+ ]
+}

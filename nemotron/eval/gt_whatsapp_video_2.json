@@ -1,0 +1,19 @@
+{
+  "video": "WhatsApp Video 2026-11-13 at 10.39.08 PM.mp4",
+  "notes": "Hand-labelled from contact sheets. Only booths whose name is clearly visible in at least one frame. Others (Rokoko, Pickopo, b.ahn, Quantum) are too small at 576x768 to confirm and are not scored.",
+  "entities": [
+    {"id": "arduino", "names": ["arduino"]},
+    {"id": "arduino_lab", "names": ["arduino hardware lab"]},
+    {"id": "wendy", "names": ["wendy", "physical ai platform"]},
+    {"id": "xbox", "names": ["xbox"]},
+    {"id": "aiven", "names": ["aiven"]},
+    {"id": "modal", "names": ["modal"]},
+    {"id": "pankki", "names": ["pankki"]},
+    {"id": "epic", "names": ["epic games"]},
+    {"id": "cloudinary", "names": ["cloudinary"]},
+    {"id": "afterquery", "names": ["afterquery"]}
+  ],
+  "pairs": {},
+  "traps": [],
+  "forbidden_words": []
+}

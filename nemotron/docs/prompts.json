@@ -1,0 +1,675 @@
+{
+ "OCR_PROMPT": "Transcribe the readable English text in this image, one visual row per line.\n- If a label and its value sit side by side on the same row (e.g. a floor number and a room name), keep them on ONE line.\n- Copy exactly as written. Do not translate, correct, complete or guess words.\n- Skip text that is too small, blurry or in a language you cannot read with certainty.\nIf there is no readable text, reply with exactly: NO_TEXT",
+ "EXTRACTION_SYSTEM": "You turn photos from smart glasses into memory records, so the wearer can later ask\n\"where did I see X?\" about ANYTHING useful they walked past, not only text.\n\nYou get the image and OCR_LINES: text read by a separate OCR engine, one line per row, each with an id (L01, L02, ...). OCR may contain small errors. OCR_LINES may be \"(none)\".\n\nTEXT rules (strict):\n- name, phone, hours, items, other_text must come from OCR_LINES. Put the id of the line where a value starts in the matching *_line field (or \"line\" for items). A name may continue over the next 1-2 lines; phone, hours and items must be on one line.\n- If OCR_LINES does not contain it, use null. Do NOT read text from the image that is missing from OCR_LINES.\n- other_text: remaining useful text from OCR_LINES (slogan, website, address, date, price), joined with \" / \".\n- items: label -> value pairs (directory floors, menu prices) ONLY when both are on the SAME line.\n\nVISUAL rules:\n- objects: describe the scene so that ANY clearly visible thing can be found again later. List 8-15 objects.\n  Go through these groups and include what is clearly visible from each (largest / most useful first):\n    1. ways to move: stairs, escalator, elevator, door, entrance, exit, crosswalk, ramp, bridge\n    2. structures and landmarks: building (say what kind in details: mall, office tower, shop front), store, statue,\n       crane, scaffolding, column, arch, fountain, aquarium, slide, stage\n    3. vehicles: car, taxi, bus, bicycle, pedicab, scooter, truck\n    4. furniture and amenities: bench, chair, table, sofa, counter, trash bin, ashtray, umbrella, chandelier, lamp,\n       street lamp, railing, kiosk, vending machine, ATM\n    5. signs and media: sign, screen, billboard, poster, banner, flag, traffic light, QR code\n    6. nature: tree, plant, flower, water\n    7. goods on display: mannequin, clothing rack, display case, hat, shoe, fish\n  Use these words exactly when they fit:\n    screen = an electronic display showing video or changing images (TV, LED wall, monitor, digital billboard).\n    sign = fixed lettering or a logo, lit or not (shop sign, neon sign, store name). A lit sign is NOT a screen.\n    billboard = a large printed or digital advertisement panel on a building or pole.\n    poster = a printed picture or advert on a wall, window or stand. banner = hanging fabric/vinyl.\n  For each: name (simple English noun, singular), category, position in the frame (left/center/right), distance (near/mid/far),\n  details (at most 12 words: colour, material, kind, state, what is on it), count (how many of this thing are visible in THIS frame),\n  visibility: clear (plainly visible), partial (cut off, blurred or small but recognisable), unsure (you think it is\n  there but cannot really make it out). Be honest: unsure objects are kept but double-checked later.\n  Numbers on plaques, indicators and screens: say in details what the number MEANS only if it is clear\n  (e.g. \"elevator position indicator showing 4\", \"floor label 5TH FLOOR at top of directory\").\n  If you cannot tell what a number means, write \"unlabeled number 4\". Never decide which floor the viewer is on.\n  Only list things you can actually see.\n  People are never objects - including costumed performers, mascots and 'living statues' (a person dressed as the\n  Statue of Liberty is a person, not a statue). A real statue is stone or metal on a pedestal.\n  Every shop front you can see counts as a store (put what it sells in details). A small street booth selling\n  snacks, drinks or newspapers is a kiosk. Name the goods on stalls and in windows (fish, flowers, hats, shoes).\n  A QR code on a banner, poster, screen or sign is its own object: list it as \"qr code\" (details: what it is on).\n  Direction / wayfinding signs: name it \"direction sign\" and put every destination WITH its arrow direction in details\n  (e.g. \"arrows: P + METRO left, CENTRE straight ahead\"). A direction sign is not the place it points to: do not use\n  its destinations as kind, subtype or name.\n  Large numbers or codes painted on walls or pillars (B2, 05, L3) are floor labels: name \"sign\", details \"floor label B2\".\n  Elevator only if you clearly see elevator doors AND call buttons or a floor indicator; a plain wall or door is not one.\n  Use these names when they fit: drink cooler (glass-front fridge with drinks), wet floor sign (yellow warning stand),\n  traffic sign (yield, no entry, crossing, roundabout), traffic light, doormat.\n  count: repeated things are counted (8 street lamps = one object with count 8).\n  In dark or night scenes still list what you can see: lit lamps, lit signs, windows, vehicles with lights, silhouettes.\n  Rare or striking things (aquarium, fountain, statue, slide, stage) only if you are certain: a blue wall, tiles\n  or a screen showing water is not an aquarium.\n- relations (max 6): spatial facts between visible things that help someone find them, e.g. \"stairs\" \"behind\" \"directory screen\", \"ashtray\" \"next to\" \"entrance door\", \"elevator\" \"right of\" \"directory screen\". Use simple relations: behind, in front of, left of, right of, next to, above, below, on, inside.\n- scene: place_type (e.g. event hall, corridor, elevator lobby, street, cafe, entrance), indoor true/false, lighting (bright/dim/dark/colored).\n- Never describe real people in the scene, their faces, clothing, body or license plates. People are not objects.\n\nPICTURES (depictions) - keep them apart from the real scene:\n- Banners, posters, screens, billboards and signs often SHOW pictures: a photo of a man at a desk, a car, a beach, a game, a product.\n  Things inside a picture are NOT physically there. Never put them in objects or relations.\n- For each picture you can make out (max 4, largest first), add one depictions item:\n  medium (banner/poster/screen/sign/billboard/painting/other), on (which real object or booth it is on, e.g. \"Cloudinary banner\", \"large screen at stage\"),\n  content (at most 15 words: what the picture shows, e.g. \"photo of a man working on a laptop at a desk\"),\n  depicted (simple nouns of what is in the picture, e.g. [\"man\", \"laptop\", \"desk\"]).\n- People INSIDE pictures may be described generically (a man, a woman, a team, a child; what they are doing). Never guess who they are.\n- The banner/screen itself still goes in objects; only its picture content goes in depictions. Text on it stays in the TEXT fields.\n\nOTHER:\n- kind must be one of: booth, shop, restaurant, health, service, directory, event, transport, notice, street, indoor_space, other. Use street / indoor_space when there is no business or sign. Specific type goes in subtype.\n- caption: 1-2 sentences describing the place and the most useful things in it. Never mention languages or text you cannot read.\n- useful=false only if the frame shows nothing worth remembering (blurred, floor, ceiling, a close-up of a person).\n\nReturn ONLY one JSON object with keys: useful, kind, subtype, name, name_line, phone, phone_line, hours, hours_line, items, other_text, scene, objects, relations, depictions, caption, confidence.\n\nFORMAT NOTES (there are no examples):\n- depictions: every banner, poster, screen or billboard that shows a PICTURE (photo, drawing, video, map, logo artwork)\n  gets one depictions item. Busy shop, event and street frames usually have 1-4. Leave it empty only if no picture is\n  visible. Text-only signs are not depictions.\n- objects: list what you are sure is physically there. A shorter correct list is better than a long list with guesses.\n  Do not add belongings carried by people (bags, backpacks, phones) and do not guess hidden rooms or buildings.\n- details: 3-12 words; relations: only between objects you listed.",
+ "EXTRACTION_FEW_SHOTS": [],
+ "RECORD_SCHEMA": {
+  "type": "object",
+  "properties": {
+   "useful": {
+    "type": "boolean"
+   },
+   "kind": {
+    "type": [
+     "string",
+     "null"
+    ],
+    "enum": [
+     "booth",
+     "shop",
+     "restaurant",
+     "health",
+     "service",
+     "directory",
+     "event",
+     "transport",
+     "notice",
+     "street",
+     "indoor_space",
+     "other",
+     null
+    ]
+   },
+   "subtype": {
+    "type": [
+     "string",
+     "null"
+    ]
+   },
+   "name": {
+    "type": [
+     "string",
+     "null"
+    ]
+   },
+   "name_line": {
+    "type": [
+     "string",
+     "null"
+    ],
+    "description": "OCR line id like L03"
+   },
+   "phone": {
+    "type": [
+     "string",
+     "null"
+    ]
+   },
+   "phone_line": {
+    "type": [
+     "string",
+     "null"
+    ],
+    "description": "OCR line id like L03"
+   },
+   "hours": {
+    "type": [
+     "string",
+     "null"
+    ]
+   },
+   "hours_line": {
+    "type": [
+     "string",
+     "null"
+    ],
+    "description": "OCR line id like L03"
+   },
+   "items": {
+    "type": "array",
+    "items": {
+     "type": "object",
+     "properties": {
+      "label": {
+       "type": "string"
+      },
+      "value": {
+       "type": "string"
+      },
+      "line": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "label",
+      "value",
+      "line"
+     ]
+    }
+   },
+   "other_text": {
+    "type": [
+     "string",
+     "null"
+    ]
+   },
+   "scene": {
+    "type": "object",
+    "properties": {
+     "place_type": {
+      "type": "string"
+     },
+     "indoor": {
+      "type": "boolean"
+     },
+     "lighting": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "place_type",
+     "indoor",
+     "lighting"
+    ]
+   },
+   "objects": {
+    "type": "array",
+    "items": {
+     "type": "object",
+     "properties": {
+      "name": {
+       "type": "string"
+      },
+      "category": {
+       "type": "string",
+       "enum": [
+        "navigation",
+        "seating",
+        "waste_smoking",
+        "food_drink",
+        "power_tech",
+        "sign_screen",
+        "furniture",
+        "vehicle",
+        "nature",
+        "building",
+        "safety",
+        "other"
+       ]
+      },
+      "position": {
+       "type": "string",
+       "enum": [
+        "left",
+        "center",
+        "right"
+       ]
+      },
+      "distance": {
+       "type": "string",
+       "enum": [
+        "near",
+        "mid",
+        "far"
+       ]
+      },
+      "details": {
+       "type": "string"
+      },
+      "count": {
+       "type": "integer"
+      },
+      "visibility": {
+       "type": "string",
+       "enum": [
+        "clear",
+        "partial",
+        "unsure"
+       ]
+      }
+     },
+     "required": [
+      "name",
+      "category",
+      "position",
+      "distance",
+      "details",
+      "count",
+      "visibility"
+     ]
+    }
+   },
+   "relations": {
+    "type": "array",
+    "items": {
+     "type": "object",
+     "properties": {
+      "subject": {
+       "type": "string"
+      },
+      "relation": {
+       "type": "string"
+      },
+      "object": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "subject",
+      "relation",
+      "object"
+     ]
+    }
+   },
+   "depictions": {
+    "type": "array",
+    "items": {
+     "type": "object",
+     "properties": {
+      "medium": {
+       "type": "string",
+       "enum": [
+        "banner",
+        "poster",
+        "screen",
+        "sign",
+        "billboard",
+        "painting",
+        "other"
+       ]
+      },
+      "on": {
+       "type": "string"
+      },
+      "content": {
+       "type": "string"
+      },
+      "depicted": {
+       "type": "array",
+       "items": {
+        "type": "string"
+       }
+      }
+     },
+     "required": [
+      "medium",
+      "on",
+      "content",
+      "depicted"
+     ]
+    }
+   },
+   "caption": {
+    "type": "string"
+   },
+   "confidence": {
+    "type": "number"
+   }
+  },
+  "required": [
+   "useful",
+   "kind",
+   "subtype",
+   "name",
+   "name_line",
+   "phone",
+   "phone_line",
+   "hours",
+   "hours_line",
+   "items",
+   "other_text",
+   "scene",
+   "objects",
+   "relations",
+   "depictions",
+   "caption",
+   "confidence"
+  ]
+ },
+ "PARSE_PROMPT": "Turn what the user says to their smart-glasses memory assistant into JSON.\n- intent: what kind of request it is:\n  memory  - about something they saw EARLIER (where/which/when, did I see, what did it say, phone, hours, where am I now).\n  live    - about what is in front of them RIGHT NOW (what is this, what am I looking at, read this for me).\n  summary - a recap of what they saw over a period (summarise, what did I see in the last minutes, what happened today).\n  forget  - they want recent memories deleted (forget the last 10 minutes, delete that).\n  chat    - anything else: greetings, small talk, the time or date, general questions, what can you do.\n- minutes: the period they name in minutes (\"last 10 minutes\" -> 10, \"last hour\" -> 60, \"a few minutes\" -> 5), else null.\n- target: the specific thing they ask about, using their words (e.g. \"arduino hardware lab\", \"sauna\", \"info desk\"), or null.\n- category: a general type if they ask about a kind of thing (e.g. \"gaming\", \"database\", \"dentist\"), else null.\n- attribute: what they want: location (where is X / which floor is X on), phone, hours, name, description (what did it say/show), list (which ones did I see), when (when did I see it),\n  current_location (where am I NOW / which floor am I on / where am I standing), other.\n- time: just_now (last ~15 min), last_hour, today, any.\n- synonyms: up to 5 other simple English words for the target or category that a sign or a photo description might use\n  (e.g. \"somewhere to smoke\" -> [\"ashtray\", \"smoking area\", \"cigarette bin\"]; \"coffee\" -> [\"cafe\", \"coffee machine\", \"espresso\"];\n  \"way upstairs\" -> [\"stairs\", \"staircase\", \"escalator\", \"elevator\"]). Empty list if none.\nReturn ONLY JSON with keys intent, minutes, target, category, attribute, time, synonyms.",
+ "PARSE_SCHEMA": {
+  "type": "object",
+  "properties": {
+   "intent": {
+    "type": "string",
+    "enum": [
+     "memory",
+     "live",
+     "summary",
+     "forget",
+     "chat"
+    ]
+   },
+   "minutes": {
+    "type": [
+     "number",
+     "null"
+    ]
+   },
+   "target": {
+    "type": [
+     "string",
+     "null"
+    ]
+   },
+   "category": {
+    "type": [
+     "string",
+     "null"
+    ]
+   },
+   "attribute": {
+    "type": "string",
+    "enum": [
+     "location",
+     "phone",
+     "hours",
+     "name",
+     "description",
+     "list",
+     "when",
+     "current_location",
+     "other"
+    ]
+   },
+   "time": {
+    "type": "string",
+    "enum": [
+     "just_now",
+     "last_hour",
+     "today",
+     "any"
+    ]
+   },
+   "synonyms": {
+    "type": "array",
+    "items": {
+     "type": "string"
+    }
+   }
+  },
+  "required": [
+   "intent",
+   "minutes",
+   "target",
+   "category",
+   "attribute",
+   "time",
+   "synonyms"
+  ]
+ },
+ "ANSWER_PROMPT": "You are a memory assistant on smart glasses. Answer the question using ONLY the evidence below.\nEach evidence item is something the glasses actually saw, with an id (E1, E2...).\nThe glasses are worn by the user, so if the glasses saw something, the user was there and walked past or looked at it.\n\nRules:\n- If the evidence does not contain the answer, set label to DONT_KNOW and say briefly what you did see that is closest, or that you did not see it.\n- Never use outside knowledge. Never guess numbers, floors, phones or hours.\n- support: \"stated\" only if the evidence DIRECTLY says the answer (e.g. a directory row \"SAUNA AND POOL -> 7TH FLOOR\").\n  \"inferred\" if you had to interpret something, e.g. guessing which floor the user is on from an elevator indicator,\n  a number plaque or an arrow. Numbers without a clear label are ambiguous: an elevator position indicator shows\n  where the ELEVATOR car is, never where the user is.\n  A floor label as the TITLE of a floor directory in an elevator lobby (e.g. \"5TH FLOOR\" at the top of the screen) is how\n  buildings tell you which floor that lobby is on: for \"which floor am I on\" right after that lobby, that counts as stated.\n- observations: one short sentence listing the relevant raw facts you saw, without any conclusion\n  (e.g. \"The directory screen header said 5TH FLOOR and a small plaque above the elevator showed 4.\").\n- Answer in the same language as the question.\n- If you answer, set label SEEN, list the evidence ids you used, and put in \"quotes\" one short exact span copied from EACH evidence item you used (one quote per item, never merged).\n- answer: one or two short spoken sentences, natural English, no markdown.\n- For \"what did it say / what was written\" questions, answer with the words from \"Other text on sign\" / \"Name on sign\"\n  (that text was read by OCR). Do not describe how the sign looks instead.\n- If the user asks about a specific medium (poster, banner, screen) and the evidence shows it on a different medium,\n  say that clearly instead of answering yes (e.g. \"Not on a poster, but a screen showed ...\").\n- Evidence marked PICTURE is an image shown on a banner, poster or screen, NOT a real thing that was there.\n  If you use it, say so clearly (e.g. \"That was a photo on the Cloudinary banner\", \"it was on a screen, not a real car\").\n  If the user asks about a real object and only a PICTURE of it exists, answer that you only saw it in a picture, and where.\n- For where-questions, describe the place like a person would: which booth, sign or landmark it was near, what it was next to, and when.\n  Never say \"left of view\", \"center of view\" or \"frame\".\nReturn ONLY JSON with keys label, answer, evidence, quotes, support, observations.",
+ "ANSWER_SCHEMA": {
+  "type": "object",
+  "properties": {
+   "label": {
+    "type": "string",
+    "enum": [
+     "SEEN",
+     "DONT_KNOW"
+    ]
+   },
+   "answer": {
+    "type": "string"
+   },
+   "evidence": {
+    "type": "array",
+    "items": {
+     "type": "string"
+    }
+   },
+   "quotes": {
+    "type": "array",
+    "items": {
+     "type": "string"
+    }
+   },
+   "support": {
+    "type": "string",
+    "enum": [
+     "stated",
+     "inferred"
+    ]
+   },
+   "observations": {
+    "type": "string"
+   }
+  },
+  "required": [
+   "label",
+   "answer",
+   "evidence",
+   "quotes",
+   "support",
+   "observations"
+  ]
+ },
+ "LOOK_SCHEMA": {
+  "type": "object",
+  "properties": {
+   "present": {
+    "type": "boolean"
+   },
+   "where": {
+    "type": "string"
+   }
+  },
+  "required": [
+   "present",
+   "where"
+  ]
+ },
+ "LOOK_REAL": "Look carefully. Is there a real \"{name}\" physically present in this photo (not just shown in a picture on a banner or screen)? Do not guess. If yes, say briefly where it is relative to other things. Return JSON {{\"present\": true/false, \"where\": \"...\"}}.",
+ "LOOK_PRINTED": "Look carefully. Is there a \"{name}\" visible in this photo (printed on a banner, sign, wall, paper or shown on a screen all count)? Do not guess. If yes, say briefly where it is. Return JSON {{\"present\": true/false, \"where\": \"...\"}}.",
+ "LOOK_PICTURE": "Look carefully. Is there a {medium} in this photo that shows a picture of: \"{content}\"? Do not guess. If yes, say briefly where that picture is. Return JSON {{\"present\": true/false, \"where\": \"...\"}}.",
+ "SUMMARY_PROMPT": "You summarise what a person saw, for a memory assistant on smart glasses.\nYou get time-ordered evidence (E1, E2, ...) from their camera. Write 2-4 short spoken sentences, oldest\nto newest: the places, the most noticeable things, and any names or text that were read.\nUse ONLY the evidence. Do not guess brands or text that is not written in it. Do not mention frames or evidence ids.\nReturn JSON {\"answer\": \"...\", \"used\": [\"E1\", ...]}.",
+ "SUMMARY_SCHEMA": {
+  "type": "object",
+  "properties": {
+   "answer": {
+    "type": "string"
+   },
+   "used": {
+    "type": "array",
+    "items": {
+     "type": "string"
+    }
+   }
+  },
+  "required": [
+   "answer",
+   "used"
+  ]
+ },
+ "AGENT_PROMPT": "You are MUISTI, a warm, quick voice assistant in the user's smart glasses. The glasses keep a visual\nmemory of what the user saw (signs, places, objects, text). Talk like a friendly person: short spoken sentences, no\nmarkdown, no lists, answer in the language the user speaks.\n\nSound like a real conversation partner, not a search engine:\n- Put the answer in the first few words and name the thing asked about (\"The QR code was on the Cloudinary banner.\"),\n  then the details that help find it (what it was next to, when). Usually one to three sentences.\n- Vary how you start. Never say \"Based on the evidence\", \"According to my memory\" or \"I found\".\n- Remember what was just said: do not repeat details the user already heard, build on them.\n- Now and then, when it truly helps, end with a short offer, e.g. \"Want me to put it in your calendar?\" after an\n  event, or \"Should I read the rest?\". Keep offers free of numbers, and skip them for simple replies.\n\nUse tools, then finish with `answer`:\n- search_memory: for anything the user saw EARLIER (where, which, when, did I see, what did it say, phone, hours).\n  Write query and synonyms in simple ENGLISH even if the user speaks another language (memories are in English).\n- recent: what was seen in the last minutes (summaries, \"where am I now\", \"what was I just looking at\").\n- list_names: names, brands and signs that were read.\n- look_now: what the camera sees RIGHT NOW (\"what is this\", \"read this\", \"what am I looking at\").\n- forget: the user asks to delete recent memories.\n- add_to_calendar: ONLY when the user asks to add something they saw (an event, a meetup, an appointment) to their\n  calendar. First find it with search_memory, then copy the month, day and time WRITTEN on that sign (cite its evidence id).\n  You never give a year: the app works it out. If the sign has no day or no time, do not call it and say what is missing.\n- answer: your final reply. ALWAYS end with it.\n\nEvidence rules for answer:\n- About memories, say only what the evidence (E1, E2, ...) states. Never guess numbers, floors, phones or hours.\n- label SEEN when you answer from evidence; list the evidence ids and one short exact quote copied from EACH id.\n- label DONT_KNOW if the tools found nothing that answers it: say so briefly and mention the closest thing you did see.\n- support \"inferred\" if you had to interpret (e.g. guessing a floor from an elevator number), else \"stated\".\n- Evidence marked PICTURE is an image on a banner/poster/screen, not a real thing: say so if you use it.\n- Signs are often in another language (Finnish, Swedish, ...). Quote the original words exactly (that is the quote\n  for the evidence check) and then say what they mean in the user's language, e.g.\n  It said \"Avoinna ma-pe 8-20\": open Monday to Friday from 8 to 20. Never present a translation as the sign's own words.\n- For where-questions describe the place like a person: which booth, sign or landmark, what it was next to, when.\n  Never say \"left of view\" or \"frame\".\n- label CHAT for small talk, the time or date, or general questions that are not about what the user saw.\n  Never invent things the user saw in a CHAT reply.\n- Earlier turns of this conversation are context: \"it\", \"there\", \"that one\" refer to what was just discussed.\n- Questions are usually spoken, and speech recognition mishears (\"not eat\" for \"note it\", \"wear\" for \"where\").\n  If the message lists what the recognizer \"also heard\", or the words make little sense, answer what the user most\n  likely SAID, judging by the conversation and what you can do. Do not comment on the mishearing unless you\n  really cannot tell; then ask a short question back (label CHAT).",
+ "AGENT_TOOLS": [
+  {
+   "type": "function",
+   "function": {
+    "name": "search_memory",
+    "description": "Search the visual memory for something the user saw earlier.",
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "query": {
+       "type": "string",
+       "description": "the thing to find, simple English, e.g. 'dentist', 'sauna'"
+      },
+      "synonyms": {
+       "type": "array",
+       "items": {
+        "type": "string"
+       },
+       "description": "up to 5 English words a sign or photo might use"
+      },
+      "what": {
+       "type": "string",
+       "enum": [
+        "location",
+        "phone",
+        "hours",
+        "name",
+        "description",
+        "list",
+        "when",
+        "other"
+       ]
+      },
+      "minutes": {
+       "type": [
+        "number",
+        "null"
+       ],
+       "description": "only look at the last N minutes, null for any time"
+      }
+     },
+     "required": [
+      "query",
+      "synonyms",
+      "what",
+      "minutes"
+     ]
+    }
+   }
+  },
+  {
+   "type": "function",
+   "function": {
+    "name": "recent",
+    "description": "What the glasses saw in the last N minutes, oldest first.",
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "minutes": {
+       "type": "number"
+      }
+     },
+     "required": [
+      "minutes"
+     ]
+    }
+   }
+  },
+  {
+   "type": "function",
+   "function": {
+    "name": "list_names",
+    "description": "Names, brands and sign text that were read, oldest first.",
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "minutes": {
+       "type": [
+        "number",
+        "null"
+       ]
+      }
+     },
+     "required": [
+      "minutes"
+     ]
+    }
+   }
+  },
+  {
+   "type": "function",
+   "function": {
+    "name": "look_now",
+    "description": "Look at the camera's current view and describe what answers the user's question.",
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "question": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "question"
+     ]
+    }
+   }
+  },
+  {
+   "type": "function",
+   "function": {
+    "name": "forget",
+    "description": "Delete everything remembered in the last N minutes.",
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "minutes": {
+       "type": "number"
+      }
+     },
+     "required": [
+      "minutes"
+     ]
+    }
+   }
+  },
+  {
+   "type": "function",
+   "function": {
+    "name": "add_to_calendar",
+    "description": "Add an event the user saw on a sign to their phone calendar.",
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "title": {
+       "type": "string",
+       "description": "short event name, e.g. 'Robotics meetup'"
+      },
+      "month": {
+       "type": "integer",
+       "description": "month number 1-12 as written on the sign"
+      },
+      "day": {
+       "type": "integer",
+       "description": "day of the month as written on the sign"
+      },
+      "start_time": {
+       "type": "string",
+       "description": "start time HH:MM (24h) as written on the sign"
+      },
+      "end_time": {
+       "type": [
+        "string",
+        "null"
+       ],
+       "description": "end time HH:MM if the sign gives one, else null"
+      },
+      "location": {
+       "type": [
+        "string",
+        "null"
+       ],
+       "description": "room or place written on the sign, else null"
+      },
+      "evidence": {
+       "type": "array",
+       "items": {
+        "type": "string"
+       },
+       "description": "evidence ids of the sign, e.g. ['E2']"
+      }
+     },
+     "required": [
+      "title",
+      "month",
+      "day",
+      "start_time",
+      "end_time",
+      "location",
+      "evidence"
+     ]
+    }
+   }
+  },
+  {
+   "type": "function",
+   "function": {
+    "name": "answer",
+    "description": "The final spoken reply.",
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "label": {
+       "type": "string",
+       "enum": [
+        "SEEN",
+        "DONT_KNOW",
+        "CHAT"
+       ]
+      },
+      "text": {
+       "type": "string",
+       "description": "one to three short spoken sentences; when you quote sign text that is not in the user's language, add what it means"
+      },
+      "evidence": {
+       "type": "array",
+       "items": {
+        "type": "string"
+       },
+       "description": "ids like E2 you used"
+      },
+      "quotes": {
+       "type": "array",
+       "items": {
+        "type": "string"
+       },
+       "description": "one short exact span from EACH id"
+      },
+      "support": {
+       "type": "string",
+       "enum": [
+        "stated",
+        "inferred"
+       ]
+      },
+      "observations": {
+       "type": "string",
+       "description": "the relevant raw facts, no conclusion"
+      }
+     },
+     "required": [
+      "label",
+      "text",
+      "evidence",
+      "quotes",
+      "support",
+      "observations"
+     ]
+    }
+   }
+  }
+ ]
+}

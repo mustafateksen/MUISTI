@@ -1,0 +1,534 @@
+{
+ "now": "2026-11-14T18:30:00",
+ "sightings": [
+  {
+   "id": 1,
+   "seen_at": 1794643320000,
+   "kind": "indoor_space",
+   "subtype": "kitchen",
+   "scene": {
+    "place_type": "kitchen"
+   },
+   "lat": 60.1699,
+   "lon": 24.9384,
+   "street": "Mannerheimintie, Kamppi",
+   "name": null,
+   "phone": null,
+   "hours": null,
+   "other_text": null,
+   "caption": "A kitchen counter with a kettle",
+   "objects": [
+    {
+     "name": "keys",
+     "category": "personal item",
+     "count": 1,
+     "details": "silver keys on a red keyring",
+     "position": "left",
+     "distance": "near",
+     "support": 2
+    },
+    {
+     "name": "kettle",
+     "category": "appliance",
+     "count": 1,
+     "details": "",
+     "position": "center",
+     "distance": "near",
+     "support": 2
+    }
+   ],
+   "items": [],
+   "relations": [],
+   "depictions": [],
+   "name_variants": [],
+   "weak": false,
+   "evidence_frame": "1.jpg",
+   "frames": [
+    "1.jpg"
+   ],
+   "source": "fixture"
+  },
+  {
+   "id": 2,
+   "seen_at": 1794643440000,
+   "kind": "indoor_space",
+   "subtype": "living room",
+   "scene": {
+    "place_type": "living room"
+   },
+   "lat": 60.1699,
+   "lon": 24.9384,
+   "street": "Mannerheimintie, Kamppi",
+   "name": null,
+   "phone": null,
+   "hours": null,
+   "other_text": null,
+   "caption": "A living room with a red sofa",
+   "objects": [
+    {
+     "name": "red sofa",
+     "category": "furniture",
+     "count": 1,
+     "details": "a red three-seat sofa",
+     "position": "center",
+     "distance": "near",
+     "support": 2
+    },
+    {
+     "name": "plant",
+     "category": "plant",
+     "count": 1,
+     "details": "",
+     "position": "center",
+     "distance": "near",
+     "support": 2
+    }
+   ],
+   "items": [],
+   "relations": [],
+   "depictions": [],
+   "name_variants": [],
+   "weak": false,
+   "evidence_frame": "2.jpg",
+   "frames": [
+    "2.jpg"
+   ],
+   "source": "fixture"
+  },
+  {
+   "id": 3,
+   "seen_at": 1794643560000,
+   "kind": "notice",
+   "subtype": "note",
+   "scene": {
+    "place_type": "hallway"
+   },
+   "lat": 60.1699,
+   "lon": 24.9384,
+   "street": "Mannerheimintie, Kamppi",
+   "name": null,
+   "phone": null,
+   "hours": null,
+   "other_text": "Call the dentist / Pay the electricity bill by Friday",
+   "caption": "A handwritten note on the fridge",
+   "objects": [],
+   "items": [],
+   "relations": [],
+   "depictions": [],
+   "name_variants": [],
+   "weak": false,
+   "evidence_frame": "3.jpg",
+   "frames": [
+    "3.jpg"
+   ],
+   "source": "fixture"
+  },
+  {
+   "id": 4,
+   "seen_at": 1794644460000,
+   "kind": "transport",
+   "subtype": "bus stop",
+   "scene": {
+    "place_type": "street"
+   },
+   "lat": 60.1712,
+   "lon": 24.9327,
+   "street": "Fredrikinkatu, Kamppi",
+   "name": "Fredrikinkatu",
+   "phone": null,
+   "hours": null,
+   "other_text": "Bus 14 / 24 / Kamppi 3 min",
+   "caption": "A bus stop with a timetable screen",
+   "objects": [],
+   "items": [],
+   "relations": [],
+   "depictions": [],
+   "name_variants": [],
+   "weak": false,
+   "evidence_frame": "4.jpg",
+   "frames": [
+    "4.jpg"
+   ],
+   "source": "fixture"
+  },
+  {
+   "id": 5,
+   "seen_at": 1794644580000,
+   "kind": "shop",
+   "subtype": "bakery",
+   "scene": {
+    "place_type": "street"
+   },
+   "lat": 60.1712,
+   "lon": 24.9327,
+   "street": "Fredrikinkatu, Kamppi",
+   "name": "Leipomo Kanelia",
+   "phone": "09 612 3344",
+   "hours": "Ma-Pe 7-18, La 9-15",
+   "other_text": null,
+   "caption": "A bakery shop front",
+   "objects": [],
+   "items": [],
+   "relations": [],
+   "depictions": [],
+   "name_variants": [],
+   "weak": false,
+   "evidence_frame": "5.jpg",
+   "frames": [
+    "5.jpg"
+   ],
+   "source": "fixture"
+  },
+  {
+   "id": 6,
+   "seen_at": 1794644700000,
+   "kind": "street",
+   "subtype": "street",
+   "scene": {
+    "place_type": "street"
+   },
+   "lat": 60.1712,
+   "lon": 24.9327,
+   "street": "Fredrikinkatu, Kamppi",
+   "name": null,
+   "phone": null,
+   "hours": null,
+   "other_text": null,
+   "caption": "A street with parked cars and a basketball hoop in a schoolyard",
+   "objects": [
+    {
+     "name": "basketball hoop",
+     "category": "sports equipment",
+     "count": 1,
+     "details": "orange rim",
+     "position": "right",
+     "distance": "far",
+     "support": 2
+    }
+   ],
+   "items": [],
+   "relations": [],
+   "depictions": [],
+   "name_variants": [],
+   "weak": false,
+   "evidence_frame": "6.jpg",
+   "frames": [
+    "6.jpg"
+   ],
+   "source": "fixture"
+  },
+  {
+   "id": 7,
+   "seen_at": 1794647100000,
+   "kind": "directory",
+   "subtype": "building directory",
+   "scene": {
+    "place_type": "lobby"
+   },
+   "lat": 60.1841,
+   "lon": 24.8301,
+   "street": "Otakaari, Espoo",
+   "name": "Otakaari 1",
+   "phone": null,
+   "hours": null,
+   "other_text": null,
+   "caption": "A building directory in a lobby",
+   "objects": [],
+   "items": [
+    {
+     "value": "Arduino Lab",
+     "label": "5th floor"
+    },
+    {
+     "value": "Cafe Aalto",
+     "label": "1st floor"
+    },
+    {
+     "value": "Library",
+     "label": "2nd floor"
+    }
+   ],
+   "relations": [],
+   "depictions": [],
+   "name_variants": [],
+   "weak": false,
+   "evidence_frame": "7.jpg",
+   "frames": [
+    "7.jpg"
+   ],
+   "source": "fixture"
+  },
+  {
+   "id": 8,
+   "seen_at": 1794647280000,
+   "kind": "event",
+   "subtype": "poster",
+   "scene": {
+    "place_type": "corridor"
+   },
+   "lat": 60.1841,
+   "lon": 24.8301,
+   "street": "Otakaari, Espoo",
+   "name": "Junction Hackathon",
+   "phone": null,
+   "hours": null,
+   "other_text": "Final demos Sunday 15 November 14:00 / Main Hall",
+   "caption": "A poster for a hackathon",
+   "objects": [],
+   "items": [],
+   "relations": [],
+   "depictions": [],
+   "name_variants": [],
+   "weak": false,
+   "evidence_frame": "8.jpg",
+   "frames": [
+    "8.jpg"
+   ],
+   "source": "fixture"
+  },
+  {
+   "id": 9,
+   "seen_at": 1794647520000,
+   "kind": "indoor_space",
+   "subtype": "office",
+   "scene": {
+    "place_type": "office"
+   },
+   "lat": 60.1841,
+   "lon": 24.8301,
+   "street": "Otakaari, Espoo",
+   "name": null,
+   "phone": null,
+   "hours": null,
+   "other_text": null,
+   "caption": "An office desk with a laptop and a QR code sticker",
+   "objects": [
+    {
+     "name": "laptop",
+     "category": "electronics",
+     "count": 1,
+     "details": "",
+     "position": "center",
+     "distance": "near",
+     "support": 2
+    },
+    {
+     "name": "QR code",
+     "category": "printed code",
+     "count": 1,
+     "details": "a QR code sticker on the monitor stand",
+     "position": "left",
+     "distance": "near",
+     "support": 2
+    }
+   ],
+   "items": [],
+   "relations": [],
+   "depictions": [],
+   "name_variants": [],
+   "weak": false,
+   "evidence_frame": "9.jpg",
+   "frames": [
+    "9.jpg"
+   ],
+   "source": "fixture"
+  },
+  {
+   "id": 10,
+   "seen_at": 1794649200000,
+   "kind": "notice",
+   "subtype": "notice",
+   "scene": {
+    "place_type": "corridor"
+   },
+   "lat": 60.1841,
+   "lon": 24.8301,
+   "street": "Otakaari, Espoo",
+   "name": null,
+   "phone": null,
+   "hours": null,
+   "other_text": "Wet floor / Caution",
+   "caption": "A yellow wet floor sign in a corridor",
+   "objects": [
+    {
+     "name": "wet floor sign",
+     "category": "safety sign",
+     "count": 1,
+     "details": "yellow A-frame sign",
+     "position": "center",
+     "distance": "near",
+     "support": 2
+    }
+   ],
+   "items": [],
+   "relations": [],
+   "depictions": [],
+   "name_variants": [],
+   "weak": false,
+   "evidence_frame": "10.jpg",
+   "frames": [
+    "10.jpg"
+   ],
+   "source": "fixture"
+  },
+  {
+   "id": 11,
+   "seen_at": 1794658500000,
+   "kind": "restaurant",
+   "subtype": "cafe",
+   "scene": {
+    "place_type": "cafe"
+   },
+   "lat": 60.1841,
+   "lon": 24.8301,
+   "street": "Otakaari, Espoo",
+   "name": "Cafe Aalto",
+   "phone": null,
+   "hours": "Mon-Fri 8-16",
+   "other_text": "Lunch soup 9.50 EUR",
+   "caption": "A cafe counter with a menu board",
+   "objects": [],
+   "items": [],
+   "relations": [],
+   "depictions": [],
+   "name_variants": [],
+   "weak": false,
+   "evidence_frame": "11.jpg",
+   "frames": [
+    "11.jpg"
+   ],
+   "source": "fixture"
+  },
+  {
+   "id": 12,
+   "seen_at": 1794677400000,
+   "kind": "health",
+   "subtype": "pharmacy",
+   "scene": {
+    "place_type": "street"
+   },
+   "lat": 60.168,
+   "lon": 24.941,
+   "street": "Simonkatu, Kamppi",
+   "name": "Kampin Apteekki",
+   "phone": "09 694 4400",
+   "hours": "Ma-Pe 8-20, La 9-18",
+   "other_text": null,
+   "caption": "A pharmacy sign",
+   "objects": [],
+   "items": [],
+   "relations": [],
+   "depictions": [],
+   "name_variants": [],
+   "weak": false,
+   "evidence_frame": "12.jpg",
+   "frames": [
+    "12.jpg"
+   ],
+   "source": "fixture"
+  },
+  {
+   "id": 13,
+   "seen_at": 1794678300000,
+   "kind": "shop",
+   "subtype": "supermarket",
+   "scene": {
+    "place_type": "supermarket"
+   },
+   "lat": 60.1675,
+   "lon": 24.942,
+   "street": "Annankatu, Kamppi",
+   "name": "K-Market Annankatu",
+   "phone": null,
+   "hours": "Daily 7-23",
+   "other_text": null,
+   "caption": "A supermarket entrance",
+   "objects": [],
+   "items": [],
+   "relations": [],
+   "depictions": [],
+   "name_variants": [],
+   "weak": false,
+   "evidence_frame": "13.jpg",
+   "frames": [
+    "13.jpg"
+   ],
+   "source": "fixture"
+  },
+  {
+   "id": 14,
+   "seen_at": 1794678480000,
+   "kind": "shop",
+   "subtype": "supermarket",
+   "scene": {
+    "place_type": "supermarket"
+   },
+   "lat": 60.1675,
+   "lon": 24.942,
+   "street": "Annankatu, Kamppi",
+   "name": "K-Market Annankatu",
+   "phone": null,
+   "hours": null,
+   "other_text": "Oat milk 1.89 / Rye bread 2.49",
+   "caption": "A supermarket shelf with price tags",
+   "objects": [
+    {
+     "name": "oat milk",
+     "category": "grocery",
+     "count": 1,
+     "details": "",
+     "position": "center",
+     "distance": "near",
+     "support": 2
+    },
+    {
+     "name": "rye bread",
+     "category": "grocery",
+     "count": 1,
+     "details": "",
+     "position": "center",
+     "distance": "near",
+     "support": 2
+    }
+   ],
+   "items": [],
+   "relations": [],
+   "depictions": [],
+   "name_variants": [],
+   "weak": false,
+   "evidence_frame": "14.jpg",
+   "frames": [
+    "14.jpg"
+   ],
+   "source": "fixture"
+  },
+  {
+   "id": 15,
+   "seen_at": 1794678720000,
+   "kind": "notice",
+   "subtype": "fire exit sign",
+   "scene": {
+    "place_type": "supermarket"
+   },
+   "lat": 60.1675,
+   "lon": 24.942,
+   "street": "Annankatu, Kamppi",
+   "name": null,
+   "phone": null,
+   "hours": null,
+   "other_text": "Hätäuloskäytävä / Emergency exit",
+   "caption": "A green emergency exit sign",
+   "objects": [],
+   "items": [],
+   "relations": [],
+   "depictions": [],
+   "name_variants": [],
+   "weak": false,
+   "evidence_frame": "15.jpg",
+   "frames": [
+    "15.jpg"
+   ],
+   "source": "fixture"
+  }
+ ]
+}

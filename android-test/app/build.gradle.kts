@@ -1,0 +1,143 @@
+import java.security.MessageDigest
+import java.util.Properties
+
+plugins {
+    id("com.android.application")
+    id("org.jetbrains.kotlin.android")
+    id("org.jetbrains.kotlin.plugin.compose")
+}
+
+// Keys come from local.properties (git-ignored) and are compiled into this build only.
+val local = Properties().apply {
+    val f = rootProject.file("local.properties")
+    if (f.exists()) f.inputStream().use { load(it) }
+}
+fun prop(k: String) = "\"" + (local.getProperty(k) ?: "") + "\""
+
+android {
+    namespace = "com.muisti.test"
+    compileSdk = 35
+    defaultConfig {
+        applicationId = "com.muisti.test"
+        minSdk = 29   // Meta Wearables Device Access Toolkit
+        targetSdk = 34
+        versionCode = 2
+        versionName = "0.3"
+        ndk { abiFilters += listOf("arm64-v8a") }   // modern phones only: the APK was 134 MB with every ABI
+        // Meta glasses: empty in Developer Mode (as Meta's sample; a bare "0" is parsed as a number and the
+        // SDK cannot read it); real values from the Wearables Developer Center for a published app
+        manifestPlaceholders["mwdat_application_id"] = local.getProperty("mwdat_application_id") ?: ""
+        manifestPlaceholders["mwdat_client_token"] = local.getProperty("mwdat_client_token") ?: ""
+        buildConfigField("String", "LLM_BASE_URL", prop("muisti.llmBaseUrl"))
+        buildConfigField("String", "LLM_MODEL", prop("muisti.llmModel"))
+        // keys: embedded from local.properties in every build (team decision, Nov 15: the token proxy is not
+        // deployed). The APK therefore carries the Verda key: share it only inside the team. To switch to the
+        // proxy later, set DEV_KEYS false and the keys "" here; the pairing flow (TokenClient) is still in place.
+        buildConfigField("boolean", "DEV_KEYS", "true")
+        buildConfigField("String", "LLM_KEY", prop("muisti.llmKey"))
+        buildConfigField("String", "EMBED_KEY", prop("muisti.embedKey"))
+    }
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+    kotlinOptions { jvmTarget = "17" }
+    buildFeatures { compose = true; buildConfig = true }
+    // AGP 8.7 lint crashes on Kotlin 2.2 metadata (KaCallableMemberCall); the release APK itself builds fine
+    lint { checkReleaseBuilds = false }
+}
+
+// The prompts are NOT copied by hand: the app reads the same docs/prompts.json the Python
+// pipeline is exported to (tools/export_prompts.py), so both always use identical text.
+val copyPrompts by tasks.registering(Copy::class) {
+    from(rootProject.file("../nemotron/docs/prompts.json"))
+    into(layout.projectDirectory.dir("src/main/assets"))
+}
+// Privacy gate model (MobileCLIP-S0 image encoder, ONNX, 45 MB, Apple research licence): downloaded once, not in git.
+val fetchPrivacyModel by tasks.registering {
+    val out = layout.projectDirectory.file("src/main/assets/mobileclip_s0_vision.onnx").asFile
+    outputs.file(out)
+    onlyIf { !out.exists() }
+    doLast {
+        val tmp = File(out.path + ".part")
+        uri("https://huggingface.co/Xenova/mobileclip_s0/resolve/main/onnx/vision_model.onnx").toURL()
+            .openStream().use { ins -> tmp.outputStream().use { out -> ins.copyTo(out) } }
+        tmp.renameTo(out)
+    }
+}
+// D2: privacy_prompts.json must be regenerated whenever tools/make_privacy_prompts.py changes. The script stamps its
+// own SHA-256 (CRLF -> LF) into the json; the build fails if they differ.
+val checkPrivacyPrompts by tasks.registering {
+    val script = rootProject.file("tools/make_privacy_prompts.py")
+    val json = layout.projectDirectory.file("src/main/assets/privacy_prompts.json").asFile
+    inputs.files(script, json)
+    mustRunAfter(copyPrompts)   // copyPrompts writes into the same assets folder
+    doLast {
+        val sha = MessageDigest.getInstance("SHA-256")
+            .digest(script.readText().replace("\r\n", "\n").toByteArray()).joinToString("") { "%02x".format(it) }
+        val stored = Regex("\"source_sha256\":\\s*\"([0-9a-f]+)\"").find(json.readText())?.groupValues?.get(1)
+        if (stored != sha) throw GradleException("privacy_prompts.json is stale: tools/make_privacy_prompts.py changed. " +
+            "Regenerate: python -I tools/make_privacy_prompts.py app/src/main/assets/privacy_prompts.json")
+    }
+}
+// Visual search (P2.5): MobileCLIP-S0 text encoder (quantized, 43 MB) + its tokenizer, so a search text is embedded
+// on the phone and compared with the image vectors the privacy gate already computes. Downloaded once, not in git.
+fun fetchOnce(name: String, url: String) = tasks.registering {
+    val out = layout.projectDirectory.file("src/main/assets/$name").asFile
+    outputs.file(out)
+    onlyIf { !out.exists() }
+    doLast {
+        val tmp = File(out.path + ".part")
+        uri(url).toURL().openStream().use { ins -> tmp.outputStream().use { o -> ins.copyTo(o) } }
+        tmp.renameTo(out)
+    }
+}
+val fetchClipText by fetchOnce("mobileclip_s0_text_q.onnx", "https://huggingface.co/Xenova/mobileclip_s0/resolve/main/onnx/text_model_quantized.onnx")
+val fetchClipTokenizer by fetchOnce("clip_tokenizer.json", "https://huggingface.co/Xenova/mobileclip_s0/resolve/main/tokenizer.json")
+tasks.named("preBuild") { dependsOn(copyPrompts, fetchPrivacyModel, checkPrivacyPrompts, fetchClipText, fetchClipTokenizer) }
+
+// Parity tests talk to the real model with the same keys (eval against the Python pipeline).
+tasks.withType<Test>().configureEach {
+    for (k in listOf("llmBaseUrl", "llmModel", "llmKey", "embedKey")) local.getProperty("muisti.$k")?.let { systemProperty("muisti.$k", it) }
+    systemProperty("muisti.repo", rootProject.file("..").absolutePath)
+    System.getProperty("muisti.mem")?.let { systemProperty("muisti.mem", it) }
+    System.getProperty("muisti.q")?.let { systemProperty("muisti.q", it) }
+    for (k in listOf("muisti.agent", "muisti.fixture", "muisti.hybrid", "muisti.phonemem", "muisti.hist", "muisti.n", "muisti.presearch", "muisti.heard")) System.getProperty(k)?.let { systemProperty(k, it) }
+    testLogging { showStandardStreams = true; events("failed") }
+    outputs.upToDateWhen { false }
+}
+
+dependencies {
+    val bom = platform("androidx.compose:compose-bom:2024.06.00")
+    implementation(bom)
+    implementation("androidx.compose.ui:ui")
+    implementation("androidx.compose.foundation:foundation")
+    implementation("androidx.compose.material3:material3")
+    implementation("androidx.compose.material:material-icons-extended")
+    implementation("androidx.activity:activity-compose:1.9.0")
+    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.3")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
+    // background jobs that survive the app being killed, with battery/idle constraints (old-memory scan, upload queue)
+    implementation("androidx.work:work-runtime-ktx:2.9.1")
+
+    val camerax = "1.3.4"
+    implementation("androidx.camera:camera-core:$camerax")
+    implementation("androidx.camera:camera-camera2:$camerax")
+    implementation("androidx.camera:camera-lifecycle:$camerax")
+    implementation("androidx.camera:camera-view:$camerax")
+    implementation("com.google.mlkit:text-recognition:16.0.1")   // on-device, bundled model
+    // privacy (Ahmet's face blur, ported): faces + body pose, on device
+    implementation("com.google.mlkit:face-detection:16.1.7")
+    implementation("com.google.mlkit:pose-detection:18.0.0-beta5")
+    // where each memory was made (Mustafa's LocationProvider, ported)
+    implementation("com.google.android.gms:play-services-location:21.3.0")
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.20.0")   // on-device privacy gate (MobileCLIP)
+    // Ray-Ban Meta glasses camera (Wearables Device Access Toolkit)
+    implementation("com.meta.wearable:mwdat-core:1.0.1")
+    implementation("com.meta.wearable:mwdat-camera:1.0.1")
+
+    // engine parity tests run on the JVM against the Python test memories
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20240303")
+}

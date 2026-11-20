@@ -1,0 +1,236 @@
+{
+ "notes": "Questions over the memory built from the two Junction walk videos. expect_label SEEN must also contain every string in must_contain (case-insensitive). DONT_KNOW questions are traps.",
+ "now": "2026-11-13T22:45:00",
+ "questions": [
+  {
+   "q": "Which floor is the Arduino hardware lab on?",
+   "expect_label": "SEEN",
+   "must_contain": [
+    "5|fifth"
+   ]
+  },
+  {
+   "q": "Where is the sauna?",
+   "expect_label": "SEEN",
+   "must_contain": [
+    "7|seventh"
+   ]
+  },
+  {
+   "q": "On which floor was the info desk?",
+   "expect_label": "SEEN",
+   "must_contain": [
+    "2|second"
+   ]
+  },
+  {
+   "q": "What did the Cloudinary banner say?",
+   "expect_label": "SEEN",
+   "must_contain": [
+    "image",
+    "video"
+   ]
+  },
+  {
+   "q": "Did I walk past the AfterQuery booth?",
+   "expect_label": "SEEN",
+   "must_contain": [
+    "afterquery"
+   ]
+  },
+  {
+   "q": "Which gaming booths did I see?",
+   "expect_label": "SEEN",
+   "must_contain": [
+    "epic"
+   ]
+  },
+  {
+   "q": "What was the slogan on the Aiven booth?",
+   "expect_label": "SEEN",
+   "must_contain": [
+    "data"
+   ]
+  },
+  {
+   "q": "Where is the main stage?",
+   "expect_label": "SEEN",
+   "must_contain": [
+    "3|third"
+   ]
+  },
+  {
+   "q": "What's the phone number of the Arduino booth?",
+   "expect_label": "DONT_KNOW",
+   "trap": "attribute never seen"
+  },
+  {
+   "q": "Where was the Google booth?",
+   "expect_label": "DONT_KNOW",
+   "trap": "never seen"
+  },
+  {
+   "q": "What time does the info desk open?",
+   "expect_label": "DONT_KNOW",
+   "trap": "attribute never seen"
+  },
+  {
+   "q": "Which floor is the cafeteria on?",
+   "expect_label": "DONT_KNOW",
+   "trap": "not on the directory"
+  },
+  {
+   "q": "What was the Wi-Fi password on the poster?",
+   "expect_label": "DONT_KNOW",
+   "trap": "never seen"
+  },
+  {
+   "q": "Which floor is the Microsoft booth on?",
+   "expect_label": "DONT_KNOW",
+   "trap": "never seen, but floor questions match directory items"
+  },
+  {
+   "q": "Which dentists did I pass today?",
+   "expect_label": "DONT_KNOW",
+   "trap": "list of a category never seen"
+  },
+  {
+   "q": "Where did I see a sofa?",
+   "expect_label": "SEEN",
+   "must_contain": [
+    "sofa"
+   ],
+   "type": "object"
+  },
+  {
+   "q": "Did I see a QR code anywhere?",
+   "expect_label": "SEEN",
+   "must_contain": [
+    "qr"
+   ],
+   "type": "object"
+  },
+  {
+   "q": "What was next to the floor directory screen?",
+   "expect_label": "SEEN",
+   "must_contain": [
+    "elevator"
+   ],
+   "type": "object relation"
+  },
+  {
+   "q": "Where was the basketball hoop?",
+   "expect_label": "SEEN",
+   "must_contain": [
+    "basketball"
+   ],
+   "type": "object"
+  },
+  {
+   "q": "Where did I see a fire extinguisher?",
+   "expect_label": "SEEN",
+   "must_contain": [
+    "extinguisher"
+   ],
+   "type": "object"
+  },
+  {
+   "q": "I need somewhere to sit down, where did I see seats?",
+   "expect_label": "SEEN",
+   "must_contain": [],
+   "type": "object synonym"
+  },
+  {
+   "q": "Where did I see an ashtray?",
+   "expect_label": "DONT_KNOW",
+   "trap": "object never seen",
+   "type": "object"
+  },
+  {
+   "q": "Did I walk past any bicycles?",
+   "expect_label": "DONT_KNOW",
+   "trap": "object never seen",
+   "type": "object"
+  },
+  {
+   "q": "Where was the vending machine?",
+   "expect_label": "DONT_KNOW",
+   "trap": "object never seen",
+   "type": "object"
+  },
+  {
+   "q": "Did I see a piano?",
+   "expect_label": "DONT_KNOW",
+   "trap": "object never seen",
+   "type": "object"
+  },
+  {
+   "q": "Which floor am I on right now?",
+   "expect_label": "SEEN",
+   "accept_labels": [
+    "SEEN",
+    "UNSURE"
+   ],
+   "must_contain": [
+    "5|fifth"
+   ],
+   "must_not_contain": [
+    "4th",
+    "fourth",
+    "floor 4",
+    "4. kat"
+   ],
+   "type": "interpretation",
+   "note": "Directory header says 5TH FLOOR; a plaque above the elevator shows 4 (elevator position). Answering 4 is the reported bug. Asked 30 s after leaving the elevator lobby.",
+   "now": "2026-11-13T22:04:54.250000"
+  },
+  {
+   "q": "I remember a photo of a harbour or waterfront from above, where was that?",
+   "expect_label": "SEEN",
+   "must_contain": [
+    "screen|display|monitor|tv"
+   ],
+   "type": "picture"
+  },
+  {
+   "q": "Where did I see a picture of a circuit board?",
+   "expect_label": "SEEN",
+   "must_contain": [
+    "screen|display|monitor"
+   ],
+   "type": "picture"
+  },
+  {
+   "q": "There was a banner with photos of people working on screens, which company was it?",
+   "expect_label": "SEEN",
+   "must_contain": [
+    "cloudinary"
+   ],
+   "type": "picture"
+  },
+  {
+   "q": "Did I see a photo of a dog anywhere?",
+   "expect_label": "DONT_KNOW",
+   "trap": "picture never seen",
+   "type": "picture"
+  },
+  {
+   "q": "Was there a poster with a beach on it?",
+   "expect_label": "DONT_KNOW",
+   "trap": "picture never seen",
+   "type": "picture",
+   "accept_labels": [
+    "DONT_KNOW",
+    "SEEN",
+    "UNSURE"
+   ],
+   "must_contain": [
+    "screen"
+   ],
+   "must_not_contain": [
+    "yes"
+   ],
+   "note": "No beach poster exists. A SCREEN at the ESPOO booth showed an aerial sea/waterfront photo, so 'not a poster, but a screen showed the sea' is also correct; 'yes' is wrong."
+  }
+ ]
+}
